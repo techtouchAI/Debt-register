@@ -6,9 +6,6 @@
   "description": "نظام إدارة المكتب الزراعي - يعمل بدون انترنت - Windows 10/11 و Android",
   "main": "electron/main.cjs",
   "scripts": {
-    "start": "node webapp/server.cjs",
-    "check": "node --check webapp/js/app.js && node --check webapp/server.cjs",
-    "test": "npm run check",
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "assets": "node scripts/copy-assets.mjs",
+    "web:build": "npm --prefix .. run build",
+    "assets": "npm run web:build && node scripts/copy-assets.mjs",
     "dev": "npm run assets && tauri dev",
     "build": "npm run assets && tauri build",
     "android:init": "npm run assets && tauri android init",
