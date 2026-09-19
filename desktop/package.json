@@ -1,0 +1,21 @@
+{
+  "name": "agro-office-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "assets": "node scripts/copy-assets.mjs",
+    "dev": "npm run assets && tauri dev",
+    "build": "npm run assets && tauri build",
+    "android:init": "npm run assets && tauri android init",
+    "android:dev": "npm run assets && tauri android dev",
+    "android:build": "npm run assets && tauri android build --apk"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-notification": "2.4.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}

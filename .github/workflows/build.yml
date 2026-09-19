@@ -1,0 +1,159 @@
+name: Build applications
+
+on:
+  push:
+    branches: [main, arena/01a0b7d3-debt-register]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Validate web application
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm test
+      - run: npm ci --prefix desktop
+      - run: npm run assets --prefix desktop
+      - name: Verify required offline files
+        run: |
+          test -f desktop/src-tauri/dist/index.html
+          test -f desktop/src-tauri/dist/sw.js
+          test -f desktop/src-tauri/dist/icons/icon-512.png
+
+  windows:
+    name: Windows 10/11 (EXE and MSI)
+    needs: quality
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: npm ci --prefix desktop
+      - name: Build NSIS and MSI installers
+        working-directory: desktop
+        run: npm run build -- --bundles nsis,msi
+      - name: Stage Windows installers
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Get-ChildItem desktop/src-tauri/target/release/bundle -Recurse -Include *.exe,*.msi |
+            Copy-Item -Destination artifacts/windows
+          if (-not (Get-ChildItem artifacts/windows -File)) { throw "No Windows installer was produced" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agro-office-windows-10-11
+          path: artifacts/windows/*
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    needs: quality
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.2.12479018
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Install Android NDK and build tools
+        run: |
+          sdkmanager "ndk;$NDK_VERSION" "platform-tools" "build-tools;35.0.0" "platforms;android-35"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: npm ci --prefix desktop
+      - name: Initialize Android project
+        working-directory: desktop
+        env:
+          CI: true
+        run: npm run android:init
+      - name: Build release APK
+        working-directory: desktop
+        run: npm run android:build
+      - name: Sign and verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/android
+          APK="$(find desktop/src-tauri/gen/android -type f -name '*.apk' ! -name '*debug*' | head -1)"
+          test -n "$APK" || { echo 'No release APK was produced'; exit 1; }
+
+          # Use repository secrets for a stable production signature. For branches
+          # without secrets, make an installable CI APK with a temporary key.
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > release.jks
+            ALIAS="${KEY_ALIAS:?ANDROID_KEY_ALIAS is required}"
+            STOREPASS="${KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD is required}"
+            KEYPASS="${KEY_PASSWORD:-$STOREPASS}"
+          else
+            ALIAS=ci-release
+            STOREPASS=ci-password
+            KEYPASS=ci-password
+            keytool -genkeypair -keystore release.jks -storepass "$STOREPASS" -keypass "$KEYPASS" \
+              -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 3650 \
+              -dname "CN=GitHub Actions, OU=CI, O=TechTouch AI, C=IQ"
+          fi
+
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
+          "$APKSIGNER" sign --ks release.jks --ks-key-alias "$ALIAS" \
+            --ks-pass "pass:$STOREPASS" --key-pass "pass:$KEYPASS" \
+            --out artifacts/android/agro-office-release.apk "$APK"
+          "$APKSIGNER" verify --verbose artifacts/android/agro-office-release.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agro-office-android-apk
+          path: artifacts/android/*.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*

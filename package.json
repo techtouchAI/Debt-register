@@ -1,0 +1,13 @@
+{
+  "name": "agro-office-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "إدارة المكتب الزراعي — تطبيق محلي دون إنترنت",
+  "type": "module",
+  "scripts": {
+    "start": "node server.cjs",
+    "check": "node --check js/app.js && node --check server.cjs",
+    "test": "npm run check"
+  },
+  "engines": { "node": ">=20" }
+}
