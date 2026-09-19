@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "tauri": "tauri",
     "assets": "node scripts/copy-assets.mjs",
     "dev": "npm run assets && tauri dev",
     "build": "npm run assets && tauri build",
