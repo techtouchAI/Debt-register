@@ -4,11 +4,14 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 export default defineConfig({
+  // مسارات نسبية: يعمل البناء تحت file:// (Electron/Tauri/فتح الملف مباشرة)
+  // وأي استضافة في مسار فرعي دون كسر تحميل الأصول
+  base: './',
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      includeAssets: ['vite.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
         name: 'إدارة المكتب الزراعي',
         short_name: 'المكتب الزراعي',
@@ -16,8 +19,8 @@ export default defineConfig({
         theme_color: '#16a34a',
         background_color: '#ffffff',
         display: 'standalone',
-        scope: '/',
-        start_url: '/',
+        scope: './',
+        start_url: './',
         orientation: 'any',
         lang: 'ar',
         dir: 'rtl',
