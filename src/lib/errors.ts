@@ -1,0 +1,80 @@
+import { toast } from './toast'
+
+/**
+ * معالجة مركزية للأخطاء.
+ *
+ * المشكلة السابقة: معظم استدعاءات قاعدة البيانات داخل useEffect لم تكن
+ * محاطة بـ try/catch، فكان أي فشل (امتلاء التخزين، قاعدة مقفلة، نسخة ترقية
+ * فاشلة) يظهر كـ unhandled rejection في الطرفية بينما تبقى الواجهة فارغة
+ * بلا أي رسالة للمستخدم.
+ */
+
+const FRIENDLY_MESSAGES: { test: RegExp | ((error: Error) => boolean); message: string }[] = [
+  { test: /QuotaExceededError|quota/i, message: 'مساحة التخزين ممتلئة. احذف بعض النسخ الاحتياطية أو بيانات المتصفح ثم أعد المحاولة.' },
+  { test: /ConstraintError/i, message: 'البيانات المكررة غير مسموحة (رقم أو اسم مستخدم مسجّل مسبقاً).' },
+  { test: /DataError/i, message: 'قيمة غير صالحة في أحد الحقول.' },
+  { test: /NotFoundError|no such object store|One of the specified object stores was not found/i, message: 'بنية قاعدة البيانات غير مكتملة. أعد تحميل التطبيق ليتم تحديثها.' },
+  { test: /VersionError|upgrade/i, message: 'تعذّر ترقية قاعدة البيانات. أغلق بقية نوافذ التطبيق وأعد تشغيله.' },
+  { test: /InvalidAccessError|The database connection is closing|database is closed/i, message: 'انقطع الاتصال بقاعدة البيانات. أعد تحميل الصفحة.' },
+  { test: /TransactionInactiveError|TimeoutError/i, message: 'انتهت مهلة العملية. أعد المحاولة.' },
+  { test: /NetworkError|Failed to fetch/i, message: 'تعذّر إتمام العملية. التطبيق يعمل دون إنترنت، تحقق من التخزين المحلي.' }
+]
+
+export function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    const matched = FRIENDLY_MESSAGES.find((entry) =>
+      typeof entry.test === 'function' ? entry.test(error) : entry.test.test(`${error.name} ${error.message}`)
+    )
+    if (matched) return matched.message
+    return error.message || 'حدث خطأ غير متوقع'
+  }
+  if (typeof error === 'string' && error.trim()) return error
+  return 'حدث خطأ غير متوقع'
+}
+
+export function logError(scope: string, error: unknown): string {
+  const message = describeError(error)
+  console.error(`[${scope}]`, error)
+  return message
+}
+
+/** تسجيل الخطأ وإظهاره للمستخدم، وإرجاع رسالة عربية جاهزة. */
+export function reportError(scope: string, error: unknown, title = 'تعذّر إتمام العملية'): string {
+  const message = logError(scope, error)
+  toast.error(title, message)
+  return message
+}
+
+/** تغليف دالة غير متزامنة بمعالجة أخطاء موحّدة. */
+export async function guard<T>(scope: string, task: () => Promise<T>, title?: string): Promise<T | undefined> {
+  try {
+    return await task()
+  } catch (error) {
+    reportError(scope, error, title)
+    return undefined
+  }
+}
+
+let installed = false
+
+/**
+ * التقاط الأخطاء غير المعالجة على مستوى التطبيق:
+ * يعرض رسالة واضحة بدل شاشة صامتة أو بيضاء.
+ */
+export function installGlobalErrorHandlers(): void {
+  if (installed || typeof window === 'undefined') return
+  installed = true
+
+  window.addEventListener('error', (event) => {
+    // أخطاء تحميل الموارد (صورة/خط) لا تستدعي تنبيه المستخدم
+    if ((event.target as HTMLElement | null)?.tagName && event.target !== (window as unknown as EventTarget)) return
+    reportError('window.error', event.error ?? event.message, 'حدث خطأ في التطبيق')
+  })
+
+  window.addEventListener('unhandledrejection', (event) => {
+    reportError('unhandledrejection', event.reason, 'تعذّر إتمام عملية في الخلفية')
+  })
+
+  window.addEventListener('online', () => toast.info('عاد الاتصال بالإنترنت'))
+  window.addEventListener('offline', () => toast.info('انقطع الاتصال بالإنترنت', 'التطبيق يعمل بشكل كامل دون إنترنت'))
+}

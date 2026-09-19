@@ -1,250 +1,373 @@
-import { db, getSettings } from './db';
+import { db, getSettings, getSettingsOrDefault, updateSettings } from './db';
+import { normalizeBackup, readBackupFile } from './validate';
+import { reallocateCustomerInvoices } from './invoices';
+import { sanitizeFileName } from './utils';
+import { getCapacitor, getElectronAPI } from './platform';
+import type { BackupData, BackupSnapshot } from '@/types';
 
-export interface BackupData {
-  version: string;
-  date: string;
-  officeName?: string;
-  data: {
-    settings: any[];
-    users: any[];
-    materials: any[];
-    customers: any[];
-    invoices: any[];
-    invoiceItems: any[];
-    payments: any[];
-    notifications: any[];
-    activityLogs: any[];
-  };
-}
+export type { BackupData };
 
-export async function createBackup(type: 'auto' | 'manual' = 'manual'): Promise<BackupData> {
-  const settings = await db.settings.toArray();
-  const users = await db.users.toArray();
-  const materials = await db.materials.toArray();
-  const customers = await db.customers.toArray();
-  const invoices = await db.invoices.toArray();
-  const invoiceItems = await db.invoiceItems.toArray();
-  const payments = await db.payments.toArray();
-  const notifications = await db.notifications.toArray();
-  const activityLogs = await db.activityLogs.toArray();
+type TableKey =
+  | 'settings'
+  | 'users'
+  | 'materials'
+  | 'customers'
+  | 'invoices'
+  | 'invoiceItems'
+  | 'payments'
+  | 'notifications'
+  | 'activityLogs';
 
-  const backupData: BackupData = {
-    version: '1.0.0',
+/** أقصى عدد نسخ داخلية محفوظة في IndexedDB. */
+const MAX_SNAPSHOTS = 5;
+
+export async function createBackup(): Promise<BackupData> {
+  const [settings, users, materials, customers, invoices, invoiceItems, payments, notifications, activityLogs] =
+    await Promise.all([
+      db.settings.toArray(),
+      db.users.toArray(),
+      db.materials.toArray(),
+      db.customers.toArray(),
+      db.invoices.toArray(),
+      db.invoiceItems.toArray(),
+      db.payments.toArray(),
+      db.notifications.toArray(),
+      db.activityLogs.toArray()
+    ]);
+
+  return {
+    version: '1.1.0',
     date: new Date().toISOString(),
     officeName: settings[0]?.officeName,
-    data: {
-      settings,
-      users,
-      materials,
-      customers,
-      invoices,
-      invoiceItems,
-      payments,
-      notifications,
-      activityLogs
-    }
+    data: { settings, users, materials, customers, invoices, invoiceItems, payments, notifications, activityLogs }
   };
-
-  return backupData;
 }
 
+export function backupFileName(officeName?: string, date: Date = new Date()): string {
+  const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`;
+  const timeStr = `${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(
+    date.getSeconds()
+  ).padStart(2, '0')}`;
+  const name = sanitizeFileName(officeName || 'AgriOffice', 'AgriOffice');
+  return `${name}_Backup_${dateStr}_${timeStr}.json`;
+}
+
+async function recordBackupMeta(fileName: string, size: number, type: 'auto' | 'manual' | 'import') {
+  await db.backups.add({ fileName, date: new Date().toISOString(), size, type });
+  await updateSettings({ lastBackup: new Date().toISOString() }).catch((error) =>
+    console.warn('تعذّر تحديث تاريخ آخر نسخة:', error)
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * تصدير ملف (إجراء يدوي صريح من المستخدم)
+ * ------------------------------------------------------------------ */
+
 export async function exportBackupToFile(type: 'auto' | 'manual' = 'manual'): Promise<string> {
-  const backupData = await createBackup(type);
+  const backupData = await createBackup();
   const jsonString = JSON.stringify(backupData, null, 2);
   const blob = new Blob([jsonString], { type: 'application/json' });
-  
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10);
-  const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-  const officeName = backupData.officeName ? backupData.officeName.replace(/\s+/g, '_') : 'AgriOffice';
-  const fileName = `${officeName}_Backup_${dateStr}_${timeStr}.json`;
-  
-  // Try Capacitor Filesystem for Android (optional, works offline) - via Plugins API without static import
+  const fileName = backupFileName(backupData.officeName);
+
+  // أندرويد (Capacitor) إن كان متاحاً
   try {
-    const cap = (window as any).Capacitor;
-    if (cap?.isNativePlatform?.() && cap?.Plugins?.Filesystem) {
+    const cap = getCapacitor();
+    if (cap?.isNativePlatform?.() && cap.Plugins?.Filesystem) {
       const Filesystem = cap.Plugins.Filesystem;
-      try {
-        await Filesystem.writeFile({
-          path: `Download/AgriOffice/${fileName}`,
-          data: jsonString,
-          directory: 'EXTERNAL_STORAGE',
-          recursive: true
-        });
-        await db.backups.add({
-          fileName,
-          date: new Date().toISOString(),
-          size: blob.size,
-          type
-        });
-        const settings = await getSettings();
-        if (settings?.id) {
-          await db.settings.update(settings.id, { lastBackup: new Date().toISOString() });
-        }
-        return fileName;
-      } catch {
+      const attempts = [
+        { path: `Download/AgriOffice/${fileName}`, directory: 'EXTERNAL_STORAGE' },
+        { path: `AgriOffice/${fileName}`, directory: 'DOCUMENTS' }
+      ];
+      for (const attempt of attempts) {
         try {
-          await Filesystem.writeFile({
-            path: `AgriOffice/${fileName}`,
-            data: jsonString,
-            directory: 'DOCUMENTS',
-            recursive: true
-          });
-          await db.backups.add({
-            fileName,
-            date: new Date().toISOString(),
-            size: blob.size,
-            type
-          });
-          const settings = await getSettings();
-          if (settings?.id) {
-            await db.settings.update(settings.id, { lastBackup: new Date().toISOString() });
-          }
+          await Filesystem.writeFile({ ...attempt, data: jsonString, recursive: true });
+          await recordBackupMeta(fileName, blob.size, type);
           return fileName;
-        } catch {}
+        } catch {
+          /* جرّب المسار التالي */
+        }
       }
     }
-  } catch (e) {
-    console.log('Capacitor filesystem error, falling back to web download', e);
+  } catch (error) {
+    console.warn('تعذّر الحفظ عبر Capacitor، سيتم التنزيل عبر المتصفح:', error);
   }
 
-  // Try Electron save (Windows 10/11)
+  // سطح المكتب (Electron)
   try {
-    if ((window as any).electronAPI?.saveBackup) {
-      const result = await (window as any).electronAPI.saveBackup(fileName, jsonString);
+    const electronAPI = getElectronAPI();
+    if (electronAPI?.saveBackup) {
+      const result = await electronAPI.saveBackup(fileName, jsonString);
       if (result?.success) {
-        await db.backups.add({
-          fileName,
-          date: new Date().toISOString(),
-          size: blob.size,
-          type
-        });
-        const settings = await getSettings();
-        if (settings?.id) {
-          await db.settings.update(settings.id, { lastBackup: new Date().toISOString() });
-        }
+        await recordBackupMeta(fileName, blob.size, type);
         return fileName;
       }
+      if (result && result.success === false) {
+        // ألغى المستخدم الحوار: لا نُكمل إلى التنزيل التلقائي
+        throw new Error('BACKUP_CANCELLED');
+      }
     }
-  } catch (e) {
-    console.log('Electron save error, falling back', e);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'BACKUP_CANCELLED') throw error;
+    console.warn('تعذّر الحفظ عبر Electron:', error);
   }
 
-  // Web fallback - download via browser
+  // المتصفح: تنزيل الملف
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  // التأجيل يمنع إلغاء التنزيل في بعض المتصفحات
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 
-  // Also save meta
-  await db.backups.add({
-    fileName,
-    date: new Date().toISOString(),
-    size: blob.size,
-    type
-  });
-
-  // Update last backup in settings
-  const settings = await getSettings();
-  if (settings?.id) {
-    await db.settings.update(settings.id, { lastBackup: new Date().toISOString() });
-  }
-
+  await recordBackupMeta(fileName, blob.size, type);
   return fileName;
 }
 
-export async function importBackup(file: File): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const content = e.target?.result as string;
-        const backupData: BackupData = JSON.parse(content);
+/* ------------------------------------------------------------------ *
+ * النسخ الداخلية (IndexedDB) — بديل آمن عن تنزيل ملف كل ساعة
+ * ------------------------------------------------------------------ */
 
-        if (!backupData.data) {
-          throw new Error('ملف النسخ الاحتياطي غير صالح');
-        }
-
-        // Clear existing data - using array for tables to avoid TS limit
-        await db.transaction('rw', [db.settings, db.users, db.materials, db.customers, db.invoices, db.invoiceItems, db.payments, db.notifications, db.activityLogs, db.backups], async () => {
-          await db.settings.clear();
-          await db.users.clear();
-          await db.materials.clear();
-          await db.customers.clear();
-          await db.invoices.clear();
-          await db.invoiceItems.clear();
-          await db.payments.clear();
-          await db.notifications.clear();
-          await db.activityLogs.clear();
-
-          // Restore data
-          if (backupData.data.settings?.length) await db.settings.bulkAdd(backupData.data.settings);
-          if (backupData.data.users?.length) await db.users.bulkAdd(backupData.data.users);
-          if (backupData.data.materials?.length) await db.materials.bulkAdd(backupData.data.materials);
-          if (backupData.data.customers?.length) await db.customers.bulkAdd(backupData.data.customers);
-          if (backupData.data.invoices?.length) await db.invoices.bulkAdd(backupData.data.invoices);
-          if (backupData.data.invoiceItems?.length) await db.invoiceItems.bulkAdd(backupData.data.invoiceItems);
-          if (backupData.data.payments?.length) await db.payments.bulkAdd(backupData.data.payments);
-          if (backupData.data.notifications?.length) await db.notifications.bulkAdd(backupData.data.notifications);
-          if (backupData.data.activityLogs?.length) await db.activityLogs.bulkAdd(backupData.data.activityLogs);
-        });
-
-        // Save import as backup meta in Downloads folder structure
-        const now = new Date();
-        const dateStr = now.toISOString().slice(0, 10);
-        const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-        const importedFileName = `Imported_${dateStr}_${timeStr}_${file.name}`;
-        
-        await db.backups.add({
-          fileName: importedFileName,
-          date: new Date().toISOString(),
-          type: 'import'
-        });
-
-        // Auto backup after import to Downloads/AgriOffice folder
-        setTimeout(() => {
-          exportBackupToFile('auto').catch(console.error);
-        }, 1000);
-
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    };
-    reader.onerror = () => reject(new Error('فشل قراءة الملف'));
-    reader.readAsText(file);
-  });
+/** توقيع مختصر للبيانات يمنع تكرار نسخ متطابقة. */
+async function computeDataSignature(): Promise<string> {
+  const counts = await Promise.all([
+    db.materials.count(),
+    db.customers.count(),
+    db.invoices.count(),
+    db.invoiceItems.count(),
+    db.payments.count(),
+    db.notifications.count(),
+    db.activityLogs.count(),
+    db.settings.count()
+  ]);
+  const lastInvoice = await db.invoices.orderBy('id').last();
+  const lastPayment = await db.payments.orderBy('id').last();
+  const lastActivity = await db.activityLogs.orderBy('id').last();
+  return [
+    ...counts,
+    lastInvoice?.updatedAt ?? lastInvoice?.createdAt ?? '',
+    lastPayment?.createdAt ?? '',
+    lastActivity?.timestamp ?? ''
+  ].join('|');
 }
 
-export function setupAutoBackup() {
-  // Check every minute if backup is needed
-  setInterval(async () => {
+export async function saveSnapshot(type: 'auto' | 'manual' = 'auto'): Promise<BackupSnapshot | null> {
+  const signature = await computeDataSignature();
+  const latest = await db.snapshots.orderBy('date').last();
+  if (type === 'auto' && latest?.signature && latest.signature === signature) {
+    return null; // لا تغيير في البيانات
+  }
+
+  const payload = JSON.stringify(await createBackup());
+  const snapshotId = (await db.snapshots.add({
+    date: new Date().toISOString(),
+    type,
+    size: payload.length,
+    payload,
+    signature
+  })) as number;
+
+  // الإبقاء على آخر N نسخ فقط
+  const all = await db.snapshots.orderBy('date').reverse().primaryKeys();
+  const stale = all.slice(MAX_SNAPSHOTS);
+  if (stale.length) await db.snapshots.bulkDelete(stale);
+
+  await updateSettings({ lastBackup: new Date().toISOString() }).catch((error) =>
+    console.warn('تعذّر تحديث تاريخ آخر نسخة:', error)
+  );
+
+  return (await db.snapshots.get(snapshotId)) ?? null;
+}
+
+export async function listSnapshots(): Promise<Omit<BackupSnapshot, 'payload'>[]> {
+  const rows = await db.snapshots.orderBy('date').reverse().toArray();
+  return rows.map(({ payload: _payload, ...rest }) => rest);
+}
+
+export async function deleteSnapshot(id: number): Promise<void> {
+  await db.snapshots.delete(id);
+}
+
+/* ------------------------------------------------------------------ *
+ * الاستعادة
+ * ------------------------------------------------------------------ */
+
+export interface RestoreResult {
+  warnings: string[];
+  counts: Record<TableKey, number>;
+}
+
+/**
+ * استعادة نسخة مُتحقَّق منها داخل معاملة واحدة.
+ * أي فشل يُعيد القاعدة إلى حالتها السابقة بالكامل (لا مسح جزئي للبيانات).
+ */
+export async function restoreBackupData(backupData: BackupData, warnings: string[] = []): Promise<RestoreResult> {
+  const normalized = normalizeBackup(backupData);
+  if (!normalized.ok) throw new Error(normalized.error);
+
+  const data = normalized.value.data;
+  const allWarnings = [...warnings, ...normalized.warnings];
+
+  await db.transaction(
+    'rw',
+    [
+      db.settings,
+      db.users,
+      db.materials,
+      db.customers,
+      db.invoices,
+      db.invoiceItems,
+      db.payments,
+      db.notifications,
+      db.activityLogs
+    ],
+    async () => {
+      await db.settings.clear();
+      await db.users.clear();
+      await db.materials.clear();
+      await db.customers.clear();
+      await db.invoices.clear();
+      await db.invoiceItems.clear();
+      await db.payments.clear();
+      await db.notifications.clear();
+      await db.activityLogs.clear();
+
+      await db.settings.bulkAdd(data.settings);
+      if (data.users.length) await db.users.bulkAdd(data.users);
+      if (data.materials.length) await db.materials.bulkAdd(data.materials);
+      if (data.customers.length) await db.customers.bulkAdd(data.customers);
+      if (data.invoices.length) await db.invoices.bulkAdd(data.invoices);
+      if (data.invoiceItems.length) await db.invoiceItems.bulkAdd(data.invoiceItems);
+      if (data.payments.length) await db.payments.bulkAdd(data.payments);
+      if (data.notifications.length) await db.notifications.bulkAdd(data.notifications);
+      if (data.activityLogs.length) await db.activityLogs.bulkAdd(data.activityLogs);
+    }
+  );
+
+  // ضمان وجود إعدادات صالحة حتى لو كانت النسخة قديمة/ناقصة
+  const settings = await getSettings();
+  if (!settings) {
+    const fallback = await getSettingsOrDefault();
+    await db.settings.add(fallback);
+    allWarnings.push('لم تحتوي النسخة على إعدادات، تم إنشاء إعدادات افتراضية');
+  }
+
+  // مصالحة الأرصدة بعد الاستعادة حتى تتطابق حالة الفواتير مع التسديدات
+  const customerIds = (await db.customers.toCollection().primaryKeys()) as number[];
+  for (const customerId of customerIds) {
+    await reallocateCustomerInvoices(customerId);
+  }
+
+  return {
+    warnings: allWarnings,
+    counts: {
+      settings: data.settings.length,
+      users: data.users.length,
+      materials: data.materials.length,
+      customers: data.customers.length,
+      invoices: data.invoices.length,
+      invoiceItems: data.invoiceItems.length,
+      payments: data.payments.length,
+      notifications: data.notifications.length,
+      activityLogs: data.activityLogs.length
+    }
+  };
+}
+
+export async function importBackup(file: File): Promise<RestoreResult> {
+  const raw = await readBackupFile(file);
+  const normalized = normalizeBackup(raw);
+  if (!normalized.ok) throw new Error(normalized.error);
+
+  const result = await restoreBackupData(normalized.value, normalized.warnings);
+
+  await db.backups.add({
+    fileName: `Imported_${sanitizeFileName(file.name, 'backup')}`,
+    date: new Date().toISOString(),
+    size: file.size,
+    type: 'import'
+  });
+
+  // نسخة أمان داخلية بعد الاستيراد مباشرة
+  await saveSnapshot('auto').catch((error) => console.warn('تعذّر إنشاء نسخة بعد الاستيراد:', error));
+
+  return result;
+}
+
+export async function restoreSnapshot(id: number): Promise<RestoreResult> {
+  const snapshot = await db.snapshots.get(id);
+  if (!snapshot) throw new Error('النسخة الداخلية غير موجودة');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshot.payload);
+  } catch {
+    throw new Error('محتوى النسخة الداخلية تالف');
+  }
+
+  const normalized = normalizeBackup(parsed);
+  if (!normalized.ok) throw new Error(normalized.error);
+  return restoreBackupData(normalized.value, normalized.warnings);
+}
+
+/* ------------------------------------------------------------------ *
+ * الجدولة التلقائية
+ * ------------------------------------------------------------------ */
+
+let autoBackupTimer: ReturnType<typeof setInterval> | null = null;
+let autoBackupRunning = false;
+
+const CHECK_INTERVAL_MS = 60 * 1000;
+
+/**
+ * نسخ احتياطي تلقائي داخلي.
+ *
+ * التصميم السابق كان يُنزّل ملفاً (أو يفتح صندوق حفظ في سطح المكتب) كل ساعة،
+ * وهو سلوك يُربك المستخدم ويملأ مجلد التنزيلات. الآن تُحفظ النسخ داخل
+ * IndexedDB ويمكن استعادتها من صفحة النسخ الاحتياطي، ويبقى التصدير إجراءً يدوياً.
+ */
+export function setupAutoBackup(): () => void {
+  if (autoBackupTimer) return () => stopAutoBackup();
+
+  const tick = async () => {
+    if (autoBackupRunning) return;
+    autoBackupRunning = true;
     try {
       const settings = await getSettings();
       if (!settings?.autoBackupEnabled) return;
-      
-      const lastBackup = settings.lastBackup ? new Date(settings.lastBackup) : null;
-      const now = new Date();
-      const intervalMinutes = settings.autoBackupInterval || 60;
-      
-      if (!lastBackup || (now.getTime() - lastBackup.getTime()) / 1000 / 60 >= intervalMinutes) {
-        await exportBackupToFile('auto');
-        console.log('Auto backup completed');
-      }
-    } catch (e) {
-      console.error('Auto backup failed', e);
-    }
-  }, 60 * 1000); // Check every minute
 
-  // Also backup on window beforeunload
-  window.addEventListener('beforeunload', () => {
-    // Use sendBeacon or just trigger - can't await in beforeunload
-    createBackup('auto').then(data => {
-      localStorage.setItem('lastAutoBackup', JSON.stringify(data));
-    });
-  });
+      const intervalMinutes = settings.autoBackupInterval && settings.autoBackupInterval > 0 ? settings.autoBackupInterval : 60;
+      const lastBackup = settings.lastBackup ? new Date(settings.lastBackup).getTime() : 0;
+      const elapsedMinutes = Number.isFinite(lastBackup) ? (Date.now() - lastBackup) / 60000 : Infinity;
+
+      if (elapsedMinutes >= intervalMinutes) {
+        const snapshot = await saveSnapshot('auto');
+        if (snapshot) console.info('تم إنشاء نسخة احتياطية تلقائية داخلية');
+      }
+    } catch (error) {
+      console.warn('فشل النسخ الاحتياطي التلقائي:', error);
+    } finally {
+      autoBackupRunning = false;
+    }
+  };
+
+  autoBackupTimer = setInterval(() => void tick(), CHECK_INTERVAL_MS);
+  if (typeof autoBackupTimer === 'object' && autoBackupTimer && 'unref' in autoBackupTimer) {
+    (autoBackupTimer as { unref?: () => void }).unref?.();
+  }
+  // أول فحص بعد 15 ثانية من بدء التطبيق بدل لحظة الإقلاع المزدحمة
+  setTimeout(() => void tick(), 15000);
+
+  return () => stopAutoBackup();
+}
+
+export function stopAutoBackup(): void {
+  if (autoBackupTimer) {
+    clearInterval(autoBackupTimer);
+    autoBackupTimer = null;
+  }
 }

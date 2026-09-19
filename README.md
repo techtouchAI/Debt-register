@@ -181,42 +181,52 @@ npm run electron:build
 ```
 src/
 ├── lib/
-│   ├── db.ts          # Dexie database + جميع العمليات + الإشعارات
-│   ├── backup.ts      # نسخ احتياطي تلقائي + تصدير/استيراد مع تاريخ
-│   ├── pdf.ts         # توليد PDF للفواتير والوصولات وكشف الحساب
-│   └── utils.ts       # أدوات مساعدة (عملة، تاريخ، مخزون...)
+│   ├── db.ts            # مخطط Dexie + الترقيات (v1→v2→v3) + الإعدادات + الإشعارات
+│   ├── invoices.ts      # حفظ/تعديل/حذف الفواتير داخل معاملات + توزيع المسددات
+│   ├── payments.ts      # التسديدات + إعادة حساب الأرصدة
+│   ├── debts.ts         # حساب أرصدة الزبائن بمرور واحد
+│   ├── sequence.ts      # أرقام فواتير/وصولات فريدة لا تُعاد
+│   ├── backup.ts        # تصدير ملف + نسخ داخلية + استعادة
+│   ├── validate.ts      # التحقق من ملفات النسخ الاحتياطية قبل الكتابة
+│   ├── print.ts         # طباعة آمنة (HTML مُهرَّب ضد XSS)
+│   ├── pdf.ts           # تصدير jsPDF
+│   ├── maintenance.ts   # صيانة بدء التشغيل (مصالحة + قص السجلات)
+│   ├── security.ts      # بصمات رموز الدخول (SHA-256 + ملح)
+│   ├── platform.ts      # أنواع جسور Capacitor/Electron
+│   ├── errors.ts        # معالجة مركزية للأخطاء غير الملتقطة
+│   ├── toast.ts         # تنبيهات داخل التطبيق
+│   └── utils.ts         # أموال + تواريخ محلية + تهريب HTML
 ├── components/
-│   ├── layout/Layout.tsx  # تخطيط مع Sidebar وDark/Light
-│   └── ui/            # مكونات UI (Button, Card, Input, Badge)
-├── pages/
-│   ├── Dashboard.tsx          # لوحة تحكم مع أزرار كبيرة
-│   ├── Materials.tsx          # إدارة المخزن + تنبيهات نفاد
-│   ├── Customers.tsx          # سجل الزبائن + إجمالي ديون مباشر
-│   ├── Invoices.tsx           # قائمة الفواتير
-│   ├── InvoiceForm.tsx        # فاتورة ذكية - قلب النظام
-│   ├── CustomerStatement.tsx  # كشف حساب تفصيلي زمني
-│   ├── Payments.tsx           # تسديدات + وصل قبض
-│   ├── Reports.tsx            # تقارير: كاش يومي، ديون، حركة مادة
-│   ├── Backup.tsx             # نسخ احتياطي مع مجلد وتاريخ
-│   ├── Settings.tsx           # إعدادات المكتب + مستخدمين محليين + ثيم
-│   └── Notifications.tsx      # إشعارات داخل وخارج التطبيق
-├── types/index.ts     # جميع الأنواع
-├── App.tsx            # Routing + تهيئة DB + نسخ تلقائي
-├── main.tsx
-└── index.css          # Tailwind + Cairo font + RTL
+│   ├── layout/Layout.tsx    # تخطيط مع Sidebar وDark/Light
+│   ├── ErrorBoundary.tsx    # حاجز أخطاء يمنع الشاشة السوداء
+│   └── ui/                  # Button, Card, Input, Badge, Toaster
+├── pages/                   # Dashboard, Materials, Customers, Invoices,
+│                            # InvoiceForm, CustomerStatement, Payments,
+│                            # Reports, Backup, Settings, Notifications
+├── types/index.ts           # جميع الأنواع
+├── App.tsx                  # Routing + فحص التخزين + تهيئة + صيانة
+└── index.css                # Tailwind + Cairo font + RTL
 
-electron/
-├── main.js            # Electron main process - Windows 10/11
-└── preload.js         # Preload bridge
-
-public/
-├── pwa-192x192.png
-├── pwa-512x512.png
-└── manifest.json
-
-capacitor.config.json   # Android config
-electron-builder.json   # Windows builder config
+tests/                       # 52 اختباراً (Vitest + fake-indexeddb)
+electron/                    # غلاف ويندوز (main.cjs + preload.cjs)
+desktop/                     # غلاف Tauri (اختياري)
+capacitor.config.json        # إعدادات أندرويد
+electron-builder.json        # إعدادات بناء ويندوز
 ```
+
+---
+
+## ✅ أوامر الجودة والاختبار
+
+```bash
+npm run lint        # ESLint 9 (flat config)
+npm run typecheck   # tsc --noEmit (strict)
+npm test            # 52 اختباراً: الفواتير، التسديدات، النسخ، الترقية، الطباعة، الإقلاع
+npm run build       # typecheck + vite build (PWA)
+npm run verify      # lint + typecheck + test + build معاً
+```
+
+> تقرير التدقيق الكامل للمشاكل التي رُصدت وأُصلحت موجود في [`AUDIT.md`](./AUDIT.md).
 
 ---
 
@@ -224,9 +234,13 @@ electron-builder.json   # Windows builder config
 
 - **100% Offline**: لا يوجد أي طلب شبكة، لا API، لا Firebase، لا تحليلات
 - **IndexedDB**: جميع البيانات محفوظة محلياً في المتصفح/التطبيق
-- **لا تسجيل دخول سحابي**: المستخدمون محليون فقط (PIN)
+- **معاملات ذرّية**: حفظ الفاتورة (بنود + مخزون + دفعة مقدمة) ينجح كلياً أو يفشل كلياً
+- **رموز الدخول**: تُخزَّن كبصمة SHA-256 مع ملح، ولا تظهر في الواجهة أبداً
+- **نسخ احتياطية محقَّقة**: أي ملف مستورد يمر بفحص بنية وتطهير أنواع قبل الكتابة
+- **طباعة آمنة**: كل النصوص المُدخلة تُهرَّب قبل إدراجها في صفحة الطباعة (منع XSS)
+- **Electron**: عزل السياق + sandbox + منع تنقّل النافذة لمصادر خارجية + نسخة وحيدة
 - **PWA**: يعمل حتى بدون انترنت بعد أول زيارة (Service Worker)
-- **النسخ الاحتياطي**: JSON محلي، يمكن حفظه على فلاش ميموري
+- **النسخ الاحتياطي**: ملف JSON للتصدير اليدوي + نسخ داخلية تلقائية داخل التطبيق
 
 ---
 
@@ -261,6 +275,12 @@ npm run dev
 ```
 
 افتح http://localhost:5173
+
+للتأكد من سلامة البيئة قبل أي بناء:
+
+```bash
+npm run verify
+```
 
 ---
 

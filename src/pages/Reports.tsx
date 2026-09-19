@@ -1,72 +1,133 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, DollarSign, Users, Package, Calendar, TrendingUp, Download, Filter } from 'lucide-react';
+import { BarChart3, DollarSign, Users, Package, TrendingUp, Download } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, getAllCustomersDebt } from '@/lib/db';
-import { formatCurrency, formatDate } from '@/lib/utils';
-import { OfficeSettings, Material } from '@/types';
+import { db, getSettings } from '@/lib/db';
+import { getCustomerBalances } from '@/lib/debts';
+import { formatCurrency, formatDate, formatLocalDateInput, localDayRangeISO, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
+import { OfficeSettings, Material, Customer } from '@/types';
 import { useLiveQuery } from 'dexie-react-hooks';
+
+type ReportKey = 'cash' | 'debts' | 'materials' | 'profit' | 'inventory';
+
+interface MaterialSaleRow {
+  invoiceId: number;
+  customerName: string;
+  quantity: number;
+  date: string;
+  total: number;
+  invoiceNumber: string;
+}
+
+interface MaterialMovementReport {
+  material: Material;
+  totalSold: number;
+  totalRevenue: number;
+  totalProfit: number;
+  sales: MaterialSaleRow[];
+  currentStock: number;
+}
 
 export function Reports() {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
-  const [dateFrom, setDateFrom] = useState(new Date().toISOString().slice(0, 10));
-  const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10));
+  const [dateFrom, setDateFrom] = useState(formatLocalDateInput());
+  const [dateTo, setDateTo] = useState(formatLocalDateInput());
+  const [rangeError, setRangeError] = useState<string | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
   const [searchMaterial, setSearchMaterial] = useState('');
-  const [activeReport, setActiveReport] = useState<'cash' | 'debts' | 'materials' | 'profit' | 'inventory'>('cash');
+  const [activeReport, setActiveReport] = useState<ReportKey>('cash');
 
   const materials = useLiveQuery(() => db.materials.toArray(), []);
 
   const [cashReport, setCashReport] = useState({ cashInvoices: 0, payments: 0, total: 0, count: 0 });
-  const [debtsReport, setDebtsReport] = useState<{ customer: any; debt: number }[]>([]);
-  const [materialMovement, setMaterialMovement] = useState<any>(null);
+  const [debtsReport, setDebtsReport] = useState<{ customer: Customer; debt: number }[]>([]);
+  const [materialMovement, setMaterialMovement] = useState<MaterialMovementReport | null>(null);
   const [profitReport, setProfitReport] = useState({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
   const [inventoryReport, setInventoryReport] = useState({ totalValue: 0, totalItems: 0, lowStock: 0, outOfStock: 0 });
 
   useEffect(() => {
-    loadSettings();
-    loadReports();
+    let cancelled = false;
+
+    const loadSettings = async () => {
+      try {
+        const s = await getSettings();
+        if (!cancelled) setSettings(s || null);
+      } catch (error) {
+        if (!cancelled) reportError('Reports.settings', error, 'تعذّر تحميل الإعدادات');
+      }
+    };
+
+    const loadReports = async () => {
+      try {
+        await Promise.all([
+          loadCashReport(),
+          loadDebtsReport(),
+          loadProfitReport(),
+          loadInventoryReport(),
+          selectedMaterial ? loadMaterialMovement() : Promise.resolve()
+        ]);
+      } catch (error) {
+        if (!cancelled) reportError('Reports.load', error, 'تعذّر تحميل التقارير');
+      }
+    };
+
+    void loadSettings();
+    void loadReports();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFrom, dateTo, selectedMaterial, activeReport]);
 
-  const loadSettings = async () => {
-    const s = await getSettings();
-    setSettings(s || null);
-  };
-
-  const loadReports = async () => {
-    await Promise.all([
-      loadCashReport(),
-      loadDebtsReport(),
-      loadProfitReport(),
-      loadInventoryReport(),
-      selectedMaterial ? loadMaterialMovement() : Promise.resolve()
-    ]);
+  /**
+   * نطاق التاريخ يُحسب محلياً. الحقل الفارغ كان يُنتج Invalid Date ثم
+   * RangeError: Invalid time value فيُعطّل تحميل كل التقارير بصمت.
+   */
+  const resolveRange = () => {
+    const range = localDayRangeISO(dateFrom, dateTo);
+    if (!range) {
+      setRangeError('يرجى اختيار تاريخ "من" و"إلى" صالحين');
+      return null;
+    }
+    setRangeError(null);
+    return range;
   };
 
   const loadCashReport = async () => {
-    const invoices = await db.invoices.where('date').between(new Date(dateFrom).toISOString(), new Date(dateTo + 'T23:59:59').toISOString()).toArray();
-    const payments = await db.payments.where('date').between(new Date(dateFrom).toISOString(), new Date(dateTo + 'T23:59:59').toISOString()).toArray();
-    
-    const cashInvoices = invoices.filter(i => i.type === 'cash').reduce((sum, i) => sum + i.total, 0);
-    const paymentsTotal = payments.reduce((sum, p) => sum + p.amount, 0);
-    
+    const range = resolveRange();
+    if (!range) {
+      setCashReport({ cashInvoices: 0, payments: 0, total: 0, count: 0 });
+      return;
+    }
+
+    const [invoices, payments] = await Promise.all([
+      db.invoices.where('date').between(range.from, range.to, true, true).toArray(),
+      db.payments.where('date').between(range.from, range.to, true, true).toArray()
+    ]);
+
+    const cashInvoices = invoices.filter((invoice) => invoice.type === 'cash');
+    const cashTotal = roundMoney(cashInvoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
+    const paymentsTotal = roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0));
+
     setCashReport({
-      cashInvoices,
+      cashInvoices: cashTotal,
       payments: paymentsTotal,
-      total: cashInvoices + paymentsTotal,
-      count: invoices.filter(i => i.type === 'cash').length + payments.length
+      total: roundMoney(cashTotal + paymentsTotal),
+      count: cashInvoices.length + payments.length
     });
   };
 
   const loadDebtsReport = async () => {
-    const customers = await db.customers.toArray();
-    const debts = await getAllCustomersDebt();
-    const combined = customers.map(c => {
-      const d = debts.find(dd => dd.customerId === c.id);
-      return { customer: c, debt: d?.debt || 0 };
-    }).filter(c => c.debt > 0).sort((a, b) => b.debt - a.debt);
+    const [customers, balances] = await Promise.all([db.customers.toArray(), getCustomerBalances()]);
+    const combined = customers
+      .map((customer) => ({ customer, debt: balances.get(customer.id as number)?.debt ?? 0 }))
+      .filter((entry) => entry.debt > 0)
+      .sort((a, b) => b.debt - a.debt);
     setDebtsReport(combined);
   };
 
@@ -88,28 +149,38 @@ export function Reports() {
       };
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    const totalSold = items.reduce((sum, i) => sum + i.quantity, 0);
-    const totalRevenue = items.reduce((sum, i) => sum + i.total, 0);
-    const totalProfit = selectedMaterial.purchasePrice ? items.reduce((sum, i) => sum + (i.unitPrice - (selectedMaterial.purchasePrice || 0)) * i.quantity, 0) : 0;
+    const totalSold = items.reduce((sum, i) => sum + toFiniteNumber(i.quantity), 0);
+    const totalRevenue = items.reduce((sum, i) => sum + toFiniteNumber(i.total), 0);
+    const totalProfit = selectedMaterial.purchasePrice
+      ? items.reduce((sum, i) => sum + (toFiniteNumber(i.unitPrice) - toFiniteNumber(selectedMaterial.purchasePrice)) * toFiniteNumber(i.quantity), 0)
+      : 0;
 
     setMaterialMovement({
       material: selectedMaterial,
-      totalSold,
-      totalRevenue,
-      totalProfit,
+      totalSold: roundMoney(totalSold),
+      totalRevenue: roundMoney(totalRevenue),
+      totalProfit: roundMoney(totalProfit),
       sales,
-      currentStock: selectedMaterial.quantity
+      currentStock: toFiniteNumber(selectedMaterial.quantity)
     });
   };
 
   const loadProfitReport = async () => {
-    const invoices = await db.invoices.where('date').between(new Date(dateFrom).toISOString(), new Date(dateTo + 'T23:59:59').toISOString()).toArray();
-    const invoiceIds = invoices.map(i => i.id!);
-    const items = await db.invoiceItems.where('invoiceId').anyOf(invoiceIds).toArray();
+    const range = resolveRange();
+    if (!range) {
+      setProfitReport({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
+      return;
+    }
 
-    const totalSales = items.reduce((sum, i) => sum + i.total, 0);
-    const totalCost = items.reduce((sum, i) => sum + (i.purchasePrice || 0) * i.quantity, 0);
-    const profit = totalSales - totalCost;
+    const invoices = await db.invoices.where('date').between(range.from, range.to, true, true).toArray();
+    const invoiceIds = invoices.map((invoice) => invoice.id as number).filter((id) => typeof id === 'number');
+    const items = invoiceIds.length ? await db.invoiceItems.where('invoiceId').anyOf(invoiceIds).toArray() : [];
+
+    const totalSales = roundMoney(items.reduce((sum, item) => sum + toFiniteNumber(item.total), 0));
+    const totalCost = roundMoney(
+      items.reduce((sum, item) => sum + roundMoney(toFiniteNumber(item.purchasePrice) * toFiniteNumber(item.quantity)), 0)
+    );
+    const profit = roundMoney(totalSales - totalCost);
 
     setProfitReport({
       totalSales,
@@ -121,9 +192,9 @@ export function Reports() {
 
   const loadInventoryReport = async () => {
     const mats = await db.materials.toArray();
-    const totalValue = mats.reduce((sum, m) => sum + m.quantity * m.salePrice, 0);
-    const lowStock = mats.filter(m => m.quantity > 0 && m.quantity <= m.minQuantity).length;
-    const outOfStock = mats.filter(m => m.quantity <= 0).length;
+    const totalValue = roundMoney(mats.reduce((sum, m) => sum + roundMoney(toFiniteNumber(m.quantity) * toFiniteNumber(m.salePrice)), 0));
+    const lowStock = mats.filter((m) => toFiniteNumber(m.quantity) > 0 && toFiniteNumber(m.quantity) <= toFiniteNumber(m.minQuantity)).length;
+    const outOfStock = mats.filter((m) => toFiniteNumber(m.quantity) <= 0).length;
 
     setInventoryReport({
       totalValue,
@@ -140,7 +211,7 @@ export function Reports() {
   const totalDebt = debtsReport.reduce((sum, d) => sum + d.debt, 0);
 
   const exportReport = () => {
-    let data: any = {};
+    let data: unknown = {};
     let fileName = '';
     
     switch (activeReport) {
@@ -150,7 +221,7 @@ export function Reports() {
         break;
       case 'debts':
         data = debtsReport;
-        fileName = `Debts_Report_${new Date().toISOString().slice(0,10)}.json`;
+        fileName = `Debts_Report_${formatLocalDateInput()}.json`;
         break;
       case 'profit':
         data = profitReport;
@@ -158,16 +229,23 @@ export function Reports() {
         break;
       default:
         data = { cash: cashReport, debts: debtsReport, inventory: inventoryReport, profit: profitReport };
-        fileName = `Full_Report_${new Date().toISOString().slice(0,10)}.json`;
+        fileName = `Full_Report_${formatLocalDateInput()}.json`;
     }
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast.success('تم تصدير التقرير', fileName);
+    } catch (error) {
+      reportError('Reports.export', error, 'تعذّر تصدير التقرير');
+    }
   };
 
   return (
@@ -196,7 +274,7 @@ export function Reports() {
             key={tab.id}
             variant={activeReport === tab.id ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setActiveReport(tab.id as any)}
+            onClick={() => setActiveReport(tab.id as ReportKey)}
             className={activeReport === tab.id ? 'bg-primary-600' : ''}
           >
             <tab.icon className="w-4 h-4 ml-1" />
@@ -219,11 +297,17 @@ export function Reports() {
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={() => { const today = new Date().toISOString().slice(0,10); setDateFrom(today); setDateTo(today); }}>اليوم</Button>
-            <Button variant="outline" size="sm" onClick={() => { const d = new Date(); const first = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0,10); setDateFrom(first); setDateTo(new Date().toISOString().slice(0,10)); }}>هذا الشهر</Button>
+            <Button variant="outline" size="sm" onClick={() => { const today = formatLocalDateInput(); setDateFrom(today); setDateTo(today); }}>اليوم</Button>
+            <Button variant="outline" size="sm" onClick={() => { const d = new Date(); const first = formatLocalDateInput(new Date(d.getFullYear(), d.getMonth(), 1)); setDateFrom(first); setDateTo(formatLocalDateInput()); }}>هذا الشهر</Button>
           </div>
         </CardContent>
       </Card>
+
+      {rangeError && (
+        <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-300">
+          {rangeError}
+        </div>
+      )}
 
       {/* Cash Report */}
       {activeReport === 'cash' && (
@@ -375,7 +459,7 @@ export function Reports() {
                 <CardHeader><CardTitle className="text-base">سجل مبيعات المادة - {materialMovement.material.name}</CardTitle></CardHeader>
                 <CardContent>
                   <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {materialMovement.sales.map((sale: any, idx: number) => (
+                    {materialMovement.sales.map((sale, idx) => (
                       <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl text-sm">
                         <div>
                           <p className="font-medium">{sale.customerName}</p>

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
@@ -62,10 +62,32 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 5173
+    port: 5173,
+    // السماح بمعاينة التطبيق عبر مضيفات المعاينة (لا يؤثر على البناء النهائي)
+    allowedHosts: ['.e2b.app', 'localhost']
   },
   preview: {
     host: '0.0.0.0',
-    port: 4173
+    port: 4173,
+    allowedHosts: ['.e2b.app', 'localhost']
+  },
+  build: {
+    // تقسيم الحزم: يقلّل حجم الملف الرئيسي ويمنع تحذير 500KB
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          dexie: ['dexie', 'dexie-react-hooks'],
+          pdf: ['jspdf'],
+          icons: ['lucide-react']
+        }
+      }
+    }
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./tests/setup.ts'],
+    include: ['tests/**/*.test.{ts,tsx}'],
+    restoreMocks: true
   }
 })

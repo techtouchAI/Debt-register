@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { Bell, Check, Trash2, AlertTriangle, Info, CheckCircle, XCircle, Package, Users, FileText, CreditCard } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, countUnreadNotifications, markAllNotificationsRead } from '@/lib/db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDate } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
 
 export function Notifications() {
   const [filter, setFilter] = useState<'all' | 'unread' | 'warning' | 'info'>('all');
@@ -21,20 +23,38 @@ export function Notifications() {
   const unreadCount = useLiveQuery(() => countUnreadNotifications(), []) || 0;
 
   const markAsRead = async (id: number) => {
-    await db.notifications.update(id, { isRead: true });
+    try {
+      await db.notifications.update(id, { isRead: true });
+    } catch (error) {
+      reportError('Notifications.read', error, 'تعذّر تحديث الإشعار');
+    }
   };
 
   const markAllAsRead = async () => {
-    await markAllNotificationsRead();
+    try {
+      await markAllNotificationsRead();
+      toast.success('تم تحديد كل الإشعارات كمقروءة');
+    } catch (error) {
+      reportError('Notifications.readAll', error, 'تعذّر تحديث الإشعارات');
+    }
   };
 
   const deleteNotification = async (id: number) => {
-    await db.notifications.delete(id);
+    try {
+      await db.notifications.delete(id);
+    } catch (error) {
+      reportError('Notifications.delete', error, 'تعذّر حذف الإشعار');
+    }
   };
 
   const clearAll = async () => {
     if (!confirm('هل أنت متأكد من حذف جميع الإشعارات؟')) return;
-    await db.notifications.clear();
+    try {
+      await db.notifications.clear();
+      toast.success('تم حذف جميع الإشعارات');
+    } catch (error) {
+      reportError('Notifications.clear', error, 'تعذّر حذف الإشعارات');
+    }
   };
 
   const getIcon = (type: string, relatedType?: string) => {

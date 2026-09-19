@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Package, 
@@ -13,13 +13,12 @@ import {
   X,
   Sun,
   Moon,
-  Database,
-  Search,
-  LogOut
+  Database
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, countUnreadNotifications } from '@/lib/db';
+import { reportError } from '@/lib/errors';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { OfficeSettings } from '@/types';
 
@@ -43,7 +42,6 @@ export function Layout({ children }: LayoutProps) {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
-  const navigate = useNavigate();
 
   const unreadNotifications = useLiveQuery(() => countUnreadNotifications(), []) || 0;
   const lowStockCount = useLiveQuery(async () => {
@@ -53,28 +51,42 @@ export function Layout({ children }: LayoutProps) {
   }, []) || 0;
 
   useEffect(() => {
-    loadSettings();
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      setIsDark(true);
-      document.documentElement.classList.add('dark');
-    }
-  }, []);
+    let cancelled = false;
 
-  const loadSettings = async () => {
-    const s = await getSettings();
-    if (s) setSettings(s);
-  };
+    const loadSettings = async () => {
+      try {
+        const s = await getSettings();
+        if (!cancelled && s) setSettings(s);
+      } catch (error) {
+        if (!cancelled) reportError('Layout.settings', error, 'تعذّر تحميل الإعدادات');
+      }
+    };
+
+    void loadSettings();
+
+    try {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        setIsDark(true);
+        document.documentElement.classList.add('dark');
+      }
+    } catch {
+      /* التخزين المحلي غير متاح */
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleTheme = () => {
     const newTheme = !isDark;
     setIsDark(newTheme);
-    if (newTheme) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
+    document.documentElement.classList.toggle('dark', newTheme);
+    try {
+      localStorage.setItem('theme', newTheme ? 'dark' : 'light');
+    } catch {
+      /* التخزين المحلي غير متاح */
     }
   };
 
