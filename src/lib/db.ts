@@ -15,6 +15,8 @@ export class AgriOfficeDB extends Dexie {
 
   constructor() {
     super('AgriOfficeDB');
+
+    // الإصدار 1 (تاريخي): يُترك كما هو حتى تُرقّى قواعد البيانات القائمة لدى المستخدمين بسلاسة.
     this.version(1).stores({
       settings: '++id',
       users: '++id, name, role',
@@ -24,6 +26,28 @@ export class AgriOfficeDB extends Dexie {
       invoiceItems: '++id, invoiceId, materialId',
       payments: '++id, customerId, date, receiptNumber',
       notifications: '++id, isRead, createdAt, relatedType',
+      activityLogs: '++id, timestamp, entityType',
+      backups: '++id, date'
+    });
+
+    // الإصدار 2: إضافة الفهارس التي تعتمد عليها الاستعلامات فعلياً.
+    //  - invoices.createdAt      ← لوحة التحكم (آخر الفواتير) كانت تسبب:
+    //                              "KeyPath createdAt on object store invoices is not indexed"
+    //  - notifications.relatedId ← checkLowStock (منع تكرار تنبيه نفس المادة)
+    //  - payments.createdAt      ← للاتساق مع الفواتير
+    //  ملاحظة: أُزيل فهرس notifications.isRead لأن IndexedDB لا يفهرس القيم المنطقية (boolean)،
+    //  لذا كان الفهرس عديم الفائدة (where('isRead') لا يعيد شيئاً أبداً). تُصفّى الإشعارات
+    //  غير المقروءة برمجياً عبر countUnreadNotifications / markAllNotificationsRead أدناه.
+    //  الترقية تلقائية ولا تمس البيانات الموجودة.
+    this.version(2).stores({
+      settings: '++id',
+      users: '++id, name, role',
+      materials: '++id, name, category, quantity',
+      customers: '++id, fullName, phone',
+      invoices: '++id, invoiceNumber, customerId, type, date, customerName, createdAt',
+      invoiceItems: '++id, invoiceId, materialId',
+      payments: '++id, customerId, date, receiptNumber, createdAt',
+      notifications: '++id, createdAt, relatedType, relatedId',
       activityLogs: '++id, timestamp, entityType',
       backups: '++id, date'
     });
@@ -119,6 +143,20 @@ export async function logActivity(action: string, details: string, entityType?: 
     entityType,
     entityId
   });
+}
+
+/**
+ * عدد الإشعارات غير المقروءة.
+ * لا يمكن استخدام where('isRead') لأن IndexedDB لا يفهرس القيم المنطقية،
+ * لذا نصفّي برمجياً (جدول الإشعارات صغير فلا أثر يُذكر على الأداء).
+ */
+export function countUnreadNotifications(): Promise<number> {
+  return db.notifications.filter(n => !n.isRead).count();
+}
+
+/** تحديد جميع الإشعارات كمقروءة. */
+export function markAllNotificationsRead(): Promise<number> {
+  return db.notifications.filter(n => !n.isRead).modify({ isRead: true });
 }
 
 export async function createNotification(title: string, message: string, type: AppNotification['type'] = 'info', relatedId?: number, relatedType?: AppNotification['relatedType']) {
