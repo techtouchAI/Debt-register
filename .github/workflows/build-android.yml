@@ -1,0 +1,89 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, arena/* ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    name: Build Android APK (بدون انترنت)
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Capacitor dependencies
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/local-notifications --save
+
+      - name: Build Web App (PWA - Offline)
+        run: npm run build
+
+      - name: Add Android platform (if not exists)
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build Android APK (Debug)
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Build Android APK (Release - Unsigned)
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Android-Debug-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Android-Release-APK
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 30
+
+      - name: Create Release APK with custom name
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk AgriOffice-Android-${{ github.run_number }}.apk
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk AgriOffice-Android-Release-${{ github.run_number }}.apk || true
+
+      - name: Summary
+        run: |
+          echo "✅ تم بناء APK بنجاح" >> $GITHUB_STEP_SUMMARY
+          echo "- Debug APK: AgriOffice-Android-Debug" >> $GITHUB_STEP_SUMMARY
+          echo "- يحفظ النسخ في Download/AgriOffice/ مع اسم المكتب والتاريخ" >> $GITHUB_STEP_SUMMARY
+          echo "- إشعارات منبثقة Android" >> $GITHUB_STEP_SUMMARY
+          echo "- يعمل بدون انترنت 100%" >> $GITHUB_STEP_SUMMARY
