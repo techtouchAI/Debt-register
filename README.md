@@ -278,52 +278,47 @@ MIT - مفتوح المصدر للمكتب الزراعي
 
 ---
 
-## 🖥️ تطبيق محلي بديل: `webapp/` + Tauri v2
+## 🖥️ غلاف Tauri المكتبي (اختياري)
 
-إلى جانب تطبيق React/Vite الرئيسي، يضم المستودع نسخة محلية مبسطة (PWA بلا بناء) مغلّفة بـ **Tauri v2** لتطبيقات أندرويد وويندوز 10/11:
+`desktop/` يضم مشروع Tauri v2 يغلّف **تطبيق الويب المبني** (`dist/`) — النسخة الحقيقية الكاملة (فواتير، مخزن، ديون، قاعدة بيانات محلية) — وينتج مثبتات Windows (NSIS/MSI) وAPK أندرويد أصلية أخف من Electron.
 
-- `webapp/index.html`, `webapp/css/`, `webapp/js/`: واجهة الويب المحلية البديلة.
-- `webapp/manifest.webmanifest`, `webapp/sw.js`: دعم التثبيت والعمل دون إنترنت.
-- `webapp/server.cjs`: خادم Node.js ثابت (لا يحتاج قاعدة بيانات خارجية).
-- `desktop/`: مشروع Tauri v2 لنظامي Windows وAndroid؛ تُبنى أيقوناته من `desktop/src-tauri/icons/`.
-
-### التشغيل محلياً
-
-يتطلب Node.js 20 أو أحدث:
-
-```bash
-npm start        # يشغّل webapp/server.cjs على http://localhost:8080
-```
-
-### تطوير تطبيق Tauri
-
-يتطلب Rust ومتطلبات Tauri الخاصة بالنظام:
+يتطلب Rust وأدوات Tauri، وبعد تشغيل `npm install` في جذر المشروع:
 
 ```bash
 cd desktop
 npm ci
-npm run dev                                   # تطوير
-npm run build -- --bundles nsis,msi           # بناء Windows
-npm run android:init && npm run android:build # بناء Android بعد تثبيت Android Studio/SDK/NDK
+npm run dev                              # تطوير (يبني الويب وينسخه تلقائياً)
+npm run build -- --bundles nsis,msi      # Windows
+npm run android:init && npm run android:build   # Android
 ```
 
-تُنسخ ملفات `webapp/` تلقائياً إلى `desktop/src-tauri/dist/` قبل كل بناء عبر `desktop/scripts/copy-assets.mjs`.
+لا يحتاج نسخ ملفات يدوياً: `desktop/scripts/copy-assets.mjs` يبني الجذر ثم ينسخ `dist/` كاملاً إلى `desktop/src-tauri/dist/` قبل كل أمر.
 
-### سير العمل `.github/workflows/build.yml`
+## 🚀 البناء والنشر (GitHub Actions)
 
-يعمل تلقائياً عند الدفع وطلبات الدمج إلى `main`، وينتج:
+سير عمل موحّد واحد [`.github/workflows/build.yml`](.github/workflows/build.yml) يعمل على الدفع والمراجعات، وينتج:
 
-- `agro-office-android-apk`: ملف APK قابل للتثبيت.
-- `agro-office-windows-10-11`: مثبت NSIS بصيغة EXE ومثبت WiX بصيغة MSI.
-- عند دفع وسم مثل `v1.0.0` تُرفق الملفات تلقائياً في GitHub Release.
+| القطعة | المحتوى |
+|---|---|
+| `AgriOffice-Web-PWA` | أرشيف `dist/` جاهز للرفع على أي استضافة (مسارات نسبية — تعمل في أي مجلد) |
+| `AgriOffice-Android` | APK موقع بإصدار Release (Capacitor + Gradle) بتوقيع الإنتاج إن وُجدت الأسرار، أو مفتاح CI مؤقت للاختبار |
+| `AgriOffice-Windows` | Portable EXE لإصدار Windows 10/11 (electron-builder) |
 
-#### توقيع Android للإصدارات الدائمة
+**النشر:** اعمل وسم `v*` (مثل `git tag v1.1.0 && git push origin v1.1.0`) فتُرفق القطع الثلاث تلقائياً في GitHub Release مع ملاحظات إصدار مولّدة.
 
-أضف أسرار المستودع التالية ليظل APK قابلاً للتحديث فوق النسخ السابقة؛ وإن لم تتوفر ينشئ سير العمل مفتاح CI مؤقتاً للاختبار فقط:
+### أسرار توقيع Android للإنتاج
+
+بدون هذه الأسرار يظل الـ APK قابلاً للتثبيت لكنه بمفتاح CI مؤقت لا يصلح للتحديثات فوق نسخة سابقة.
 
 | Secret | الوصف |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | ملف keystore مشفّر بـ Base64 كسطر واحد (`base64 -w 0 release.jks`) |
+| `ANDROID_KEYSTORE_BASE64` | ملف keystore مشفر بـ Base64 كسطر واحد (`base64 -w 0 release.jks`) |
 | `ANDROID_KEYSTORE_PASSWORD` | كلمة مرور keystore |
 | `ANDROID_KEY_ALIAS` | اسم المفتاح |
 | `ANDROID_KEY_PASSWORD` | كلمة مرور المفتاح (اختياري إن كانت نفسها) |
+
+## 🛠 استكشاف الأعطال
+
+- **ومضة ثم شاشة سوداء عند الفتح:** السبب التاريخي (مشغّل Electron بمسارات مطلقة + BrowserRouter تحت `file://`) أُصلح؛ إن ظهر عندك من نسخة قديمة: حدّث التطبيق ثم اضغط "مسح ذاكرة التخزين المؤقت وإعادة التحميل" من شاشة الخطأ، أو احذف بيانات نطاق التطبيق من المتصفح.
+- **شاشة خطأ "حدث خطأ غير متوقع":** هي حاجز الأخطاء الجديد — تعيد المحاولة أو تحميل كامل بدل الشاشة الصامتة؛ بياناتك في IndexedDB محفوظة.
+- التفصيل الكامل لأنماط البناء المحلية في [BUILD_GUIDE.md](BUILD_GUIDE.md).
