@@ -51,21 +51,12 @@ jobs:
         with:
           workspaces: desktop/src-tauri
       - run: npm ci --prefix desktop
-      - name: Build NSIS and MSI installers
+      - name: Build NSIS installer
         working-directory: desktop
-        shell: pwsh
-        run: |
-          npm run build -- --bundles nsis,msi 2>&1 | Tee-Object -FilePath ../windows-build.log
-          if ($LASTEXITCODE -ne 0) {
-            "## Windows build failure" | Out-File -Append $env:GITHUB_STEP_SUMMARY
-            "```text" | Out-File -Append $env:GITHUB_STEP_SUMMARY
-            $lines = Get-Content ../windows-build.log -Tail 20 | ForEach-Object { $_.Replace("%", "%25") }
-            $tail = $lines -join "%0A"
-            Write-Host "::error title=Windows build failed::$tail"
-            Get-Content ../windows-build.log -Tail 120 | Out-File -Append $env:GITHUB_STEP_SUMMARY
-            "```" | Out-File -Append $env:GITHUB_STEP_SUMMARY
-            exit $LASTEXITCODE
-          }
+        run: npm run build -- --bundles nsis
+      - name: Build MSI installer
+        working-directory: desktop
+        run: npm run build -- --bundles msi
       - name: Upload Windows diagnostic log
         if: always()
         uses: actions/upload-artifact@v5
