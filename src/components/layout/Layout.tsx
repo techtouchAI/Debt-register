@@ -149,7 +149,7 @@ export function Layout({ children }: LayoutProps) {
 
           {/* Footer */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
-            <div className="bg-gradient-to-br from-primary-50 to-green-50 dark:from-primary-900/20 dark:to-green-900/20 rounded-xl p-4 border border-primary-100 dark:border-primary-800/30">
+            <div className="bg-gray-100/70 dark:bg-gray-800/40 rounded-xl p-4 border border-gray-200 dark:border-gray-700/60">
               <p className="text-xs font-medium text-primary-800 dark:text-primary-300">نظام بدون انترنت</p>
               <p className="text-[11px] text-primary-600 dark:text-primary-400 mt-1">جميع البيانات محفوظة محلياً وآمنة</p>
             </div>
@@ -197,7 +197,7 @@ export function Layout({ children }: LayoutProps) {
               <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
 
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white font-bold text-sm">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-sm">
                   م
                 </div>
                 <div className="hidden md:block text-right">

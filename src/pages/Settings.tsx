@@ -302,7 +302,7 @@ export function Settings() {
                 {users?.map((user) => (
                   <div key={user.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50">
                     <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold ${user.role === 'admin' ? 'bg-red-600' : 'bg-blue-600'}`}>
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold ${user.role === 'admin' ? 'bg-primary-600' : 'bg-gray-600 dark:bg-gray-700'}`}>
                         {user.name.charAt(0)}
                       </div>
                       <div>

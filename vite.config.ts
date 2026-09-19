@@ -11,13 +11,16 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // التسجيل يدوي من main.tsx: لا يُسجَّل عامل الخدمة داخل أغلفة
+      // Capacitor/Electron (لا حاجة له هناك وقد يفشل فيُقلق المستخدم)
+      injectRegister: false,
       includeAssets: ['vite.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
         name: 'إدارة المكتب الزراعي',
         short_name: 'المكتب الزراعي',
         description: 'نظام متكامل لإدارة المكتب الزراعي - المخزن والعملاء والفواتير والديون - يعمل بدون انترنت',
-        theme_color: '#16a34a',
-        background_color: '#ffffff',
+        theme_color: '#151412',
+        background_color: '#f8f7f5',
         display: 'standalone',
         scope: './',
         start_url: './',

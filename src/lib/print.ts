@@ -77,8 +77,8 @@ export function buildInvoicePrintHtml(
 
   return `
     <div style="max-width: 800px; margin: 0 auto;">
-      <div style="text-align:center; border-bottom:2px solid #16a34a; padding-bottom:12px; margin-bottom:16px;">
-        <h1 style="color:#16a34a; font-size:22px;">${escapeHtml(settings.officeName)}</h1>
+      <div style="text-align:center; border-bottom:2px solid #8f7048; padding-bottom:12px; margin-bottom:16px;">
+        <h1 style="color:#8f7048; font-size:22px;">${escapeHtml(settings.officeName)}</h1>
         ${settings.logo ? `<img src="${escapeHtml(settings.logo)}" alt="" style="max-height:64px;margin-top:8px;" />` : ''}
         <p style="color:#6b7280; font-size:12px; margin-top:6px;">${escapeHtml(settings.address || '')}${
           settings.address && settings.phone ? ' | ' : ''
@@ -112,10 +112,10 @@ export function buildInvoicePrintHtml(
         <tbody>${rows}</tbody>
       </table>
 
-      <div style="text-align:left; border-top:2px solid #16a34a; padding-top:12px; font-size:13px;">
+      <div style="text-align:left; border-top:2px solid #8f7048; padding-top:12px; font-size:13px;">
         <p>المجموع: ${escapeHtml(invoice.subtotal.toLocaleString('ar-IQ'))} ${currency}</p>
         ${invoice.discount > 0 ? `<p>الخصم: ${escapeHtml(invoice.discount.toLocaleString('ar-IQ'))} ${currency}</p>` : ''}
-        <p style="font-size:17px; font-weight:bold; color:#16a34a;">الإجمالي: ${escapeHtml(
+        <p style="font-size:17px; font-weight:bold; color:#8f7048;">الإجمالي: ${escapeHtml(
           invoice.total.toLocaleString('ar-IQ')
         )} ${currency}</p>
         ${
@@ -164,7 +164,7 @@ export function buildReceiptPrintHtml(
         }</p>
       </div>
       <hr style="border:0; border-top:1px dashed #9ca3af; margin:10px 0;" />
-      <p style="font-size:18px; font-weight:bold; color:#16a34a;">
+      <p style="font-size:18px; font-weight:bold; color:#8f7048;">
         المبلغ: ${escapeHtml(payment.amount.toLocaleString('ar-IQ'))} ${currency}
       </p>
       ${
@@ -216,15 +216,15 @@ export function buildCustomerStatementPrintHtml(
 
   return `
     <div style="max-width: 800px; margin: 0 auto;">
-      <div style="text-align:center; border-bottom:2px solid #16a34a; padding-bottom:12px; margin-bottom:16px;">
-        <h1 style="color:#16a34a; font-size:20px;">${escapeHtml(settings.officeName)}</h1>
+      <div style="text-align:center; border-bottom:2px solid #8f7048; padding-bottom:12px; margin-bottom:16px;">
+        <h1 style="color:#8f7048; font-size:20px;">${escapeHtml(settings.officeName)}</h1>
         <h2 style="font-size:16px; margin-top:6px;">كشف حساب الزبون</h2>
       </div>
 
       <div style="font-size:13px; line-height:1.9; margin-bottom:14px;">
         <p><strong>الزبون:</strong> ${escapeHtml(customer.fullName)}</p>
         <p><strong>الهاتف:</strong> ${escapeHtml(customer.phone || '—')} &nbsp; <strong>العنوان:</strong> ${escapeHtml(customer.address || '—')}</p>
-        <p style="font-size:15px; font-weight:bold; color:${totalDebt > 0 ? '#dc2626' : '#16a34a'};">
+        <p style="font-size:15px; font-weight:bold; color:${totalDebt > 0 ? '#dc2626' : '#8f7048'};">
           الرصيد المتبقي: ${escapeHtml(totalDebt.toLocaleString('ar-IQ'))} ${currency}
         </p>
       </div>

@@ -113,10 +113,10 @@ export function Dashboard() {
   }, [today]);
 
   const quickActions = [
-    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-blue-600', href: '/invoices/new', count: null },
-    { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-green-600', href: '/payments/new', count: null },
-    { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-purple-600', href: '/materials?action=new', count: stats.totalMaterials },
-    { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-amber-600', href: '/customers', count: stats.totalCustomers },
+    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null },
+    { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null },
+    { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials },
+    { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers },
   ];
 
   const statCards = [
@@ -129,7 +129,7 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Welcome */}
-      <div className="bg-gradient-to-br from-primary-600 via-green-600 to-emerald-700 rounded-2xl p-6 lg:p-8 text-white relative overflow-hidden">
+      <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 dark:from-black dark:via-gray-950 dark:to-gray-900 ring-1 ring-primary-500/30 rounded-2xl p-6 lg:p-8 text-white relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-black/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
         <div className="relative z-10">
@@ -143,7 +143,7 @@ export function Dashboard() {
                   {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </span>
                 <span className="flex items-center gap-1.5 bg-white/20 backdrop-blur px-3 py-1.5 rounded-full">
-                  <div className="w-2 h-2 bg-green-300 rounded-full animate-pulse" />
+                  <div className="w-2 h-2 bg-primary-400 rounded-full animate-pulse" />
                   يعمل بدون انترنت
                 </span>
               </div>
@@ -169,7 +169,7 @@ export function Dashboard() {
               <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer group border-0 shadow-md h-full">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between mb-4">
-                    <div className={`w-12 h-12 rounded-xl ${action.color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform`}>
+                    <div className={`w-12 h-12 rounded-xl ${action.color} flex items-center justify-center text-white dark:text-gray-900 shadow-lg group-hover:scale-110 transition-transform`}>
                       <action.icon className="w-6 h-6" />
                     </div>
                     <ArrowUpRight className="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
@@ -303,7 +303,7 @@ export function Dashboard() {
                 {topDebtors?.length ? topDebtors.map(({ customer, debt }) => (
                   <div key={customer.id} className="flex items-center justify-between p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white text-xs font-bold">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold">
                         {customer.fullName.charAt(0)}
                       </div>
                       <div>

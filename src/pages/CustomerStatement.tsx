@@ -109,11 +109,11 @@ export function CustomerStatement() {
 
       {/* Customer Card */}
       <Card className="border-0 shadow-md overflow-hidden">
-        <div className="h-2 bg-gradient-to-r from-primary-600 to-green-600" />
+        <div className="h-2 bg-gradient-to-r from-primary-600 to-primary-400" />
         <CardContent className="p-6">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white font-bold text-2xl">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-2xl">
                 {customer.fullName.charAt(0)}
               </div>
               <div>

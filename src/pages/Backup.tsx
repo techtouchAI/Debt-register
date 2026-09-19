@@ -202,14 +202,14 @@ export function Backup() {
         <div className="lg:col-span-2 space-y-6">
           {/* Backup Actions */}
           <Card className="border-0 shadow-md overflow-hidden">
-            <div className="h-1 bg-gradient-to-r from-primary-600 to-green-600" />
+            <div className="h-1 bg-gradient-to-r from-primary-600 to-primary-400" />
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><HardDrive className="w-5 h-5" />إنشاء نسخ احتياطي</CardTitle>
               <p className="text-xs text-gray-500">التصدير اليدوي يحفظ ملفاً باسم المكتب والتاريخ في مجلد التنزيلات</p>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-primary-50 to-green-50 dark:from-primary-900/20 dark:to-green-900/20 border border-primary-200 dark:border-primary-800/30 rounded-xl p-4">
+                <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
                   <h3 className="font-bold text-primary-800 dark:text-primary-300 flex items-center gap-2"><Download className="w-4 h-4" />تصدير نسخة احتياطية</h3>
                   <p className="text-xs text-primary-700 dark:text-primary-400 mt-2 leading-relaxed">
                     يتم حفظ ملف JSON يحتوي على جميع بياناتك في مجلد التحميلات مع اسم المكتب والتاريخ:<br/>
@@ -225,13 +225,13 @@ export function Backup() {
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800/30 rounded-xl p-4">
+                <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
                   <h3 className="font-bold text-blue-800 dark:text-blue-300 flex items-center gap-2"><Upload className="w-4 h-4" />استيراد نسخة احتياطية</h3>
                   <p className="text-xs text-blue-700 dark:text-blue-400 mt-2 leading-relaxed">
                     استيراد ملف نسخ احتياطي سابق. سيتم وضعه في مجلد خاص بالتطبيق مع تاريخ الاستيراد وحفظ نسخة تلقائية جديدة كما طلبت.
                   </p>
                   <label className="block w-full mt-4">
-                    <div className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center justify-center gap-2 cursor-pointer font-medium text-sm transition-colors">
+                    <div className="w-full h-11 bg-primary-600 hover:bg-primary-700 text-white rounded-lg flex items-center justify-center gap-2 cursor-pointer font-medium text-sm transition-colors">
                       <Upload className="w-4 h-4" />
                       {isImporting ? 'جاري الاستيراد...' : 'اختيار ملف للاستيراد'}
                     </div>

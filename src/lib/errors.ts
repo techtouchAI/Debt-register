@@ -72,6 +72,14 @@ export function installGlobalErrorHandlers(): void {
   })
 
   window.addEventListener('unhandledrejection', (event) => {
+    // فشل تسجيل عامل الخدمة (متصفح قديم أو غلاف أصلي) ليس عطلاً في التطبيق —
+    // يُكتفى بتسجيله في الطرفية بدل إقلاق المستخدم بتنبيه أحمر.
+    const reason = event.reason
+    const text = reason instanceof Error ? `${reason.name} ${reason.message}` : String(reason ?? '')
+    if (/ServiceWorker|service.worker|registerSW|sw\.js/i.test(text)) {
+      console.warn('عامل الخدمة غير متوفر — سيكمل التطبيق العمل بشكل طبيعي.', reason)
+      return
+    }
     reportError('unhandledrejection', event.reason, 'تعذّر إتمام عملية في الخلفية')
   })
 

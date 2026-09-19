@@ -313,7 +313,7 @@ export function Reports() {
       {activeReport === 'cash' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-0 shadow-md bg-gradient-to-br from-green-500 to-emerald-600 text-white">
+            <Card className="border-0 shadow-md bg-gradient-to-br from-gray-900 to-gray-800 dark:from-black dark:to-gray-900 text-white ring-1 ring-primary-500/30">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
@@ -374,7 +374,7 @@ export function Reports() {
       {/* Debts Report */}
       {activeReport === 'debts' && (
         <div className="space-y-4">
-          <Card className="border-0 shadow-md bg-gradient-to-br from-red-500 to-amber-600 text-white">
+          <Card className="border-0 shadow-md bg-gradient-to-br from-gray-900 to-gray-800 dark:from-black dark:to-gray-900 text-white ring-1 ring-primary-500/30">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -396,7 +396,7 @@ export function Reports() {
                 {debtsReport.map(({ customer, debt }, idx) => (
                   <div key={customer.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-red-500 to-amber-600 flex items-center justify-center text-white font-bold text-sm">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-sm">
                         {idx + 1}
                       </div>
                       <div>
@@ -451,7 +451,7 @@ export function Reports() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">إجمالي المباع</p><p className="text-lg font-bold">{materialMovement.totalSold} {materialMovement.material.unit}</p></CardContent></Card>
                 <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">إجمالي الإيراد</p><p className="text-lg font-bold text-green-600">{formatCurrency(materialMovement.totalRevenue, settings?.currency)}</p></CardContent></Card>
-                <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">الربح</p><p className="text-lg font-bold text-purple-600">{formatCurrency(materialMovement.totalProfit, settings?.currency)}</p></CardContent></Card>
+                <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">الربح</p><p className="text-lg font-bold text-primary-600">{formatCurrency(materialMovement.totalProfit, settings?.currency)}</p></CardContent></Card>
                 <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">المتبقي</p><p className="text-lg font-bold">{materialMovement.currentStock} {materialMovement.material.unit}</p></CardContent></Card>
               </div>
 
@@ -487,8 +487,8 @@ export function Reports() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">إجمالي المبيعات</p><p className="text-lg font-bold">{formatCurrency(profitReport.totalSales, settings?.currency)}</p></CardContent></Card>
             <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">تكلفة البضاعة</p><p className="text-lg font-bold text-red-600">{formatCurrency(profitReport.totalCost, settings?.currency)}</p></CardContent></Card>
-            <Card className="border-0 shadow-md bg-gradient-to-br from-green-500 to-emerald-600 text-white"><CardContent className="p-4"><p className="text-green-100 text-xs">صافي الربح</p><p className="text-xl font-bold">{formatCurrency(profitReport.profit, settings?.currency)}</p><p className="text-green-100 text-[11px]">{profitReport.margin.toFixed(1)}% هامش</p></CardContent></Card>
-            <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">هامش الربح</p><p className="text-lg font-bold text-purple-600">{profitReport.margin.toFixed(1)}%</p></CardContent></Card>
+            <Card className="border-0 shadow-md bg-gradient-to-br from-gray-900 to-gray-800 dark:from-black dark:to-gray-900 text-white ring-1 ring-primary-500/30"><CardContent className="p-4"><p className="text-gray-400 text-xs">صافي الربح</p><p className="text-xl font-bold">{formatCurrency(profitReport.profit, settings?.currency)}</p><p className="text-gray-400 text-[11px]">{profitReport.margin.toFixed(1)}% هامش</p></CardContent></Card>
+            <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">هامش الربح</p><p className="text-lg font-bold text-primary-600">{profitReport.margin.toFixed(1)}%</p></CardContent></Card>
           </div>
         </div>
       )}
@@ -497,7 +497,7 @@ export function Reports() {
       {activeReport === 'inventory' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-0 shadow-md bg-gradient-to-br from-blue-500 to-indigo-600 text-white"><CardContent className="p-6"><p className="text-blue-100 text-xs">قيمة المخزون الإجمالية</p><p className="text-2xl font-bold mt-1">{formatCurrency(inventoryReport.totalValue, settings?.currency)}</p></CardContent></Card>
+            <Card className="border-0 shadow-md bg-gradient-to-br from-gray-900 to-gray-800 dark:from-black dark:to-gray-900 text-white ring-1 ring-primary-500/30"><CardContent className="p-6"><p className="text-gray-400 text-xs">قيمة المخزون الإجمالية</p><p className="text-2xl font-bold mt-1">{formatCurrency(inventoryReport.totalValue, settings?.currency)}</p></CardContent></Card>
             <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">عدد الأصناف</p><p className="text-xl font-bold">{inventoryReport.totalItems}</p></CardContent></Card>
             <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">منخفضة المخزون</p><p className="text-xl font-bold text-amber-600">{inventoryReport.lowStock}</p></CardContent></Card>
             <Card className="border-0 shadow-md"><CardContent className="p-4"><p className="text-xs text-gray-500">نافدة</p><p className="text-xl font-bold text-red-600">{inventoryReport.outOfStock}</p></CardContent></Card>
