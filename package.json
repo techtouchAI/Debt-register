@@ -1,0 +1,39 @@
+{
+  "name": "debt-register-agri-office",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "نظام إدارة المكتب الزراعي - إدارة المخزن والعملاء والفواتير والديون - يعمل بدون انترنت",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "electron": "electron .",
+    "electron:build": "npm run build && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "dexie-react-hooks": "^1.1.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "lucide-react": "^0.460.0",
+    "jspdf": "^2.5.2",
+    "html2canvas": "^1.4.1",
+    "date-fns": "^4.1.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.4",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vite-plugin-pwa": "^0.21.1",
+    "tailwindcss": "^3.4.14",
+    "postcss": "^8.4.49",
+    "autoprefixer": "^10.4.20"
+  }
+}

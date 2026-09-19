@@ -1,0 +1,21 @@
+{
+  "appId": "com.agrioffice.debtregister",
+  "appName": "إدارة المكتب الزراعي",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon_config_sample",
+      "iconColor": "#16a34a",
+      "sound": "beep.wav"
+    },
+    "Filesystem": {
+      "androidRequestPermissions": true
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}
