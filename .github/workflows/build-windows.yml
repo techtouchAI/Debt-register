@@ -26,21 +26,36 @@ jobs:
         run: npm install
 
       - name: Install Electron dependencies
-        run: npm install electron electron-builder --save-dev
+        run: |
+          npm install electron --save-dev
+          npm install electron-builder --save-dev
+
+      - name: Verify files
+        run: |
+          dir
+          dir public
+          dir electron
+          type package.json
+          type electron-builder.json
 
       - name: Build Web App
         run: npm run build
 
+      - name: Verify dist
+        run: dir dist
+
       - name: Build Windows Installer (NSIS) and Portable
-        run: npx electron-builder --win --x64 --publish=never
+        run: npx electron-builder --win --x64 --publish=never --config electron-builder.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: false
 
       - name: List build outputs
+        if: always()
         run: dir release
-        shell: cmd
 
       - name: Upload Windows Installer (NSIS)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Windows-Installer
@@ -49,6 +64,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Windows Portable
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Windows-Portable
@@ -57,59 +73,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload All Windows Builds
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Windows-All
           path: release/
           retention-days: 30
-
-      - name: Summary
-        run: |
-          echo "✅ تم بناء برنامج Windows 10/11 بنجاح" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          echo "- NSIS Installer: مثبت مع اختصارات" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          echo "- Portable: نسخة محمولة بدون تثبيت" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          echo "- متوافق مع Windows 10 و 11 x64" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          echo "- حفظ النسخ في Downloads/AgriOffice/ مع التاريخ" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          echo "- إشعارات نظام Windows" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          echo "- يعمل بدون انترنت 100%" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-        shell: pwsh
-
-  build-windows-linux:
-    runs-on: ubuntu-latest
-    name: Build Windows on Linux (cross-build)
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install Electron dependencies
-        run: npm install electron electron-builder --save-dev
-
-      - name: Build Web App
-        run: npm run build
-
-      - name: Build Windows (via Wine)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wine64
-          npx electron-builder --win --x64 --publish=never --config.win.target=nsis
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-
-      - name: Upload Linux Cross-Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: AgriOffice-Windows-Linux-Cross
-          path: release/
-          retention-days: 7
           if-no-files-found: warn
