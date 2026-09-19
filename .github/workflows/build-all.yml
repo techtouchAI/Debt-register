@@ -30,7 +30,6 @@ jobs:
     runs-on: ubuntu-latest
     name: Build Android APK
     needs: build-web
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -75,13 +74,19 @@ jobs:
       - run: npm install
       - run: npm install electron electron-builder --save-dev
       - run: npm run build
-      - run: npx electron-builder --win portable --x64 --publish=never
+      - run: npx electron-builder --win portable --x64 --publish=never --config electron-builder.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
-      - run: npx electron-builder --win dir --x64 --publish=never
+      - run: npx electron-builder --win dir --x64 --publish=never --config electron-builder.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+      - if: always()
+        run: |
+          dir
+          dir release 2>&1 || echo "no release"
+          powershell -Command "Get-ChildItem -Recurse -Filter *.exe | Select-Object FullName"
         continue-on-error: true
       - if: always()
         uses: actions/upload-artifact@v4
@@ -89,6 +94,6 @@ jobs:
           name: AgriOffice-Windows-10-11
           path: |
             release/
-            dist_electron/
+            **/*.exe
           retention-days: 30
           if-no-files-found: warn
