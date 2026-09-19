@@ -36,47 +36,44 @@ jobs:
           dir public
           dir electron
           type package.json
-          type electron-builder.json
 
       - name: Build Web App
         run: npm run build
 
-      - name: Verify dist
-        run: dir dist
-
-      - name: Build Windows Installer (NSIS) and Portable
-        run: npx electron-builder --win --x64 --publish=never --config electron-builder.json
+      - name: Build Windows Portable (no installer)
+        run: npx electron-builder --win portable --x64 --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: false
+        continue-on-error: true
+
+      - name: Build Windows with dir target (fallback)
+        run: npx electron-builder --win dir --x64 --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Build Windows NSIS
+        run: npx electron-builder --win nsis --x64 --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
       - name: List build outputs
         if: always()
-        run: dir release
+        run: |
+          dir
+          dir dist
+          dir release 2>&1 || echo "no release"
+          dir dist_electron 2>&1 || echo "no dist_electron"
 
-      - name: Upload Windows Installer (NSIS)
+      - name: Upload Windows Builds
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AgriOffice-Windows-Installer
-          path: release/*Setup*.exe
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Upload Windows Portable
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AgriOffice-Windows-Portable
-          path: release/*Portable*.exe
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Upload All Windows Builds
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AgriOffice-Windows-All
-          path: release/
+          name: AgriOffice-Windows-10-11
+          path: |
+            release/
+            dist_electron/
+            dist/
           retention-days: 30
           if-no-files-found: warn

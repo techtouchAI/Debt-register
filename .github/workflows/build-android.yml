@@ -27,7 +27,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
 
       - name: Install dependencies
         run: npm install
@@ -35,40 +34,27 @@ jobs:
       - name: Install Capacitor dependencies
         run: |
           npm install @capacitor/core @capacitor/cli @capacitor/android --save
-          npm install @capacitor/filesystem @capacitor/local-notifications --save --no-optional || npm install @capacitor/filesystem @capacitor/local-notifications --save --force || true
+          npm install @capacitor/filesystem @capacitor/local-notifications --save || true
 
       - name: Build Web App (PWA - Offline)
         run: npm run build
-
-      - name: Setup Android SDK and Build Tools
-        run: |
-          echo "Checking Android SDK..."
-          ls -la $ANDROID_HOME || echo "ANDROID_HOME not set"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2" || true
-          sdkmanager --list | tail -n 20 || true
 
       - name: Add Android platform
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
-          else
-            echo "android folder exists"
           fi
           ls -la android/ || true
 
       - name: Sync Capacitor
         run: |
           npx cap sync android || true
-          npx cap sync || true
 
       - name: Build Android APK (Debug)
         working-directory: android
         run: |
           chmod +x gradlew || true
-          ./gradlew assembleDebug --stacktrace --info || ./gradlew assembleDebug --stacktrace || ./gradlew assembleDebug
-        continue-on-error: false
+          ./gradlew assembleDebug --stacktrace || ./gradlew assembleDebug
 
       - name: Upload Debug APK
         if: always()
@@ -77,8 +63,6 @@ jobs:
           name: AgriOffice-Android-Debug-APK
           path: |
             android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/apk/*.apk
-            **/app-debug.apk
           retention-days: 30
           if-no-files-found: warn
 
@@ -86,7 +70,4 @@ jobs:
         if: always()
         run: |
           echo "### Android Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Web PWA built" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Capacitor synced" >> $GITHUB_STEP_SUMMARY
-          echo "📱 APK location: android/app/build/outputs/apk/debug/" >> $GITHUB_STEP_SUMMARY
-          ls -lh android/app/build/outputs/apk/debug/ 2>&1 || echo "No debug folder"
+          ls -lh android/app/build/outputs/apk/debug/ 2>&1 || echo "No APK yet"

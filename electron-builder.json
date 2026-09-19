@@ -9,34 +9,29 @@
   "files": [
     "dist/**/*",
     "electron/**/*",
-    "public/**/*"
+    "public/**/*",
+    "package.json"
   ],
+  "extraMetadata": {
+    "main": "electron/main.cjs"
+  },
   "win": {
     "target": [
       {
-        "target": "nsis",
+        "target": "portable",
         "arch": ["x64"]
       },
       {
-        "target": "portable",
+        "target": "dir",
         "arch": ["x64"]
       }
     ],
-    "icon": "public/pwa-512x512.png",
-    "publisherName": "Agri Office",
-    "verifyUpdateCodeSignature": false
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
-    "createStartMenuShortcut": true,
-    "shortcutName": "المكتب الزراعي",
-    "installerIcon": "public/pwa-512x512.png",
-    "uninstallerIcon": "public/pwa-512x512.png",
-    "installerHeaderIcon": "public/pwa-512x512.png"
+    "icon": "public/pwa-512x512.png"
   },
   "portable": {
     "artifactName": "AgriOffice-Portable-${version}.exe"
+  },
+  "directories": {
+    "output": "release"
   }
 }

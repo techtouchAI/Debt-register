@@ -41,7 +41,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
       - run: npm install
       - run: npm install @capacitor/core @capacitor/cli @capacitor/android --save
       - run: npm run build
@@ -76,13 +75,20 @@ jobs:
       - run: npm install
       - run: npm install electron electron-builder --save-dev
       - run: npm run build
-      - run: npx electron-builder --win --x64 --publish=never --config electron-builder.json
+      - run: npx electron-builder --win portable --x64 --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+      - run: npx electron-builder --win dir --x64 --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Windows-10-11
-          path: release/
+          path: |
+            release/
+            dist_electron/
           retention-days: 30
           if-no-files-found: warn

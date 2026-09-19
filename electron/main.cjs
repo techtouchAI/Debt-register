@@ -14,14 +14,13 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.cjs')
     },
     titleBarStyle: 'default',
     show: false,
     backgroundColor: '#ffffff'
   });
 
-  // For production, load built files
   const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
   
   if (isDev) {
@@ -43,7 +42,6 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -53,7 +51,6 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Handle backup file save for Windows
 ipcMain.handle('save-backup', async (event, { fileName, data }) => {
   try {
     const { filePath } = await dialog.showSaveDialog({
