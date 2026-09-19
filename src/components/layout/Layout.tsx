@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings } from '@/lib/db';
+import { db, getSettings, countUnreadNotifications } from '@/lib/db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { OfficeSettings } from '@/types';
 
@@ -45,7 +45,7 @@ export function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const unreadNotifications = useLiveQuery(() => db.notifications.where('isRead').equals(0).count(), []) || 0;
+  const unreadNotifications = useLiveQuery(() => countUnreadNotifications(), []) || 0;
   const lowStockCount = useLiveQuery(async () => {
     const s = await getSettings();
     const threshold = s?.lowStockThreshold || 5;

@@ -50,8 +50,8 @@ export function Dashboard() {
   const today = new Date().toISOString().slice(0, 10);
 
   useEffect(() => {
-    loadData();
-    checkLowStock();
+    loadData().catch(e => console.error('Dashboard loadData failed:', e));
+    checkLowStock().catch(e => console.error('checkLowStock failed:', e));
   }, []);
 
   const loadData = async () => {

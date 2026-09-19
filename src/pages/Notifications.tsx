@@ -3,7 +3,7 @@ import { Bell, Check, Trash2, AlertTriangle, Info, CheckCircle, XCircle, Package
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db } from '@/lib/db';
+import { db, countUnreadNotifications, markAllNotificationsRead } from '@/lib/db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDate } from '@/lib/utils';
 
@@ -18,14 +18,14 @@ export function Notifications() {
     return all;
   }, [filter]);
 
-  const unreadCount = useLiveQuery(() => db.notifications.where('isRead').equals(0).count(), []) || 0;
+  const unreadCount = useLiveQuery(() => countUnreadNotifications(), []) || 0;
 
   const markAsRead = async (id: number) => {
     await db.notifications.update(id, { isRead: true });
   };
 
   const markAllAsRead = async () => {
-    await db.notifications.where('isRead').equals(0).modify({ isRead: true });
+    await markAllNotificationsRead();
   };
 
   const deleteNotification = async (id: number) => {
