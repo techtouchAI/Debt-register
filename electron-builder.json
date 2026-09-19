@@ -30,8 +30,5 @@
   },
   "portable": {
     "artifactName": "AgriOffice-Portable-${version}.exe"
-  },
-  "directories": {
-    "output": "release"
   }
 }

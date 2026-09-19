@@ -30,6 +30,24 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    // عرض صفحة خطأ عربية بدلاً من نافذة سوداء صامتة عند فشل تحميل الأصول
+    console.error('did-fail-load:', errorCode, errorDescription, validatedURL);
+    if (errorCode === -3) return; // ERR_ABORTED (تنقّل سريع) — تجاهل
+    const safeUrl = String(validatedURL || '').replace(/[&<>"']/g, '');
+    mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+      `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><style>
+       body{font-family:Segoe UI,Tahoma,sans-serif;background:#111827;color:#e5e7eb;display:flex;align-items:center;justify-content:center;min-height:90vh;margin:0}
+       .card{max-width:560px;padding:28px;background:#1f2937;border-radius:16px;border:1px solid #374151;text-align:center}
+       button{margin:6px;padding:10px 22px;border-radius:10px;border:0;background:#16a34a;color:#fff;font-size:15px;cursor:pointer}
+       pre{font-size:11px;color:#9ca3af;text-align:left;overflow:auto}</style></head>
+       <body><div class="card"><h1>⚠️ تعذّر تحميل واجهة التطبيق</h1>
+       <p>فشل تحميل الملف المطلوب داخل التطبيق المُجمّع.</p>
+       <pre>${errorCode} — ${errorDescription}\n${safeUrl}</pre>
+       <button onclick="location.reload()">إعادة التحميل</button>
+       <button onclick="window.close()">إغلاق</button></div></body></html>`));
+  });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.maximize();

@@ -57,3 +57,12 @@ __pycache__
 
 # Backup files (keep backups folder but ignore content in dev)
 Unselected\ files
+
+# Tauri desktop wrapper (desktop/)
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/dist/
+Thumbs.db
+backups/
+*.local

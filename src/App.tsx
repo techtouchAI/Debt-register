@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+// HashRouter: يعمل تحت file:// و WebView دون كسر pushState (سبب الشاشة السوداء السابق)
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from '@/components/layout/Layout';
 import { Dashboard } from '@/pages/Dashboard';
 import { Materials } from '@/pages/Materials';
@@ -18,22 +19,22 @@ import { setupAutoBackup } from '@/lib/backup';
 function App() {
   useEffect(() => {
     const init = async () => {
-      await initializeDB();
-      setupAutoBackup();
-      
-      // Request notification permission
-      if ('Notification' in window && Notification.permission === 'default') {
-        await Notification.requestPermission();
+      // لا تفشل الواجهة إذا تعذّر تهيئة قاعدة البيانات (بيئات file/بدون IndexedDB)
+      try {
+        await initializeDB();
+        setupAutoBackup();
+      } catch (e) {
+        console.error('DB initialization failed (continuing in degraded mode):', e);
       }
 
-      // Register service worker for PWA
-      if ('serviceWorker' in navigator) {
-        try {
-          await navigator.serviceWorker.register('/sw.js');
-        } catch (e) {
-          console.log('SW registration failed', e);
+      // طلب إذن الإشعارات — يُتجاهل بأمان في البيئات غير الآمنة
+      try {
+        if ('Notification' in window && Notification.permission === 'default' && window.isSecureContext) {
+          await Notification.requestPermission();
         }
-      }
+      } catch { /* ignore */ }
+
+      // تسجيل Service Worker تديره vite-plugin-pwa تلقائياً (registerType: autoUpdate)
     };
     init();
   }, []);

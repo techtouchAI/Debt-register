@@ -1,0 +1,163 @@
+name: Build all platforms
+
+# موحّد: يستبدل build-all/build-android/build-windows و سير عمل PR#1 السابق.
+# يتضمّن منطقَي "التفريغ" المستخرَجين من PR #1: توقيع الإنتاج لأندرويد + النشر على Releases.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Build Web PWA
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify build integrity
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/sw.js
+          test -f dist/manifest.webmanifest
+          # منع انحدار الشاشة السوداء: الأصول يجب أن تكون بمسارات نسبية (تعمل تحت file:// والمسارات الفرعية)
+          if grep -Eq '(src|href)="/assets' dist/index.html; then
+            echo '::error title=Build regression::dist/index.html contains absolute /assets paths — file:// and sub-path hosting will break'
+            exit 1
+          fi
+      - name: Package web artifact
+        run: (cd dist && zip -qr ../AgriOffice-Web-PWA.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Web-PWA
+          path: AgriOffice-Web-PWA.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  android:
+    name: Android APK (signed)
+    needs: web
+    runs-on: ubuntu-24.04
+    env:
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci
+      - run: npm run build
+      - name: Add and sync Capacitor Android
+        run: |
+          set -euo pipefail
+          npx cap add android
+          npx cap sync android
+      - name: Gradle release build
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+      - name: Sign APK (production key or CI fallback)
+        run: |
+          set -euo pipefail
+          UNSIGNED="$(find android/app/build/outputs/apk/release -name '*-release-unsigned.apk' | head -1)"
+          test -n "$UNSIGNED" || { echo 'No unsigned release APK produced'; exit 1; }
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)"
+          ZIPALIGN="$(ls -d "$ANDROID_HOME"/build-tools/*/zipalign | tail -1)"
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > release.jks
+            ALIAS="${KEY_ALIAS:?ANDROID_KEY_ALIAS is required}"
+            STOREPASS="${KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD is required}"
+            KEYPASS="${KEY_PASSWORD:-$STOREPASS}"
+            KEYMODE="production"
+          else
+            # بدون أسرار: مفتاح CI مؤقت يبقى الـ APK قابلاً للتثبيت للاختبار فقط
+            ALIAS=ci-release
+            STOREPASS=ci-password
+            KEYPASS=ci-password
+            keytool -genkeypair -keystore release.jks -storepass "$STOREPASS" -keypass "$KEYPASS" \
+              -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 3650 \
+              -dname "CN=GitHub Actions, OU=CI, O=TechTouch AI, C=IQ"
+            KEYMODE="ci-temporary"
+          fi
+          mkdir -p artifacts/android
+          "$ZIPALIGN" -f 4 "$UNSIGNED" artifacts/android/aligned.apk
+          "$APKSIGNER" sign --ks release.jks --ks-key-alias "$ALIAS" \
+            --ks-pass "pass:$STOREPASS" --key-pass "pass:$KEYPASS" \
+            --out artifacts/android/AgriOffice-Android.apk artifacts/android/aligned.apk
+          "$APKSIGNER" verify --verbose artifacts/android/AgriOffice-Android.apk
+          echo "signed with: $KEYMODE" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Android
+          path: artifacts/android/AgriOffice-Android.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: Windows 10/11 EXE
+    needs: web
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build portable EXE with electron-builder
+        run: npx electron-builder --win portable --x64 --publish=never --config electron-builder.json
+      - name: Collect installers
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          $exes = Get-ChildItem release -Recurse -Filter *.exe -ErrorAction SilentlyContinue
+          if (-not $exes) { Write-Error "electron-builder produced no EXE"; exit 1 }
+          $exes | Copy-Item -Destination artifacts/windows
+          Get-ChildItem artifacts/windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Windows
+          path: artifacts/windows/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [web, android, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*

@@ -1,151 +1,77 @@
-# دليل بناء تطبيقات Android و Windows
+# 🏗️ دليل البناء الشامل
 
-## Android APK - خطوات البناء
+المصدر الوحيد للحقيقي: سير عمل واحد موحّد [`.github/workflows/build.yml`](.github/workflows/build.yml) يبني كل المنصات. (استُبدلت سير العمل القديمة `build-all` و`build-android` و`build-windows` بعد تفريغ منطق التوقيع والنشر منها ومن PR #1.)
 
-### المتطلبات
-- Node.js 18+
-- Android Studio (مع Android SDK)
-- JDK 17
+## المتطلبات المحلية
 
-### الخطوات
-```bash
-# 1. تثبيت الاعتمادات
-npm install
+- Node.js 20 أو أحدث + npm 10+
+- للاندرويد (Capacitor): JDK 17 و Android SDK (Platform 34/35) — يثبتهما CI تلقائياً
+- للـ Tauri: Rust stable، ولمسارات Windows أيضاً WebView2 وأدوات VSBuild
 
-# 2. بناء الويب
-npm run build
-
-# 3. تثبيت Capacitor (إذا لم يكن مثبت)
-npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/local-notifications
-
-# 4. تهيئة Capacitor (مرة واحدة)
-npx cap init "إدارة المكتب الزراعي" com.agrioffice.debtregister --web-dir=dist
-
-# 5. إضافة Android
-npx cap add android
-
-# 6. نسخ البناء
-npx cap sync android
-
-# 7. فتح في Android Studio
-npx cap open android
-
-# في Android Studio:
-# Build > Build Bundle(s) / APK(s) > Build APK(s)
-# APK سيكون في: android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-### مميزات Android
-- ✅ حفظ النسخ في Download/AgriOffice/ مع اسم المكتب والتاريخ
-- ✅ إشعارات منبثقة خارج التطبيق
-- ✅ يعمل بدون انترنت 100%
-- ✅ أيقونة خضراء مع حرف م
-
----
-
-## Windows 10/11 - خطوات البناء
-
-### المتطلبات
-- Node.js 18+
-- Windows 10/11
-- (اختياري) electron-builder
-
-### الخطوات
-```bash
-# 1. تثبيت الاعتمادات
-npm install
-
-# 2. تثبيت Electron
-npm install electron electron-builder --save-dev
-
-# 3. بناء الويب
-npm run build
-
-# 4. بناء مثبت Windows
-npx electron-builder --win --x64
-
-# أو عبر npm script:
-npm run electron:build
-
-# الناتج في مجلد release/:
-# - إدارة المكتب الزراعي Setup 1.0.0.exe (مثبت)
-# - إدارة المكتب الزراعي Portable.exe (محمول بدون تثبيت)
-```
-
-### مميزات Windows
-- ✅ مثبت NSIS احترافي مع اختصارات
-- ✅ حفظ النسخ عبر حوار حفظ Windows في Downloads/AgriOffice/
-- ✅ إشعارات نظام Windows 10/11
-- ✅ يعمل بدون انترنت
-- ✅ متوافق مع Windows 10 و 11 x64
-
-### ملفات Electron
-- `electron/main.js`: النافذة الرئيسية (1400x900، تكبير تلقائي)
-- `electron/preload.js`: جسر آمن
-- `electron-builder.json`: إعدادات البناء
-
-### تشغيل في وضع التطوير
-```bash
-npm run dev          # في terminal 1
-npm run electron     # في terminal 2 (بعد تشغيل dev)
-# أو
-npm run electron:dev # يشغل الاثنين معاً
-```
-
----
-
-## PWA - تطبيق ويب تقدمي (يعمل بدون انترنت)
-
-التطبيق هو PWA كامل:
-- Service Worker يخزن جميع الملفات
-- يعمل بدون انترنت بعد أول زيارة
-- يمكن تثبيته كتطبيق على Android و Windows من المتصفح
-- Manifest مع أيقونات وأسماء عربية
+## 1) التطبيق الرئيسي (الويب + PWA)
 
 ```bash
-npm run build
-npm run preview
-# ثم افتح http://localhost:4173
-# في المتصفح: تثبيت التطبيق من شريط العنوان
+npm ci          # تثبيت مطابق لقفل الحزم (lockfile متزامن الآن)
+npm run dev     # خادم تطوير على http://localhost:5173
+npm run build   # إنتاج → dist/ مع Service Worker وmanifest
+npm run preview # معاينة نسخة الإنتاج
 ```
 
----
+مهم: البناء يستخدم `base: './'` و`HashRouter`، لذلك يعمل `dist/` عند:
+- فتح `dist/index.html` مباشرة عبر `file://`
+- استضافته داخل مجلد فرعي
+- تغليفه في Electron / Capacitor / Tauri
 
-## النسخ الاحتياطي - تفاصيل التنفيذ
+## 2) Windows — Electron
 
-### كما طلبت:
-- **المجلد**: Downloads/AgriOffice/ (أو Download/AgriOffice/ على Android)
-- **الاسم**: اسم_المكتب_Backup_تاريخ_وقت.json
-- **مثال**: المكتب_الزراعي_Backup_2024-01-15_14-30-00.json
-- **عند الاستيراد**: يتم إنشاء مجلد خاص ونسخة تلقائية بتاريخ الاستيراد
-- **تلقائي**: كل 30 دقيقة/ساعة/يومياً حسب الإعداد
+```bash
+npm run build:windows   # electron-builder portable → release/*.exe
+```
 
-### الكود:
-- `src/lib/backup.ts`: منطق التصدير/الاستيراد/التلقائي
-- يحاول: Capacitor Filesystem (Android) → Electron (Windows) → Browser Download (Web)
-- جميعها تعمل بدون انترنت
+## 3) Android — Capacitor
 
----
+```bash
+npm run build:android   # يبني الويب، cap sync، ثم gradle assembleDebug
+```
 
-## الإشعارات - تفاصيل التنفيذ
+لإصدار موقع (كما في CI):
 
-### كما طلبت:
-- **داخل التطبيق**: جدول notifications في IndexedDB + جرس مع عداد
-- **خارج التطبيق**:
-  - Android: Capacitor LocalNotifications → إشعار منبثق في شريط النظام
-  - Windows: Electron Notification + Web Notification API → إشعار منبثق Windows 10/11
-  - Web: Web Notifications API → إشعار متصفح
+```bash
+npm run build && npx cap add android && npx cap sync android
+cd android && ./gradlew assembleRelease
+```
 
-### الكود:
-- `src/lib/db.ts`: createNotification() تحاول جميع الطرق
-- `src/pages/Notifications.tsx`: واجهة عرض الإشعارات
+## 4) Windows/Android خفيف — Tauri (اختياري)
 
----
+```bash
+cd desktop && npm ci
+npm run build -- --bundles nsis,msi   # Windows (NSIS + MSI)
+npm run android:init && npm run android:build   # Android APK
+```
 
-## ملاحظات إضافية
+السكربتات في `desktop/` تبني التطبيق الجذري أولاً تلقائياً ثم تنسخ `dist/` إلى `desktop/src-tauri/dist/`، لذا الغلاف يغلّف التطبيق الكامل وليس نسخة تجريبية.
 
-- التطبيق لا يحتاج انترنت أبداً - تم حذف أي ميزة تحتاج نت (تسجيل دخول سحابي...)
-- المستخدمون محليون فقط (PIN) - بدون انترنت
-- جميع البيانات قابلة للتعديل والحذف
-- الوضع الليلي/النهاري في الإعدادات + localStorage
-- لوحة تحكم بأزرار كبيرة: فاتورة جديدة، تسديد دين، إضافة مادة، الزبائن والديون
+## 5) CI + التوقيع + النشر
+
+عند الدفع إلى `main` أو فتح PR: تبني القطع الثلاث وتفشل بصوت عالٍ إن لم تُنتج ملفات (`if-no-files-found: error`) — لا بناءات خضراء فارغة كما في السابق.
+
+للحصول على APK بتوقيع إنتاج ثابت أضف أسرار المستودع:
+
+| Secret | الوصف |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w 0 release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | كلمة مرور keystore |
+| `ANDROID_KEY_ALIAS` | اسم المفتاح |
+| `ANDROID_KEY_PASSWORD` | كلمة مرور المفتاح (اختياري) |
+
+**الإصدارات:** `git tag vX.Y.Z && git push origin vX.Y.Z` ← تُرفع كل القطع تلقائياً إلى GitHub Release.
+
+## 6) لماذا كان تظهر شاشة سوداء؟ (مرجع للمشرفين)
+
+ثلاث علل متراكبة صُححت كلها:
+
+1. **أصول بمسار مطلق** (`/assets/...`) مع Vite: تفشل تحت `file://` وأي مسار فرعي ← أُصلح بـ `base: './'`.
+2. **BrowserRouter** على `file://`: إعادة التوجيه `/` ترمي `SecurityError` في pushState فيسقط React بدون أي رسالة ← استُبدل بـ `HashRouter`.
+3. **تأخر تطبيق السمة** (useEffect بعد أول رسم) + غياب ErrorBoundary: وميض ثم خلفية داكنة فارغة ← وُضع وسم السمة قبل أول رسم في `index.html`، وأُضيف `ErrorBoundary` يعرض خطأً واضحاً مع أزرار استرجاع بدل الشاشة الصامتة.
+
+كما أن تسجيل ServiceWorker اليدوي المكرر في `App.tsx` أزيل — الإضافة (vite-plugin-pwa) يسجل ويحدّث تلقائياً، وزر "مسح ذاكرة التخزين المؤقت" في شاشة الخطأ يعالج الكراك القديم.
