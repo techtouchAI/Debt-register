@@ -1,0 +1,99 @@
+name: Build All Platforms - Android + Windows 10/11 + Web
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    name: Build Web PWA (Offline)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm install
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Web-PWA
+          path: dist/
+          retention-days: 30
+
+  build-android:
+    runs-on: ubuntu-latest
+    name: Build Android APK
+    needs: build-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: npm install
+      - run: npm install @capacitor/core @capacitor/cli @capacitor/android --save
+      - run: npm run build
+      - run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android || true
+      - working-directory: android
+        run: |
+          chmod +x gradlew || true
+          ./gradlew assembleDebug --stacktrace || ./gradlew assembleDebug
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Android-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+          if-no-files-found: warn
+
+  build-windows:
+    runs-on: windows-latest
+    name: Build Windows 10/11
+    needs: build-web
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm install
+      - run: npm install electron electron-builder --save-dev
+      - run: npm run build
+      - run: npx electron-builder --win portable --x64 --publish=never --config electron-builder.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+      - run: npx electron-builder --win dir --x64 --publish=never --config electron-builder.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+      - if: always()
+        run: |
+          dir
+          dir release 2>&1 || echo "no release"
+          powershell -Command "Get-ChildItem -Recurse -Filter *.exe | Select-Object FullName"
+        continue-on-error: true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Windows-10-11
+          path: |
+            release/
+            **/*.exe
+          retention-days: 30
+          if-no-files-found: warn

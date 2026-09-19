@@ -1,0 +1,37 @@
+{
+  "appId": "com.agrioffice.debtregister",
+  "productName": "إدارة المكتب الزراعي",
+  "copyright": "Copyright © 2024 Agri Office",
+  "directories": {
+    "output": "release",
+    "buildResources": "public"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "public/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "electron/main.cjs"
+  },
+  "win": {
+    "target": [
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      },
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "public/pwa-512x512.png"
+  },
+  "portable": {
+    "artifactName": "AgriOffice-Portable-${version}.exe"
+  },
+  "directories": {
+    "output": "release"
+  }
+}
