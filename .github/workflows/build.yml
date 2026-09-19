@@ -18,7 +18,7 @@ concurrency:
 jobs:
   quality:
     name: Validate web application
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -56,7 +56,13 @@ jobs:
         shell: pwsh
         run: |
           npm run build -- --bundles nsis,msi 2>&1 | Tee-Object -FilePath ../windows-build.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) {
+            "## Windows build failure" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "```text" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            Get-Content ../windows-build.log -Tail 120 | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "```" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            exit $LASTEXITCODE
+          }
       - name: Upload Windows diagnostic log
         if: always()
         uses: actions/upload-artifact@v5
@@ -81,9 +87,11 @@ jobs:
   android:
     name: Android APK
     needs: quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       NDK_VERSION: 27.2.12479018
+      ANDROID_HOME: /home/runner/android-sdk
+      ANDROID_SDK_ROOT: /home/runner/android-sdk
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -99,9 +107,20 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Install Android NDK and build tools
+      - name: Install Android SDK, NDK and build tools
         run: |
-          sdkmanager "ndk;$NDK_VERSION" "platform-tools" "build-tools;35.0.0" "platforms;android-35"
+          set -euo pipefail
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          curl --fail --location --retry 3 \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            --output /tmp/android-commandlinetools.zip
+          unzip -q /tmp/android-commandlinetools.zip -d /tmp/android-tools
+          mv /tmp/android-tools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;$NDK_VERSION" "platform-tools" "build-tools;35.0.0" "platforms;android-35"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -157,7 +176,7 @@ jobs:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, android]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v5
         with:
