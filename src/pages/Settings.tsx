@@ -11,6 +11,7 @@ import { reportError } from '@/lib/errors';
 import { hashPin, isHashedPin, isValidPin, maskPin } from '@/lib/security';
 import { OfficeSettings, User as UserType } from '@/types';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useModalCloser } from '@/hooks/useModalCloser';
 
 export function Settings() {
   const [formData, setFormData] = useState<Partial<OfficeSettings>>({});
@@ -21,6 +22,13 @@ export function Settings() {
   const [userForm, setUserForm] = useState({ name: '', pin: '', role: 'sales' as 'admin' | 'sales' });
 
   const users = useLiveQuery(() => db.users.toArray(), []);
+
+  const closeUserForm = () => {
+    setShowUserForm(false);
+    setEditingUser(null);
+  };
+
+  useModalCloser(showUserForm, closeUserForm);
 
   useEffect(() => {
     let cancelled = false;

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { db, getSettings, logActivity } from '@/lib/db';
 import { getCustomerBalances } from '@/lib/debts';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, roundMoney } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
@@ -34,6 +35,13 @@ export function Customers() {
       : all;
     return filtered.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar'));
   }, [search]);
+
+  const closeForm = () => {
+    setShowForm(false);
+    setEditing(null);
+  };
+
+  useModalCloser(showForm, closeForm);
 
   // الأرصدة تُحسب بمرور واحد وتتحدث تلقائياً مع أي فاتورة أو تسديد جديد
   const balances = useLiveQuery(() => getCustomerBalances(), []);
@@ -69,8 +77,7 @@ export function Customers() {
         await logActivity('إضافة زبون', `تمت إضافة زبون جديد: ${customerData.fullName}`, 'customer', id);
         toast.success('تمت إضافة الزبون', customerData.fullName);
       }
-      setShowForm(false);
-      setEditing(null);
+      closeForm();
       setFormData({ fullName: '', phone: '', address: '', notes: '' });
     } catch (error) {
       reportError('Customers.save', error, 'حدث خطأ أثناء الحفظ');
@@ -294,7 +301,7 @@ export function Customers() {
                 </div>
                 <div className="flex gap-2 pt-2">
                   <Button type="submit" className="flex-1 bg-primary-600 hover:bg-primary-700">{editing ? 'حفظ التعديلات' : 'إضافة الزبون'}</Button>
-                  <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditing(null); }}>إلغاء</Button>
+                  <Button type="button" variant="outline" onClick={closeForm}>إلغاء</Button>
                 </div>
               </form>
             </CardContent>

@@ -88,7 +88,8 @@ describe('النسخ الاحتياطي', () => {
     const result = await restoreBackupData(backup);
     expect(result.warnings.join(' ')).toContain('إعدادات');
     const settings = await getSettings();
-    expect(settings?.officeName).toBeTruthy();
+    // الاسم يبقى فارغاً عمداً فيظهر معالج الإعداد — لا اسم تلقائي
+    expect(typeof settings?.officeName).toBe('string');
     expect(settings?.currency).toBeTruthy();
   });
 

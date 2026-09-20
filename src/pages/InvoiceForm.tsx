@@ -1,17 +1,20 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { FileText, Plus, Trash2, Search, Save, Printer, Download, User, Package, Loader2 } from 'lucide-react';
+import { FileText, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, getSettingsOrDefault, checkLowStock } from '@/lib/db';
+import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
+import { buildInvoicePrintHtml } from '@/lib/print';
 import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
-import { Material, Customer, OfficeSettings } from '@/types';
+import { Material, Customer, OfficeSettings, Invoice } from '@/types';
 import { generateInvoicePDF } from '@/lib/pdf';
+import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialDialog';
+import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 
 interface CartItem {
   material: Material;
@@ -36,6 +39,11 @@ export function InvoiceForm() {
   const [searchCustomer, setSearchCustomer] = useState('');
   const [showMaterialList, setShowMaterialList] = useState(false);
   const [showCustomerList, setShowCustomerList] = useState(false);
+  // الإضافة السريعة لمادة جديدة من داخل الفاتورة + معاينة المسودة
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [quickAddName, setQuickAddName] = useState('');
+  const [previewBody, setPreviewBody] = useState<string | null>(null);
+  const [loadedInvoice, setLoadedInvoice] = useState<Invoice | null>(null);
 
   const [invoiceType, setInvoiceType] = useState<'cash' | 'credit'>('cash');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -68,6 +76,7 @@ export function InvoiceForm() {
           if (cancelled) return;
 
           const { invoice, items } = found;
+          setLoadedInvoice(invoice);
           setInvoiceType(invoice.type);
           setCustomerName(invoice.customerName);
           setDiscount(toFiniteNumber(invoice.discount));
@@ -263,17 +272,19 @@ export function InvoiceForm() {
     }
   };
 
-  const handlePrintPreview = async () => {
+  /** معاينة حقيقية للمسودة داخل التطبيق (كانت تُنزّل ملفاً بدل المعاينة). */
+  const handlePreview = async () => {
     if (cart.length === 0) {
-      toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل قبل الطباعة');
+      toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل قبل المعاينة');
       return;
     }
     try {
       const s = await getSettingsOrDefault();
-      const previewInvoice = {
-        invoiceNumber: 'مسودة',
+      const previewInvoice: Invoice = {
+        invoiceNumber: loadedInvoice?.invoiceNumber || 'مسودة — بدون رقم',
         type: invoiceType,
-        customerName: customerName || '—',
+        customerId: selectedCustomer?.id,
+        customerName: customerName.trim() || '—',
         itemsCount: cart.length,
         subtotal,
         discount: safeDiscount,
@@ -282,9 +293,10 @@ export function InvoiceForm() {
         remaining,
         date: new Date(date).toISOString(),
         createdAt: new Date().toISOString(),
-        status: 'unpaid' as const
+        notes: notes.trim() ? notes.trim() : undefined,
+        status: invoiceType === 'cash' ? 'paid' : remaining <= 0 ? 'paid' : safePaid > 0 ? 'partial' : 'unpaid'
       };
-      await generateInvoicePDF(
+      const bodyHtml = buildInvoicePrintHtml(
         previewInvoice,
         cart.map((item) => ({
           invoiceId: 0,
@@ -294,13 +306,27 @@ export function InvoiceForm() {
           unitPrice: item.unitPrice,
           total: item.total
         })),
-        s,
-        selectedCustomer || undefined
+        s
       );
-      await checkLowStock();
+      setPreviewBody(bodyHtml);
     } catch (error) {
-      reportError('InvoiceForm.print', error, 'تعذّر إنشاء نسخة الطباعة');
+      reportError('InvoiceForm.preview', error, 'تعذّر إنشاء المعاينة');
     }
+  };
+
+  /** مادة أُنشئت للتو من النافذة السريعة: تُضاف للمخزون المعروض والسلة معاً. */
+  const handleQuickAddCreated = (material: Material) => {
+    setMaterials((prev) => {
+      if (prev.some((m) => m.id === material.id)) return prev;
+      return [...prev, material];
+    });
+    addToCart(material);
+  };
+
+  const openQuickAdd = (name: string) => {
+    setQuickAddName(name.trim());
+    setShowMaterialList(false);
+    setShowQuickAdd(true);
   };
 
   const saveButtonLabel = isSaving ? 'جاري الحفظ…' : isEdit ? 'حفظ التعديلات' : 'حفظ الفاتورة';
@@ -423,12 +449,26 @@ export function InvoiceForm() {
                   className="pr-10 h-12 text-base"
                 />
                 {showMaterialList && searchMaterial.trim() && filteredMaterials.length === 0 && (
-                  <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 text-sm text-gray-500">
-                    لا توجد مادة بهذا الاسم
+                  <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 text-sm">
+                    <p className="text-gray-500 mb-2">لا توجد مادة بهذا الاسم</p>
+                    <Button type="button" size="sm" className="w-full bg-primary-600 hover:bg-primary-700" onClick={() => openQuickAdd(searchMaterial)}>
+                      <Plus className="w-4 h-4 ml-1" />
+                      إضافة &quot;{searchMaterial.trim()}&quot; كمادة جديدة
+                    </Button>
                   </div>
                 )}
                 {showMaterialList && filteredMaterials.length > 0 && (
                   <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl max-h-80 overflow-y-auto">
+                    {searchMaterial.trim() && !filteredMaterials.some((m) => m.name.trim().toLowerCase() === searchMaterial.trim().toLowerCase()) && (
+                      <button
+                        type="button"
+                        onClick={() => openQuickAdd(searchMaterial)}
+                        className="w-full text-right p-3 bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/30 flex items-center gap-2 border-b border-gray-100 dark:border-gray-700/50 text-primary-700 dark:text-primary-300 font-medium text-sm"
+                      >
+                        <Plus className="w-4 h-4" />
+                        إضافة &quot;{searchMaterial.trim()}&quot; كمادة جديدة للمخزن
+                      </button>
+                    )}
                     {filteredMaterials.map(m => (
                       <button
                         type="button"
@@ -535,8 +575,8 @@ export function InvoiceForm() {
                   <Button variant="outline" onClick={() => handleSave(true)} disabled={cart.length === 0 || isSaving}>
                     <Download className="w-4 h-4 ml-1" />حفظ و PDF
                   </Button>
-                  <Button variant="outline" onClick={handlePrintPreview} disabled={cart.length === 0 || isSaving}>
-                    <Printer className="w-4 h-4 ml-1" />معاينة PDF
+                  <Button variant="outline" onClick={handlePreview} disabled={cart.length === 0 || isSaving}>
+                    <Eye className="w-4 h-4 ml-1" />معاينة
                   </Button>
                 </div>
               </div>
@@ -553,6 +593,25 @@ export function InvoiceForm() {
           </Card>
         </div>
       </div>
+
+      <QuickAddMaterialDialog
+        open={showQuickAdd}
+        initialName={quickAddName}
+        currency={settings?.currency}
+        onClose={() => setShowQuickAdd(false)}
+        onCreated={handleQuickAddCreated}
+      />
+
+      {previewBody && (
+        <DocumentPreviewDialog
+          open={previewBody !== null}
+          title={loadedInvoice?.invoiceNumber || 'معاينة الفاتورة'}
+          bodyHtml={previewBody}
+          fileNameBase={loadedInvoice ? `${loadedInvoice.invoiceNumber}_${customerName.trim() || 'فاتورة'}` : `مسودة_${customerName.trim() || 'فاتورة'}`}
+          shareTitle="معاينة الفاتورة"
+          onClose={() => setPreviewBody(null)}
+        />
+      )}
     </div>
   );
 }
