@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { FileText, Plus, Trash2, Search, Save, Printer, Download, User, Package } from 'lucide-react';
+import { FileText, Plus, Trash2, Search, Save, Printer, Download, User, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, generateInvoiceNumber, logActivity, createNotification, checkLowStock } from '@/lib/db';
-import { formatCurrency } from '@/lib/utils';
-import { Material, Customer, Invoice, InvoiceItem, OfficeSettings } from '@/types';
+import { db, getSettings, getSettingsOrDefault, checkLowStock } from '@/lib/db';
+import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
+import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
+import { Material, Customer, OfficeSettings } from '@/types';
 import { generateInvoicePDF } from '@/lib/pdf';
 
 interface CartItem {
@@ -17,11 +20,14 @@ interface CartItem {
   total: number;
 }
 
+const EMPTY_CART_MESSAGE = 'لم تتم إضافة مواد بعد';
+
 export function InvoiceForm() {
   const navigate = useNavigate();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
-  const isEdit = !!id;
+  const invoiceId = id ? Number(id) : undefined;
+  const isEdit = Number.isFinite(invoiceId as number) && (invoiceId as number) > 0;
 
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
@@ -37,238 +43,267 @@ export function InvoiceForm() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discount, setDiscount] = useState(0);
   const [notes, setNotes] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 16));
+  const [date, setDate] = useState(formatLocalDateTimeInput());
   const [paidAmount, setPaidAmount] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    loadData();
-    if (isEdit) loadInvoice();
-    else {
-      const customerId = searchParams.get('customerId');
-      if (customerId) {
-        db.customers.get(Number(customerId)).then(c => {
-          if (c) {
-            setSelectedCustomer(c);
-            setCustomerName(c.fullName);
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const [s, mats, custs] = await Promise.all([getSettings(), db.materials.toArray(), db.customers.toArray()]);
+        if (cancelled) return;
+        setSettings(s || null);
+        setMaterials(mats);
+        setCustomers(custs);
+
+        if (isEdit) {
+          const found = await getInvoiceWithItems(invoiceId as number);
+          if (!found) {
+            toast.error('الفاتورة غير موجودة', 'ربما تم حذفها من جهاز آخر أو من النسخ الاحتياطية');
+            navigate('/invoices', { replace: true });
+            return;
+          }
+          if (cancelled) return;
+
+          const { invoice, items } = found;
+          setInvoiceType(invoice.type);
+          setCustomerName(invoice.customerName);
+          setDiscount(toFiniteNumber(invoice.discount));
+          setNotes(invoice.notes || '');
+          setDate(formatLocalDateTimeInput(new Date(invoice.date)));
+          setPaidAmount(toFiniteNumber(invoice.paidAmount));
+
+          const linkedCustomer = invoice.customerId ? await db.customers.get(invoice.customerId) : undefined;
+          if (cancelled) return;
+          if (linkedCustomer) setSelectedCustomer(linkedCustomer);
+
+          const stockById = new Map(mats.map((material) => [material.id, material]));
+          const reserved = new Map<number, number>();
+          for (const item of items) {
+            reserved.set(item.materialId, roundMoney((reserved.get(item.materialId) ?? 0) + item.quantity));
+          }
+
+          const cartItems: CartItem[] = [];
+          for (const item of items) {
+            const material = stockById.get(item.materialId);
+            if (!material) continue;
+            cartItems.push({
+              // الكمية المعروضة تشمل حصة هذه الفاتورة حتى يمكن تعديلها بحرية
+              material: { ...material, quantity: roundMoney(material.quantity + (reserved.get(item.materialId) ?? 0)) },
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              total: item.total
+            });
+          }
+          setCart(cartItems);
+          return;
+        }
+
+        const customerIdParam = searchParams.get('customerId');
+        if (customerIdParam) {
+          const customer = await db.customers.get(Number(customerIdParam));
+          if (customer && !cancelled) {
+            setSelectedCustomer(customer);
+            setCustomerName(customer.fullName);
             setInvoiceType('credit');
           }
-        });
+        }
+      } catch (error) {
+        if (!cancelled) reportError('InvoiceForm.load', error, 'تعذّر تحميل بيانات الفاتورة');
       }
-    }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadData = async () => {
-    const [s, mats, custs] = await Promise.all([
-      getSettings(),
-      db.materials.toArray(),
-      db.customers.toArray()
-    ]);
-    setSettings(s || null);
-    setMaterials(mats);
-    setCustomers(custs);
-  };
+  const filteredMaterials = useMemo(() => {
+    const query = searchMaterial.trim().toLowerCase();
+    if (!query) return [];
+    return materials
+      .filter(
+        (material) =>
+          material.name.toLowerCase().includes(query) ||
+          (material.category ?? '').toLowerCase().includes(query) ||
+          (material.barcode ?? '').includes(query)
+      )
+      .slice(0, 20);
+  }, [materials, searchMaterial]);
 
-  const loadInvoice = async () => {
-    if (!id) return;
-    const invoice = await db.invoices.get(Number(id));
-    const items = await db.invoiceItems.where('invoiceId').equals(Number(id)).toArray();
-    if (!invoice) return;
-
-    setInvoiceType(invoice.type);
-    setCustomerName(invoice.customerName);
-    setDiscount(invoice.discount);
-    setNotes(invoice.notes || '');
-    setDate(new Date(invoice.date).toISOString().slice(0, 16));
-    setPaidAmount(invoice.paidAmount);
-
-    if (invoice.customerId) {
-      const c = await db.customers.get(invoice.customerId);
-      if (c) setSelectedCustomer(c);
-    }
-
-    const cartItems: CartItem[] = [];
-    for (const item of items) {
-      const mat = await db.materials.get(item.materialId);
-      if (mat) {
-        // For edit, we need to add back quantity to available stock calculation
-        cartItems.push({
-          material: { ...mat, quantity: mat.quantity + item.quantity },
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          total: item.total
-        });
-      }
-    }
-    setCart(cartItems);
-  };
-
-  const filteredMaterials = materials.filter(m => 
-    m.name.toLowerCase().includes(searchMaterial.toLowerCase()) ||
-    m.category?.toLowerCase().includes(searchMaterial.toLowerCase())
-  ).slice(0, 10);
-
-  const filteredCustomers = customers.filter(c =>
-    c.fullName.toLowerCase().includes(searchCustomer.toLowerCase()) ||
-    c.phone?.includes(searchCustomer)
-  ).slice(0, 10);
+  const filteredCustomers = useMemo(() => {
+    const query = searchCustomer.trim().toLowerCase();
+    return customers
+      .filter(
+        (customer) =>
+          customer.fullName.toLowerCase().includes(query) || (customer.phone ?? '').includes(searchCustomer.trim())
+      )
+      .slice(0, 20);
+  }, [customers, searchCustomer]);
 
   const addToCart = (material: Material) => {
-    const existing = cart.find(c => c.material.id === material.id);
+    const existing = cart.find((item) => item.material.id === material.id);
     if (existing) {
-      if (existing.quantity + 1 > material.quantity && !isEdit) {
-        alert(`الكمية المتوفرة فقط ${material.quantity}`);
+      if (roundMoney(existing.quantity + 1) > material.quantity) {
+        toast.warning('الكمية غير كافية', `المتوفر من "${material.name}": ${material.quantity} ${material.unit ?? ''}`);
         return;
       }
-      setCart(cart.map(c => c.material.id === material.id ? { ...c, quantity: c.quantity + 1, total: (c.quantity + 1) * c.unitPrice } : c));
+      setCart(
+        cart.map((item) =>
+          item.material.id === material.id
+            ? { ...item, quantity: roundMoney(item.quantity + 1), total: roundMoney((item.quantity + 1) * item.unitPrice) }
+            : item
+        )
+      );
     } else {
-      if (material.quantity <= 0 && !isEdit) {
-        alert('المادة غير متوفرة في المخزن');
+      if (material.quantity <= 0) {
+        toast.warning('المادة غير متوفرة', `لا توجد كمية متوفرة من "${material.name}"`);
         return;
       }
-      setCart([...cart, { material, quantity: 1, unitPrice: material.salePrice, total: material.salePrice }]);
+      setCart([
+        ...cart,
+        { material, quantity: 1, unitPrice: toFiniteNumber(material.salePrice), total: roundMoney(toFiniteNumber(material.salePrice)) }
+      ]);
     }
     setSearchMaterial('');
     setShowMaterialList(false);
   };
 
-  const updateQuantity = (materialId: number, newQty: number) => {
-    if (newQty <= 0) {
-      setCart(cart.filter(c => c.material.id !== materialId));
+  const updateQuantity = (materialId: number, value: string) => {
+    const quantity = toFiniteNumber(value, NaN);
+    if (value.trim() === '' || !Number.isFinite(quantity)) {
+      setCart(cart.filter((item) => item.material.id !== materialId));
       return;
     }
-    const item = cart.find(c => c.material.id === materialId);
+    if (quantity <= 0) {
+      setCart(cart.filter((item) => item.material.id !== materialId));
+      return;
+    }
+    const item = cart.find((entry) => entry.material.id === materialId);
     if (!item) return;
-    if (newQty > item.material.quantity && !isEdit) {
-      alert(`الكمية المتوفرة فقط ${item.material.quantity}`);
+    if (quantity > item.material.quantity) {
+      toast.warning('الكمية غير كافية', `المتوفر من "${item.material.name}": ${item.material.quantity}`);
       return;
     }
-    setCart(cart.map(c => c.material.id === materialId ? { ...c, quantity: newQty, total: newQty * c.unitPrice } : c));
+    setCart(
+      cart.map((entry) =>
+        entry.material.id === materialId
+          ? { ...entry, quantity, total: roundMoney(quantity * entry.unitPrice) }
+          : entry
+      )
+    );
   };
 
-  const updatePrice = (materialId: number, newPrice: number) => {
-    setCart(cart.map(c => c.material.id === materialId ? { ...c, unitPrice: newPrice, total: c.quantity * newPrice } : c));
+  const updatePrice = (materialId: number, value: string) => {
+    const unitPrice = Math.max(0, toFiniteNumber(value));
+    setCart(
+      cart.map((item) =>
+        item.material.id === materialId
+          ? { ...item, unitPrice, total: roundMoney(item.quantity * unitPrice) }
+          : item
+      )
+    );
   };
 
-  const subtotal = cart.reduce((sum, item) => sum + item.total, 0);
-  const total = subtotal - discount;
-  const remaining = invoiceType === 'credit' ? total - paidAmount : 0;
+  const subtotal = roundMoney(cart.reduce((sum, item) => sum + toFiniteNumber(item.total), 0));
+  const safeDiscount = Math.min(Math.max(roundMoney(toFiniteNumber(discount)), 0), subtotal);
+  const total = roundMoney(subtotal - safeDiscount);
+  const safePaid = Math.min(Math.max(roundMoney(toFiniteNumber(paidAmount)), 0), total);
+  const remaining = invoiceType === 'credit' ? roundMoney(total - safePaid) : 0;
 
-  const handleSave = async (shouldPrint = false, shouldPDF = false) => {
+  const handleSave = async (shouldPDF = false) => {
+    if (isSaving) return;
     if (cart.length === 0) {
-      alert('يرجى إضافة مواد للفاتورة');
-      return;
-    }
-    if (!customerName.trim()) {
-      alert('يرجى إدخال اسم الزبون');
-      return;
-    }
-    if (invoiceType === 'credit' && !selectedCustomer) {
-      alert('الفواتير الآجلة يجب أن ترتبط بزبون مسجل');
+      toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل للفاتورة');
       return;
     }
 
+    setIsSaving(true);
     try {
-      const now = new Date().toISOString();
-      const invoiceNumber = isEdit ? (await db.invoices.get(Number(id)))?.invoiceNumber || await generateInvoiceNumber() : await generateInvoiceNumber();
-
-      if (isEdit) {
-        // Restore old stock first
-        const oldItems = await db.invoiceItems.where('invoiceId').equals(Number(id)).toArray();
-        for (const oldItem of oldItems) {
-          const mat = await db.materials.get(oldItem.materialId);
-          if (mat) await db.materials.update(mat.id!, { quantity: mat.quantity + oldItem.quantity });
-        }
-        await db.invoiceItems.where('invoiceId').equals(Number(id)).delete();
-      }
-
-      // Check stock availability
-      for (const item of cart) {
-        const currentMat = await db.materials.get(item.material.id!);
-        if (!currentMat) continue;
-        if (item.quantity > currentMat.quantity) {
-          alert(`المادة "${item.material.name}" كميتها غير كافية. المتوفر: ${currentMat.quantity}`);
-          // Restore if edit
-          if (isEdit) {
-            const oldItems = await db.invoiceItems.where('invoiceId').equals(Number(id)).toArray();
-            for (const oldItem of oldItems) {
-              const mat = await db.materials.get(oldItem.materialId);
-              if (mat) await db.materials.update(mat.id!, { quantity: mat.quantity - oldItem.quantity });
-            }
-          }
-          return;
-        }
-      }
-
-      const invoiceData: Invoice = {
-        invoiceNumber,
+      const draft: InvoiceDraft = {
+        id: isEdit ? invoiceId : undefined,
         type: invoiceType,
         customerId: selectedCustomer?.id,
-        customerName: customerName.trim(),
-        itemsCount: cart.length,
-        subtotal,
-        discount,
-        total,
-        paidAmount: invoiceType === 'cash' ? total : paidAmount,
-        remaining: invoiceType === 'cash' ? 0 : remaining,
-        date: new Date(date).toISOString(),
-        createdAt: isEdit ? (await db.invoices.get(Number(id)))?.createdAt || now : now,
+        customerName,
+        dateISO: new Date(date).toISOString(),
+        discount: safeDiscount,
+        paidAmount: invoiceType === 'credit' ? safePaid : 0,
         notes,
-        status: invoiceType === 'cash' ? 'paid' : paidAmount >= total ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid'
-      };
-
-      let invoiceId: number;
-      if (isEdit) {
-        await db.invoices.update(Number(id), invoiceData);
-        invoiceId = Number(id);
-      } else {
-        invoiceId = await db.invoices.add(invoiceData) as number;
-      }
-
-      // Add items and deduct stock
-      for (const item of cart) {
-        await db.invoiceItems.add({
-          invoiceId,
-          materialId: item.material.id!,
+        items: cart.map((item) => ({
+          materialId: item.material.id as number,
           materialName: item.material.name,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
-          total: item.total,
           purchasePrice: item.material.purchasePrice
-        });
+        }))
+      };
 
-        const mat = await db.materials.get(item.material.id!);
-        if (mat) {
-          await db.materials.update(mat.id!, { quantity: mat.quantity - item.quantity, updatedAt: now });
-        }
+      const result = await saveInvoice(draft);
+      if (!result.ok) {
+        toast.error('لم يتم الحفظ', result.error);
+        return;
       }
 
-      await logActivity(isEdit ? 'تعديل فاتورة' : 'إنشاء فاتورة', `${isEdit ? 'تم تعديل' : 'تم إنشاء'} فاتورة ${invoiceNumber} للزبون ${customerName}`, 'invoice', invoiceId);
-
-      if (invoiceType === 'credit' && total > 500000) {
-        await createNotification('فاتورة آجلة كبيرة', `فاتورة ${invoiceNumber} بمبلغ ${formatCurrency(total, settings?.currency)} للزبون ${customerName}`, 'info', invoiceId, 'invoice');
+      if (shouldPDF) {
+        const s = await getSettingsOrDefault();
+        const customer = draft.customerId ? await db.customers.get(draft.customerId) : undefined;
+        await generateInvoicePDF(result.invoice, result.items, s, customer);
       }
 
-      await checkLowStock();
-
-      if (shouldPDF || shouldPrint) {
-        const items = await db.invoiceItems.where('invoiceId').equals(invoiceId).toArray();
-        const s = await getSettings();
-        if (s) {
-          if (shouldPDF) await generateInvoicePDF({ ...invoiceData, id: invoiceId }, items, s, selectedCustomer || undefined);
-          if (shouldPrint) {
-            // Trigger print via generating PDF then print, or use window.print with custom content
-            await generateInvoicePDF({ ...invoiceData, id: invoiceId }, items, s, selectedCustomer || undefined);
-          }
-        }
-      }
-
-      alert(`تم ${isEdit ? 'تعديل' : 'حفظ'} الفاتورة بنجاح: ${invoiceNumber}`);
+      toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم حفظ الفاتورة', `رقم الفاتورة: ${result.invoiceNumber}`);
       navigate('/invoices');
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء حفظ الفاتورة');
+      reportError('InvoiceForm.save', error, 'حدث خطأ أثناء حفظ الفاتورة');
+    } finally {
+      setIsSaving(false);
     }
   };
+
+  const handlePrintPreview = async () => {
+    if (cart.length === 0) {
+      toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل قبل الطباعة');
+      return;
+    }
+    try {
+      const s = await getSettingsOrDefault();
+      const previewInvoice = {
+        invoiceNumber: 'مسودة',
+        type: invoiceType,
+        customerName: customerName || '—',
+        itemsCount: cart.length,
+        subtotal,
+        discount: safeDiscount,
+        total,
+        paidAmount: invoiceType === 'cash' ? total : safePaid,
+        remaining,
+        date: new Date(date).toISOString(),
+        createdAt: new Date().toISOString(),
+        status: 'unpaid' as const
+      };
+      await generateInvoicePDF(
+        previewInvoice,
+        cart.map((item) => ({
+          invoiceId: 0,
+          materialId: item.material.id as number,
+          materialName: item.material.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          total: item.total
+        })),
+        s,
+        selectedCustomer || undefined
+      );
+      await checkLowStock();
+    } catch (error) {
+      reportError('InvoiceForm.print', error, 'تعذّر إنشاء نسخة الطباعة');
+    }
+  };
+
+  const saveButtonLabel = isSaving ? 'جاري الحفظ…' : isEdit ? 'حفظ التعديلات' : 'حفظ الفاتورة';
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -294,12 +329,14 @@ export function InvoiceForm() {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl">
                 <button
+                  type="button"
                   onClick={() => setInvoiceType('cash')}
                   className={`py-2.5 px-4 rounded-lg font-medium text-sm transition-all ${invoiceType === 'cash' ? 'bg-white dark:bg-gray-700 shadow-sm text-green-700 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}`}
                 >
                   💵 نقدي - دفع فوري
                 </button>
                 <button
+                  type="button"
                   onClick={() => setInvoiceType('credit')}
                   className={`py-2.5 px-4 rounded-lg font-medium text-sm transition-all ${invoiceType === 'credit' ? 'bg-white dark:bg-gray-700 shadow-sm text-amber-700 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}`}
                 >
@@ -317,6 +354,7 @@ export function InvoiceForm() {
                       value={searchCustomer || customerName}
                       onChange={(e) => { setSearchCustomer(e.target.value); setCustomerName(e.target.value); setShowCustomerList(true); }}
                       onFocus={() => setShowCustomerList(true)}
+                      onBlur={() => window.setTimeout(() => setShowCustomerList(false), 150)}
                       className="pr-10"
                     />
                   </div>
@@ -324,23 +362,25 @@ export function InvoiceForm() {
                     <div className="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl max-h-60 overflow-y-auto">
                       {filteredCustomers.map(c => (
                         <button
+                          type="button"
                           key={c.id}
                           onClick={() => { setSelectedCustomer(c); setCustomerName(c.fullName); setSearchCustomer(''); setShowCustomerList(false); }}
                           className="w-full text-right p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between"
                         >
                           <div>
                             <p className="font-medium text-sm">{c.fullName}</p>
-                            <p className="text-xs text-gray-500">{c.phone} • {c.address}</p>
+                            <p className="text-xs text-gray-500">{c.phone || 'بدون هاتف'} {c.address ? `• ${c.address}` : ''}</p>
                           </div>
                           <Badge variant="outline" className="text-[10px]">مسجل</Badge>
                         </button>
                       ))}
                       {searchCustomer && (
                         <button
+                          type="button"
                           onClick={() => { setSelectedCustomer(null); setCustomerName(searchCustomer); setSearchCustomer(''); setShowCustomerList(false); }}
                           className="w-full text-right p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 border-t"
                         >
-                          <p className="text-sm">استخدام "{searchCustomer}" كزبون عابر</p>
+                          <p className="text-sm">استخدام &quot;{searchCustomer}&quot; كزبون عابر</p>
                           <p className="text-xs text-gray-500">للبيع النقدي فقط</p>
                         </button>
                       )}
@@ -351,6 +391,11 @@ export function InvoiceForm() {
                       <span className="text-xs text-green-700 dark:text-green-400">✓ زبون مسجل: {selectedCustomer.fullName}</span>
                       <Button variant="ghost" size="sm" className="h-6 text-[11px]" onClick={() => { setSelectedCustomer(null); setCustomerName(''); }}>إزالة</Button>
                     </div>
+                  )}
+                  {invoiceType === 'credit' && !selectedCustomer && (
+                    <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                      الفواتير الآجلة تحتاج زبوناً مسجلاً حتى يُحسب الدين بشكل صحيح.
+                    </p>
                   )}
                 </div>
                 <div>
@@ -374,12 +419,19 @@ export function InvoiceForm() {
                   value={searchMaterial}
                   onChange={(e) => { setSearchMaterial(e.target.value); setShowMaterialList(true); }}
                   onFocus={() => setShowMaterialList(true)}
+                  onBlur={() => window.setTimeout(() => setShowMaterialList(false), 150)}
                   className="pr-10 h-12 text-base"
                 />
+                {showMaterialList && searchMaterial.trim() && filteredMaterials.length === 0 && (
+                  <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 text-sm text-gray-500">
+                    لا توجد مادة بهذا الاسم
+                  </div>
+                )}
                 {showMaterialList && filteredMaterials.length > 0 && (
                   <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl max-h-80 overflow-y-auto">
                     {filteredMaterials.map(m => (
                       <button
+                        type="button"
                         key={m.id}
                         onClick={() => addToCart(m)}
                         className="w-full text-right p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center justify-between border-b last:border-0 border-gray-100 dark:border-gray-700/50"
@@ -400,7 +452,7 @@ export function InvoiceForm() {
                 {cart.length === 0 ? (
                   <div className="text-center py-8 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
                     <Package className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
-                    <p className="text-sm text-gray-500">لم تتم إضافة مواد بعد</p>
+                    <p className="text-sm text-gray-500">{EMPTY_CART_MESSAGE}</p>
                     <p className="text-xs text-gray-400 mt-1">ابحث واختر المادة لإضافتها تلقائياً</p>
                   </div>
                 ) : (
@@ -419,14 +471,14 @@ export function InvoiceForm() {
                           <p className="text-[11px] text-gray-500">متوفر: {item.material.quantity}</p>
                         </div>
                         <div className="col-span-2">
-                          <Input type="number" min="0.01" step="0.01" value={item.quantity} onChange={(e) => updateQuantity(item.material.id!, Number(e.target.value))} className="h-8 text-center" />
+                          <Input type="number" min="0.01" step="0.01" value={item.quantity} onChange={(e) => updateQuantity(item.material.id as number, e.target.value)} className="h-8 text-center" />
                         </div>
                         <div className="col-span-2">
-                          <Input type="number" min="0" value={item.unitPrice} onChange={(e) => updatePrice(item.material.id!, Number(e.target.value))} className="h-8 text-center text-xs" />
+                          <Input type="number" min="0" step="0.01" value={item.unitPrice} onChange={(e) => updatePrice(item.material.id as number, e.target.value)} className="h-8 text-center text-xs" />
                         </div>
                         <div className="col-span-2 text-center font-bold text-green-600">{formatCurrency(item.total, settings?.currency)}</div>
                         <div className="col-span-1 text-center">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" onClick={() => setCart(cart.filter(c => c.material.id !== item.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${item.material.name}`} onClick={() => setCart(cart.filter(c => c.material.id !== item.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button>
                         </div>
                       </div>
                     ))}
@@ -446,22 +498,25 @@ export function InvoiceForm() {
             <CardContent className="space-y-4">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">عدد المواد:</span><span className="font-bold">{cart.length}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">إجمالي الكمية:</span><span className="font-bold">{cart.reduce((sum, i) => sum + i.quantity, 0)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">إجمالي الكمية:</span><span className="font-bold">{roundMoney(cart.reduce((sum, i) => sum + i.quantity, 0))}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">المجموع:</span><span className="font-bold">{formatCurrency(subtotal, settings?.currency)}</span></div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-gray-500 text-sm">الخصم:</span>
-                  <Input type="number" min="0" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} className="w-28 h-8 text-left" dir="ltr" />
+                  <Input type="number" min="0" max={subtotal} step="0.01" value={discount} onChange={(e) => setDiscount(toFiniteNumber(e.target.value))} className="w-28 h-8 text-left" dir="ltr" />
                 </div>
                 <div className="h-px bg-gray-200 dark:bg-gray-700 my-2" />
                 <div className="flex justify-between text-base"><span className="font-bold">الإجمالي النهائي:</span><span className="font-bold text-primary-600 text-lg">{formatCurrency(total, settings?.currency)}</span></div>
-                
+
                 {invoiceType === 'credit' && (
                   <>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-gray-500 text-sm">المدفوع الآن:</span>
-                      <Input type="number" min="0" max={total} value={paidAmount} onChange={(e) => setPaidAmount(Number(e.target.value))} className="w-28 h-8" />
+                      <Input type="number" min="0" max={total} step="0.01" value={paidAmount} onChange={(e) => setPaidAmount(toFiniteNumber(e.target.value))} className="w-28 h-8" />
                     </div>
                     <div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><span className={`font-bold ${remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(remaining, settings?.currency)}</span></div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">
+                      تُسجَّل الدفعة كوصل قبض، ويُوزَّع المسدد تلقائياً على أقدم فواتير الزبون.
+                    </p>
                   </>
                 )}
               </div>
@@ -472,13 +527,17 @@ export function InvoiceForm() {
               </div>
 
               <div className="grid grid-cols-1 gap-2 pt-2">
-                <Button onClick={() => handleSave(false, false)} className="w-full bg-primary-600 hover:bg-primary-700 h-11 font-bold" disabled={cart.length === 0}>
-                  <Save className="w-4 h-4 ml-2" />
-                  {isEdit ? 'حفظ التعديلات' : 'حفظ الفاتورة'}
+                <Button onClick={() => handleSave(false)} className="w-full bg-primary-600 hover:bg-primary-700 h-11 font-bold" disabled={cart.length === 0 || isSaving}>
+                  {isSaving ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Save className="w-4 h-4 ml-2" />}
+                  {saveButtonLabel}
                 </Button>
                 <div className="grid grid-cols-2 gap-2">
-                  <Button variant="outline" onClick={() => handleSave(true, false)} disabled={cart.length === 0}><Printer className="w-4 h-4 ml-1" />حفظ وطباعة</Button>
-                  <Button variant="outline" onClick={() => handleSave(false, true)} disabled={cart.length === 0}><Download className="w-4 h-4 ml-1" />تصدير PDF</Button>
+                  <Button variant="outline" onClick={() => handleSave(true)} disabled={cart.length === 0 || isSaving}>
+                    <Download className="w-4 h-4 ml-1" />حفظ و PDF
+                  </Button>
+                  <Button variant="outline" onClick={handlePrintPreview} disabled={cart.length === 0 || isSaving}>
+                    <Printer className="w-4 h-4 ml-1" />معاينة PDF
+                  </Button>
                 </div>
               </div>
 
@@ -487,7 +546,7 @@ export function InvoiceForm() {
                 <ul className="space-y-1 list-disc pr-4">
                   <li>يتم خصم الكميات من المخزن تلقائياً عند الحفظ</li>
                   <li>الفواتير الآجلة تضاف لديون الزبون مباشرة</li>
-                  <li>يمكن تعديل السعر المفرد لكل مادة</li>
+                  <li>لا يُحفظ شيء إذا كانت الكمية غير كافية</li>
                 </ul>
               </div>
             </CardContent>

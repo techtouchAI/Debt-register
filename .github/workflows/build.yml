@@ -19,9 +19,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    name: Lint, Typecheck & Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Unit & integration tests
+        run: npm test
+
   web:
     name: Build Web PWA
     runs-on: ubuntu-24.04
+    needs: quality
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,6 +54,13 @@ jobs:
           test -f dist/index.html
           test -f dist/sw.js
           test -f dist/manifest.webmanifest
+          # منع انحدار تقسيم الحزم: يجب ألا يعود الملف الرئيسي ضخماً
+          MAIN_BUNDLE=$(ls -S dist/assets/index-*.js | head -1)
+          SIZE=$(wc -c < "$MAIN_BUNDLE")
+          if [ "$SIZE" -gt 400000 ]; then
+            echo "::error title=Bundle regression::$MAIN_BUNDLE is $SIZE bytes (> 400 KB)"
+            exit 1
+          fi
           # منع انحدار الشاشة السوداء: الأصول يجب أن تكون بمسارات نسبية (تعمل تحت file:// والمسارات الفرعية)
           if grep -Eq '(src|href)="/assets' dist/index.html; then
             echo '::error title=Build regression::dist/index.html contains absolute /assets paths — file:// and sub-path hosting will break'

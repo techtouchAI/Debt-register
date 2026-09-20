@@ -4,13 +4,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, logActivity, createNotification, checkLowStock } from '@/lib/db';
+import { db, logActivity, createNotification, checkLowStock, getSettings } from '@/lib/db';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText } from '@/lib/utils';
-import { Material, OfficeSettings } from '@/types';
+import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
+import { Material } from '@/types';
 
 export function Materials() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'low' | 'out' | 'normal'>('all');
   const [showForm, setShowForm] = useState(false);
@@ -26,57 +27,60 @@ export function Materials() {
     description: ''
   });
 
-  const materials = useLiveQuery(async () => {
-    let query = db.materials.toArray();
-    const all = await query;
-    let filtered = all;
+  const settings = useLiveQuery(() => getSettings(), []);
 
-    if (search) {
-      filtered = filtered.filter(m => 
-        m.name.toLowerCase().includes(search.toLowerCase()) ||
-        m.category?.toLowerCase().includes(search.toLowerCase()) ||
-        m.barcode?.includes(search)
+  const materials = useLiveQuery(async () => {
+    const all = await db.materials.toArray();
+    const query = search.trim().toLowerCase();
+
+    let filtered = all;
+    if (query) {
+      filtered = filtered.filter(
+        (material) =>
+          material.name.toLowerCase().includes(query) ||
+          (material.category ?? '').toLowerCase().includes(query) ||
+          (material.barcode ?? '').includes(query)
       );
     }
 
     if (filter !== 'all') {
-      filtered = filtered.filter(m => getStockStatus(m.quantity, m.minQuantity) === filter);
+      filtered = filtered.filter((material) => getStockStatus(material.quantity, material.minQuantity) === filter);
     }
 
-    return filtered.sort((a, b) => a.name.localeCompare(b.name));
+    return filtered.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   }, [search, filter]);
 
   useEffect(() => {
-    loadSettings();
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('action') === 'new') {
       setShowForm(true);
     }
   }, []);
 
-  const loadSettings = async () => {
-    const s = await getSettings();
-    setSettings(s || null);
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.salePrice) {
-      alert('يرجى ملء الحقول المطلوبة');
+    const name = (formData.name ?? '').trim();
+    const salePrice = toFiniteNumber(formData.salePrice, NaN);
+    if (!name || !Number.isFinite(salePrice) || salePrice < 0) {
+      toast.warning('حقول ناقصة', 'اسم المادة وسعر البيع مطلوبان');
       return;
     }
 
     const now = new Date().toISOString();
+    const defaultThreshold = toFiniteNumber(settings?.lowStockThreshold, 5);
     const materialData: Material = {
-      name: formData.name!.trim(),
-      quantity: Number(formData.quantity) || 0,
-      salePrice: Number(formData.salePrice) || 0,
-      purchasePrice: formData.purchasePrice ? Number(formData.purchasePrice) : undefined,
-      minQuantity: Number(formData.minQuantity) || 5,
-      category: formData.category?.trim() || 'عام',
+      name,
+      quantity: Math.max(0, toFiniteNumber(formData.quantity)),
+      salePrice,
+      purchasePrice:
+        formData.purchasePrice === undefined || formData.purchasePrice === null
+          ? undefined
+          : Math.max(0, toFiniteNumber(formData.purchasePrice)),
+      minQuantity: Math.max(0, toFiniteNumber(formData.minQuantity, defaultThreshold)),
+      category: (formData.category ?? '').trim() || 'عام',
       unit: formData.unit || 'قطعة',
-      description: formData.description?.trim(),
-      barcode: formData.barcode?.trim(),
+      description: (formData.description ?? '').trim() || undefined,
+      barcode: (formData.barcode ?? '').trim() || undefined,
       createdAt: editing?.createdAt || now,
       updatedAt: now
     };
@@ -85,13 +89,18 @@ export function Materials() {
       if (editing?.id) {
         await db.materials.update(editing.id, materialData);
         await logActivity('تعديل مادة', `تم تعديل المادة: ${materialData.name}`, 'material', editing.id);
+        toast.success('تم تحديث المادة', materialData.name);
       } else {
-        const id = await db.materials.add(materialData);
-        await logActivity('إضافة مادة', `تمت إضافة مادة جديدة: ${materialData.name}`, 'material', id as number);
-        
+        const id = (await db.materials.add(materialData)) as number;
+        await logActivity('إضافة مادة', `تمت إضافة مادة جديدة: ${materialData.name}`, 'material', id);
         if (materialData.quantity <= materialData.minQuantity) {
-          await createNotification('تنبيه مخزون', `المادة "${materialData.name}" كميتها منخفضة: ${materialData.quantity}`, 'warning', id as number, 'material');
+          await createNotification(
+            'تنبيه مخزون',
+            `المادة "${materialData.name}" كميتها منخفضة: ${materialData.quantity}`,
+            { type: 'warning', relatedId: id, relatedType: 'material', code: 'low-stock' }
+          );
         }
+        toast.success('تمت إضافة المادة', materialData.name);
       }
 
       setShowForm(false);
@@ -99,8 +108,7 @@ export function Materials() {
       setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: 5, category: '', unit: 'قطعة', description: '' });
       await checkLowStock();
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء الحفظ');
+      reportError('Materials.save', error, 'حدث خطأ أثناء الحفظ');
     }
   };
 
@@ -111,21 +119,32 @@ export function Materials() {
   };
 
   const handleDelete = async (material: Material) => {
+    if (!material.id) return;
     if (!confirm(`هل أنت متأكد من حذف المادة "${material.name}"؟\nسيتم حذفها نهائياً ولا يمكن التراجع.`)) return;
 
-    // Check if material is used in invoices
-    const used = await db.invoiceItems.where('materialId').equals(material.id!).count();
-    if (used > 0) {
-      alert(`لا يمكن حذف هذه المادة لأنها مستخدمة في ${used} فاتورة.\nيمكنك تعديل الكمية إلى صفر بدلاً من الحذف.`);
-      return;
-    }
+    try {
+      const used = await db.invoiceItems.where('materialId').equals(material.id).count();
+      if (used > 0) {
+        toast.warning('لا يمكن الحذف', `المادة مستخدمة في ${used} فاتورة. يمكن تعديل الكمية إلى صفر بدلاً من الحذف.`);
+        return;
+      }
 
-    await db.materials.delete(material.id!);
-    await logActivity('حذف مادة', `تم حذف المادة: ${material.name}`, 'material', material.id);
+      await db.materials.delete(material.id);
+      await logActivity('حذف مادة', `تم حذف المادة: ${material.name}`, 'material', material.id);
+      toast.success('تم حذف المادة', material.name);
+    } catch (error) {
+      reportError('Materials.delete', error, 'حدث خطأ أثناء الحذف');
+    }
   };
 
-  const totalValue = materials?.reduce((sum, m) => sum + (m.quantity * m.salePrice), 0) || 0;
-  const totalProfitPotential = materials?.reduce((sum, m) => sum + (m.purchasePrice ? (m.salePrice - m.purchasePrice) * m.quantity : 0), 0) || 0;
+  const totalValue = roundMoney((materials ?? []).reduce((sum, material) => sum + roundMoney(toFiniteNumber(material.quantity) * toFiniteNumber(material.salePrice)), 0));
+  const totalProfitPotential = roundMoney(
+    (materials ?? []).reduce(
+      (sum, material) =>
+        sum + (material.purchasePrice ? roundMoney((toFiniteNumber(material.salePrice) - toFiniteNumber(material.purchasePrice)) * toFiniteNumber(material.quantity)) : 0),
+      0
+    )
+  );
 
   return (
     <div className="space-y-6">

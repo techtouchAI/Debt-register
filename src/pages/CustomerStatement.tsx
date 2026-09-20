@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, FileText, CreditCard, DollarSign, Printer, Download, Calendar, Phone, MapPin } from 'lucide-react';
+import { ArrowLeft, FileText, CreditCard, Printer, Download, Calendar, Phone, MapPin } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, getCustomerDebt } from '@/lib/db';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { db, getSettings } from '@/lib/db';
+import { getCustomerBalance } from '@/lib/debts';
+import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { reportError } from '@/lib/errors';
+import { toast } from '@/lib/toast';
+import { printCustomerStatement } from '@/lib/print';
 import { Customer, Invoice, Payment, OfficeSettings } from '@/types';
 import { generateCustomerStatementPDF } from '@/lib/pdf';
 
@@ -19,41 +23,57 @@ export function CustomerStatement() {
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
 
   useEffect(() => {
-    loadData();
+    let cancelled = false;
+
+    const loadData = async () => {
+      if (!id) return;
+      const customerId = Number(id);
+      if (!Number.isFinite(customerId)) {
+        setCustomer(null);
+        return;
+      }
+      try {
+        const [c, s, invs, pays, balance] = await Promise.all([
+          db.customers.get(customerId),
+          getSettings(),
+          db.invoices.where('customerId').equals(customerId).sortBy('date'),
+          db.payments.where('customerId').equals(customerId).sortBy('date'),
+          getCustomerBalance(customerId)
+        ]);
+        if (cancelled) return;
+        setCustomer(c || null);
+        setSettings(s || null);
+        setInvoices(invs.reverse());
+        setPayments(pays.reverse());
+        setDebt(balance.debt);
+      } catch (error) {
+        if (!cancelled) reportError('CustomerStatement.load', error, 'تعذّر تحميل كشف الحساب');
+      }
+    };
+
+    void loadData();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
-  const loadData = async () => {
-    if (!id) return;
-    const customerId = Number(id);
-    const [c, s] = await Promise.all([
-      db.customers.get(customerId),
-      getSettings()
-    ]);
-    setCustomer(c || null);
-    setSettings(s || null);
-
-    const [invs, pays, d] = await Promise.all([
-      db.invoices.where('customerId').equals(customerId).reverse().sortBy('date'),
-      db.payments.where('customerId').equals(customerId).reverse().sortBy('date'),
-      getCustomerDebt(customerId)
-    ]);
-
-    setInvoices(invs);
-    setPayments(pays);
-    setDebt(d);
-  };
-
   const handlePrint = () => {
-    window.print();
+    if (!customer || !settings) return;
+    const opened = printCustomerStatement(customer, invoices, payments, settings, debt);
+    if (!opened) toast.warning('المتصفح منع النافذة', 'اسمح بالنوافذ المنبثقة ثم أعد المحاولة');
   };
 
   const handleExportPDF = async () => {
     if (!customer || !settings) return;
-    await generateCustomerStatementPDF(customer, invoices, payments, settings, debt);
+    try {
+      await generateCustomerStatementPDF(customer, invoices, payments, settings, debt);
+    } catch (error) {
+      reportError('CustomerStatement.pdf', error, 'تعذّر إنشاء ملف PDF');
+    }
   };
 
-  const totalInvoices = invoices.reduce((sum, inv) => sum + inv.total, 0);
-  const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+  const totalInvoices = roundMoney(invoices.reduce((sum, inv) => sum + toFiniteNumber(inv.total), 0));
+  const totalPaid = roundMoney(payments.reduce((sum, p) => sum + toFiniteNumber(p.amount), 0));
 
   const timeline = [
     ...invoices.map(inv => ({ type: 'invoice' as const, date: inv.date, data: inv })),
@@ -89,11 +109,11 @@ export function CustomerStatement() {
 
       {/* Customer Card */}
       <Card className="border-0 shadow-md overflow-hidden">
-        <div className="h-2 bg-gradient-to-r from-primary-600 to-green-600" />
+        <div className="h-2 bg-gradient-to-r from-primary-600 to-primary-400" />
         <CardContent className="p-6">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white font-bold text-2xl">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-2xl">
                 {customer.fullName.charAt(0)}
               </div>
               <div>

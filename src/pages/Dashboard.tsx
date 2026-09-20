@@ -17,9 +17,11 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, getAllCustomersDebt, checkLowStock } from '@/lib/db';
+import { db, getSettings, checkLowStock } from '@/lib/db';
+import { getCustomerBalances } from '@/lib/debts';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, formatLocalDateInput, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { reportError } from '@/lib/errors';
 import { OfficeSettings } from '@/types';
 
 export function Dashboard() {
@@ -36,60 +38,85 @@ export function Dashboard() {
   });
 
   const recentInvoices = useLiveQuery(() => db.invoices.orderBy('createdAt').reverse().limit(5).toArray(), []);
-  const lowStockMaterials = useLiveQuery(() => db.materials.where('quantity').belowOrEqual(5).limit(5).toArray(), []);
-  const topDebtors = useLiveQuery(async () => {
-    const customers = await db.customers.toArray();
-    const debts = await getAllCustomersDebt();
-    const combined = customers.map(c => {
-      const debtInfo = debts.find(d => d.customerId === c.id);
-      return { customer: c, debt: debtInfo?.debt || 0 };
-    }).filter(c => c.debt > 0).sort((a, b) => b.debt - a.debt).slice(0, 5);
-    return combined;
+
+  const lowStockMaterials = useLiveQuery(async () => {
+    const s = await getSettings();
+    const threshold = toFiniteNumber(s?.lowStockThreshold, 5);
+    return db.materials.where('quantity').belowOrEqual(threshold).limit(5).toArray();
   }, []);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const topDebtors = useLiveQuery(async () => {
+    const [customers, balances] = await Promise.all([db.customers.toArray(), getCustomerBalances()]);
+    return customers
+      .map((customer) => ({ customer, debt: balances.get(customer.id as number)?.debt ?? 0 }))
+      .filter((entry) => entry.debt > 0)
+      .sort((a, b) => b.debt - a.debt)
+      .slice(0, 5);
+  }, []);
+
+  const today = formatLocalDateInput();
 
   useEffect(() => {
-    loadData().catch(e => console.error('Dashboard loadData failed:', e));
-    checkLowStock().catch(e => console.error('checkLowStock failed:', e));
-  }, []);
+    let cancelled = false;
 
-  const loadData = async () => {
-    const s = await getSettings();
-    setSettings(s || null);
+    const loadData = async () => {
+      try {
+        const s = await getSettings();
+        const [materials, customersCount, invoices, payments] = await Promise.all([
+          db.materials.toArray(),
+          db.customers.count(),
+          db.invoices.toArray(),
+          db.payments.toArray()
+        ]);
+        if (cancelled) return;
 
-    const [materials, customers, invoices, payments, lowStock] = await Promise.all([
-      db.materials.count(),
-      db.customers.count(),
-      db.invoices.toArray(),
-      db.payments.toArray(),
-      db.materials.where('quantity').belowOrEqual(s?.lowStockThreshold || 5).count()
-    ]);
+        const threshold = toFiniteNumber(s?.lowStockThreshold, 5);
+        const balances = await getCustomerBalances();
+        if (cancelled) return;
 
-    const debts = await getAllCustomersDebt();
-    const totalDebt = debts.reduce((sum, d) => sum + (d.debt > 0 ? d.debt : 0), 0);
+        const totalDebt = roundMoney(
+          Array.from(balances.values()).reduce((sum, balance) => sum + (balance.debt > 0 ? balance.debt : 0), 0)
+        );
 
-    const todayInvoicesList = invoices.filter(inv => inv.date.startsWith(today));
-    const todayCash = todayInvoicesList.filter(inv => inv.type === 'cash').reduce((sum, inv) => sum + inv.total, 0) +
-                      payments.filter(p => p.date.startsWith(today)).reduce((sum, p) => sum + p.amount, 0);
+        const todayInvoicesList = invoices.filter((invoice) => isSameLocalDay(invoice.date, today));
+        const todayCash = roundMoney(
+          todayInvoicesList
+            .filter((invoice) => invoice.type === 'cash')
+            .reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0) +
+            payments
+              .filter((payment) => isSameLocalDay(payment.date, today))
+              .reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0)
+        );
 
-    setStats({
-      totalMaterials: materials,
-      totalCustomers: customers,
-      totalInvoices: invoices.length,
-      totalDebt,
-      todayCash,
-      todayInvoices: todayInvoicesList.length,
-      lowStock,
-      totalPayments: payments.reduce((sum, p) => sum + p.amount, 0)
-    });
-  };
+        setSettings(s || null);
+        setStats({
+          totalMaterials: materials.length,
+          totalCustomers: customersCount,
+          totalInvoices: invoices.length,
+          totalDebt,
+          todayCash,
+          todayInvoices: todayInvoicesList.length,
+          lowStock: materials.filter((material) => toFiniteNumber(material.quantity) <= threshold).length,
+          totalPayments: roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0))
+        });
+      } catch (error) {
+        if (!cancelled) reportError('Dashboard.loadData', error, 'تعذّر تحميل بيانات لوحة التحكم');
+      }
+    };
+
+    void loadData();
+    void checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [today]);
 
   const quickActions = [
-    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-blue-600', href: '/invoices/new', count: null },
-    { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-green-600', href: '/payments/new', count: null },
-    { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-purple-600', href: '/materials?action=new', count: stats.totalMaterials },
-    { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-amber-600', href: '/customers', count: stats.totalCustomers },
+    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null },
+    { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null },
+    { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials },
+    { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers },
   ];
 
   const statCards = [
@@ -102,7 +129,7 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Welcome */}
-      <div className="bg-gradient-to-br from-primary-600 via-green-600 to-emerald-700 rounded-2xl p-6 lg:p-8 text-white relative overflow-hidden">
+      <div className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 dark:from-black dark:via-gray-950 dark:to-gray-900 ring-1 ring-primary-500/30 rounded-2xl p-6 lg:p-8 text-white relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-black/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
         <div className="relative z-10">
@@ -116,7 +143,7 @@ export function Dashboard() {
                   {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </span>
                 <span className="flex items-center gap-1.5 bg-white/20 backdrop-blur px-3 py-1.5 rounded-full">
-                  <div className="w-2 h-2 bg-green-300 rounded-full animate-pulse" />
+                  <div className="w-2 h-2 bg-primary-400 rounded-full animate-pulse" />
                   يعمل بدون انترنت
                 </span>
               </div>
@@ -142,7 +169,7 @@ export function Dashboard() {
               <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer group border-0 shadow-md h-full">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between mb-4">
-                    <div className={`w-12 h-12 rounded-xl ${action.color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform`}>
+                    <div className={`w-12 h-12 rounded-xl ${action.color} flex items-center justify-center text-white dark:text-gray-900 shadow-lg group-hover:scale-110 transition-transform`}>
                       <action.icon className="w-6 h-6" />
                     </div>
                     <ArrowUpRight className="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
@@ -276,7 +303,7 @@ export function Dashboard() {
                 {topDebtors?.length ? topDebtors.map(({ customer, debt }) => (
                   <div key={customer.id} className="flex items-center justify-between p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white text-xs font-bold">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-xs font-bold">
                         {customer.fullName.charAt(0)}
                       </div>
                       <div>

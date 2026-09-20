@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar, Filter } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { FileText, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, logActivity } from '@/lib/db';
+import { db, getSettings } from '@/lib/db';
+import { deleteInvoice, getInvoiceWithItems } from '@/lib/invoices';
+import { printInvoice } from '@/lib/print';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatCurrency, formatDate, isSameLocalDay } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
 import { OfficeSettings } from '@/types';
 import { generateInvoicePDF } from '@/lib/pdf';
 
@@ -32,7 +36,7 @@ export function Invoices() {
     }
     
     if (dateFilter) {
-      all = all.filter(inv => inv.date.startsWith(dateFilter));
+      all = all.filter(inv => isSameLocalDay(inv.date, dateFilter));
     }
     
     return all;
@@ -47,111 +51,57 @@ export function Invoices() {
     setSettings(s || null);
   };
 
+  const [busyId, setBusyId] = useState<number | null>(null);
+
   const handleDelete = async (invoiceId: number) => {
-    if (!confirm('هل أنت متأكد من حذف هذه الفاتورة؟\nسيتم إرجاع الكميات للمخزن.')) return;
+    if (busyId !== null) return;
+    if (!confirm('هل أنت متأكد من حذف هذه الفاتورة؟\nسيتم إرجاع الكميات للمخزن وتحديث رصيد الزبون.')) return;
 
+    setBusyId(invoiceId);
     try {
-      const invoice = await db.invoices.get(invoiceId);
-      const items = await db.invoiceItems.where('invoiceId').equals(invoiceId).toArray();
-
-      // Restore stock
-      for (const item of items) {
-        const material = await db.materials.get(item.materialId);
-        if (material) {
-          await db.materials.update(material.id!, { quantity: material.quantity + item.quantity });
-        }
+      const result = await deleteInvoice(invoiceId);
+      if (!result.ok) {
+        toast.error('تعذّر الحذف', result.error);
+        return;
       }
-
-      await db.transaction('rw', db.invoices, db.invoiceItems, async () => {
-        await db.invoiceItems.where('invoiceId').equals(invoiceId).delete();
-        await db.invoices.delete(invoiceId);
-      });
-
-      await logActivity('حذف فاتورة', `تم حذف الفاتورة: ${invoice?.invoiceNumber}`, 'invoice', invoiceId);
+      toast.success('تم حذف الفاتورة', 'أُعيدت الكميات إلى المخزن');
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء الحذف');
+      reportError('Invoices.delete', error, 'حدث خطأ أثناء الحذف');
+    } finally {
+      setBusyId(null);
     }
   };
 
   const handlePrint = async (invoiceId: number) => {
-    const invoice = await db.invoices.get(invoiceId);
-    const items = await db.invoiceItems.where('invoiceId').equals(invoiceId).toArray();
-    const s = await getSettings();
-    if (!invoice || !s) return;
-
-    // Create printable HTML
-    const printContent = document.createElement('div');
-    printContent.innerHTML = `
-      <div style="font-family: 'Cairo', sans-serif; direction: rtl; padding: 20px; max-width: 800px; margin: 0 auto;">
-        <div style="text-align: center; border-bottom: 2px solid #16a34a; padding-bottom: 15px; margin-bottom: 20px;">
-          <h1 style="color: #16a34a; margin: 0; font-size: 24px;">${s.officeName}</h1>
-          <p style="margin: 5px 0; color: #666;">${s.address || ''} | ${s.phone || ''}</p>
-        </div>
-        <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
-          <div>
-            <p><strong>رقم الفاتورة:</strong> ${invoice.invoiceNumber}</p>
-            <p><strong>الزبون:</strong> ${invoice.customerName}</p>
-            <p><strong>النوع:</strong> ${invoice.type === 'cash' ? 'نقدي' : 'آجل'}</p>
-          </div>
-          <div style="text-align: left;">
-            <p><strong>التاريخ:</strong> ${formatDate(invoice.date, true)}</p>
-            <p><strong>الحالة:</strong> ${invoice.status === 'paid' ? 'مدفوعة' : invoice.status === 'partial' ? 'مدفوعة جزئياً' : 'غير مدفوعة'}</p>
-          </div>
-        </div>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-          <thead>
-            <tr style="background: #f0fdf4;">
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: right;">#</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: right;">المادة</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: center;">الكمية</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: center;">السعر</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">الإجمالي</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${items.map((item, idx) => `
-              <tr>
-                <td style="border: 1px solid #ddd; padding: 8px;">${idx + 1}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">${item.materialName}</td>
-                <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">${item.quantity}</td>
-                <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">${item.unitPrice.toLocaleString()}</td>
-                <td style="border: 1px solid #ddd; padding: 8px; text-align: left;">${item.total.toLocaleString()}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        <div style="text-align: left; border-top: 2px solid #16a34a; padding-top: 15px;">
-          <p style="font-size: 14px;">المجموع: ${invoice.subtotal.toLocaleString()} ${s.currency}</p>
-          ${invoice.discount > 0 ? `<p>الخصم: ${invoice.discount.toLocaleString()} ${s.currency}</p>` : ''}
-          <p style="font-size: 18px; font-weight: bold; color: #16a34a;">الإجمالي: ${invoice.total.toLocaleString()} ${s.currency}</p>
-          ${invoice.type === 'credit' ? `<p>المدفوع: ${invoice.paidAmount.toLocaleString()} | المتبقي: ${invoice.remaining.toLocaleString()}</p>` : ''}
-        </div>
-        ${s.invoiceFooter ? `<div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px dashed #ccc;"><p style="color: #666; font-size: 12px;">${s.invoiceFooter}</p></div>` : ''}
-      </div>
-    `;
-
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(`
-        <html dir="rtl"><head><title>${invoice.invoiceNumber}</title>
-        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap" rel="stylesheet">
-        <style>body{font-family:'Cairo',sans-serif;} @media print{body{-webkit-print-color-adjust:exact;}}</style>
-        </head><body>${printContent.innerHTML}</body></html>
-      `);
-      printWindow.document.close();
-      printWindow.focus();
-      setTimeout(() => { printWindow.print(); printWindow.close(); }, 500);
+    try {
+      const found = await getInvoiceWithItems(invoiceId);
+      const s = await getSettings();
+      if (!found || !s) {
+        toast.error('تعذّر الطباعة', 'الفاتورة أو الإعدادات غير متوفرة');
+        return;
+      }
+      const opened = printInvoice(found.invoice, found.items, s);
+      if (!opened) {
+        toast.warning('المتصفح منع النافذة', 'اسمح بالنوافذ المنبثقة لهذا التطبيق ثم أعد المحاولة');
+      }
+    } catch (error) {
+      reportError('Invoices.print', error, 'تعذّر طباعة الفاتورة');
     }
   };
 
   const handleExportPDF = async (invoiceId: number) => {
-    const invoice = await db.invoices.get(invoiceId);
-    const items = await db.invoiceItems.where('invoiceId').equals(invoiceId).toArray();
-    const s = await getSettings();
-    const customer = invoice?.customerId ? await db.customers.get(invoice.customerId) : undefined;
-    if (!invoice || !s) return;
-    await generateInvoicePDF(invoice, items, s, customer);
+    try {
+      const found = await getInvoiceWithItems(invoiceId);
+      const s = await getSettings();
+      if (!found || !s) {
+        toast.error('تعذّر التصدير', 'الفاتورة أو الإعدادات غير متوفرة');
+        return;
+      }
+      const customer = found.invoice.customerId ? await db.customers.get(found.invoice.customerId) : undefined;
+      await generateInvoicePDF(found.invoice, found.items, s, customer);
+    } catch (error) {
+      reportError('Invoices.export', error, 'تعذّر تصدير الفاتورة');
+    }
   };
 
   const totalSales = invoices?.reduce((sum, inv) => sum + inv.total, 0) || 0;
@@ -267,7 +217,7 @@ export function Invoices() {
                     <Link to={`/invoices/${invoice.id}/edit`}>
                       <Button variant="ghost" size="icon" className="h-8 w-8"><Edit className="w-4 h-4" /></Button>
                     </Link>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:text-red-700" onClick={() => handleDelete(invoice.id!)}><Trash2 className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:text-red-700" disabled={busyId === invoice.id} onClick={() => handleDelete(invoice.id!)}><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 </div>
               </div>

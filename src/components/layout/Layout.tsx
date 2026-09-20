@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Package, 
@@ -13,13 +13,12 @@ import {
   X,
   Sun,
   Moon,
-  Database,
-  Search,
-  LogOut
+  Database
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, countUnreadNotifications } from '@/lib/db';
+import { reportError } from '@/lib/errors';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { OfficeSettings } from '@/types';
 
@@ -43,7 +42,6 @@ export function Layout({ children }: LayoutProps) {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
-  const navigate = useNavigate();
 
   const unreadNotifications = useLiveQuery(() => countUnreadNotifications(), []) || 0;
   const lowStockCount = useLiveQuery(async () => {
@@ -53,28 +51,42 @@ export function Layout({ children }: LayoutProps) {
   }, []) || 0;
 
   useEffect(() => {
-    loadSettings();
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      setIsDark(true);
-      document.documentElement.classList.add('dark');
-    }
-  }, []);
+    let cancelled = false;
 
-  const loadSettings = async () => {
-    const s = await getSettings();
-    if (s) setSettings(s);
-  };
+    const loadSettings = async () => {
+      try {
+        const s = await getSettings();
+        if (!cancelled && s) setSettings(s);
+      } catch (error) {
+        if (!cancelled) reportError('Layout.settings', error, 'تعذّر تحميل الإعدادات');
+      }
+    };
+
+    void loadSettings();
+
+    try {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        setIsDark(true);
+        document.documentElement.classList.add('dark');
+      }
+    } catch {
+      /* التخزين المحلي غير متاح */
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleTheme = () => {
     const newTheme = !isDark;
     setIsDark(newTheme);
-    if (newTheme) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
+    document.documentElement.classList.toggle('dark', newTheme);
+    try {
+      localStorage.setItem('theme', newTheme ? 'dark' : 'light');
+    } catch {
+      /* التخزين المحلي غير متاح */
     }
   };
 
@@ -137,7 +149,7 @@ export function Layout({ children }: LayoutProps) {
 
           {/* Footer */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
-            <div className="bg-gradient-to-br from-primary-50 to-green-50 dark:from-primary-900/20 dark:to-green-900/20 rounded-xl p-4 border border-primary-100 dark:border-primary-800/30">
+            <div className="bg-gray-100/70 dark:bg-gray-800/40 rounded-xl p-4 border border-gray-200 dark:border-gray-700/60">
               <p className="text-xs font-medium text-primary-800 dark:text-primary-300">نظام بدون انترنت</p>
               <p className="text-[11px] text-primary-600 dark:text-primary-400 mt-1">جميع البيانات محفوظة محلياً وآمنة</p>
             </div>
@@ -185,7 +197,7 @@ export function Layout({ children }: LayoutProps) {
               <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
 
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white font-bold text-sm">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-sm">
                   م
                 </div>
                 <div className="hidden md:block text-right">

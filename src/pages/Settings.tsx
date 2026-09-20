@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Building, Image, Moon, Sun, Save, Upload, Trash2, User, Shield, DollarSign, Bell, Database } from 'lucide-react';
+import { Settings as SettingsIcon, Building, Image, Moon, Sun, Save, Upload, Trash2, User, Shield, Database } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, updateSettings, logActivity } from '@/lib/db';
-import { fileToBase64 } from '@/lib/utils';
+import { fileToBase64, toFiniteNumber } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
+import { hashPin, isHashedPin, isValidPin, maskPin } from '@/lib/security';
 import { OfficeSettings, User as UserType } from '@/types';
 import { useLiveQuery } from 'dexie-react-hooks';
 
 export function Settings() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [formData, setFormData] = useState<Partial<OfficeSettings>>({});
   const [isDark, setIsDark] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [userForm, setUserForm] = useState({ name: '', pin: '', role: 'sales' as 'admin' | 'sales' });
@@ -20,40 +23,77 @@ export function Settings() {
   const users = useLiveQuery(() => db.users.toArray(), []);
 
   useEffect(() => {
-    loadSettings();
-    const savedTheme = localStorage.getItem('theme');
-    setIsDark(savedTheme === 'dark' || document.documentElement.classList.contains('dark'));
+    let cancelled = false;
+
+    const loadSettings = async () => {
+      try {
+        const s = await getSettings();
+        if (cancelled) return;
+        if (s) setFormData(s);
+      } catch (error) {
+        if (!cancelled) reportError('Settings.load', error, 'تعذّر تحميل الإعدادات');
+      }
+    };
+
+    void loadSettings();
+    try {
+      const savedTheme = localStorage.getItem('theme');
+      setIsDark(savedTheme === 'dark' || document.documentElement.classList.contains('dark'));
+    } catch {
+      /* التخزين المحلي غير متاح */
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const loadSettings = async () => {
-    const s = await getSettings();
-    if (s) {
-      setSettings(s);
-      setFormData(s);
-    }
-  };
-
   const handleSave = async () => {
+    if (isSaving) return;
     if (!formData.officeName?.trim()) {
-      alert('يرجى إدخال اسم المكتب');
+      toast.warning('اسم المكتب مطلوب', 'أدخل اسم المكتب قبل الحفظ');
       return;
     }
 
-    await updateSettings(formData);
-    await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب');
-    alert('تم حفظ الإعدادات بنجاح');
-    loadSettings();
+    setIsSaving(true);
+    try {
+      await updateSettings({
+        ...formData,
+        officeName: formData.officeName.trim(),
+        phone: (formData.phone ?? '').trim(),
+        address: (formData.address ?? '').trim(),
+        lowStockThreshold: Math.max(0, toFiniteNumber(formData.lowStockThreshold, 5)),
+        autoBackupInterval: Math.max(5, toFiniteNumber(formData.autoBackupInterval, 60))
+      });
+      await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب');
+      const s = await getSettings();
+      if (s) setFormData(s);
+      toast.success('تم حفظ الإعدادات');
+    } catch (error) {
+      reportError('Settings.save', error, 'تعذّر حفظ الإعدادات');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      alert('حجم الشعار يجب أن يكون أقل من 2 ميجابايت');
+    if (!file.type.startsWith('image/')) {
+      toast.warning('ملف غير مدعوم', 'اختر صورة PNG أو JPG');
       return;
     }
-    const base64 = await fileToBase64(file);
-    setFormData({ ...formData, logo: base64 });
+    if (file.size > 2 * 1024 * 1024) {
+      toast.warning('حجم الشعار كبير', 'يجب أن يكون أقل من 2 ميجابايت');
+      return;
+    }
+    try {
+      const base64 = await fileToBase64(file);
+      setFormData({ ...formData, logo: base64 });
+    } catch (error) {
+      reportError('Settings.logo', error, 'تعذّر قراءة الصورة');
+    }
   };
 
   const toggleTheme = () => {
@@ -72,33 +112,74 @@ export function Settings() {
 
   const handleUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userForm.name.trim() || !userForm.pin.trim()) {
-      alert('يرجى ملء جميع الحقول');
-      return;
-    }
-    if (userForm.pin.length < 4) {
-      alert('رمز الدخول يجب أن يكون 4 أرقام على الأقل');
+    const name = userForm.name.trim();
+    if (!name) {
+      toast.warning('اسم المستخدم مطلوب');
       return;
     }
 
-    const now = new Date().toISOString();
-    if (editingUser?.id) {
-      await db.users.update(editingUser.id, { name: userForm.name, pin: userForm.pin, role: userForm.role });
-    } else {
-      await db.users.add({ name: userForm.name, pin: userForm.pin, role: userForm.role, createdAt: now });
+    const isEditing = Boolean(editingUser?.id);
+    const pinChanged = userForm.pin.trim().length > 0;
+    if (!isEditing && !pinChanged) {
+      toast.warning('رمز الدخول مطلوب', 'أدخل رمزاً من 4 إلى 8 أرقام');
+      return;
     }
-    setShowUserForm(false);
-    setEditingUser(null);
-    setUserForm({ name: '', pin: '', role: 'sales' });
+    if (pinChanged && !isValidPin(userForm.pin)) {
+      toast.warning('رمز دخول غير صالح', 'يجب أن يكون من 4 إلى 8 أرقام فقط');
+      return;
+    }
+
+    const roleBlocked =
+      userForm.role !== 'admin' &&
+      editingUser?.role === 'admin' &&
+      (users ?? []).filter((user) => user.role === 'admin').length <= 1;
+    if (roleBlocked) {
+      toast.warning('لا يمكن التغيير', 'يجب بقاء مدير واحد على الأقل في النظام');
+      return;
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const hashedPin = pinChanged ? await hashPin(userForm.pin.trim()) : undefined;
+
+      if (editingUser?.id) {
+        await db.users.update(editingUser.id, {
+          name,
+          role: userForm.role,
+          ...(hashedPin ? { pin: hashedPin } : {})
+        });
+        toast.success('تم تحديث المستخدم', name);
+      } else {
+        await db.users.add({ name, pin: hashedPin ?? '', role: userForm.role, createdAt: now });
+        toast.success('تمت إضافة المستخدم', name);
+      }
+
+      setShowUserForm(false);
+      setEditingUser(null);
+      setUserForm({ name: '', pin: '', role: 'sales' });
+    } catch (error) {
+      reportError('Settings.user.save', error, 'تعذّر حفظ المستخدم');
+    }
   };
 
   const handleDeleteUser = async (user: UserType) => {
-    if (users && users.length <= 1) {
-      alert('لا يمكن حذف آخر مستخدم');
+    if (!user.id) return;
+    if ((users ?? []).length <= 1) {
+      toast.warning('لا يمكن الحذف', 'يجب بقاء مستخدم واحد على الأقل');
+      return;
+    }
+    if (user.role === 'admin' && (users ?? []).filter((entry) => entry.role === 'admin').length <= 1) {
+      toast.warning('لا يمكن الحذف', 'يجب بقاء مدير واحد على الأقل في النظام');
       return;
     }
     if (!confirm(`هل أنت متأكد من حذف المستخدم "${user.name}"؟`)) return;
-    await db.users.delete(user.id!);
+
+    try {
+      await db.users.delete(user.id);
+      toast.success('تم حذف المستخدم', user.name);
+    } catch (error) {
+      reportError('Settings.user.delete', error, 'تعذّر حذف المستخدم');
+    }
   };
 
   return (
@@ -221,16 +302,16 @@ export function Settings() {
                 {users?.map((user) => (
                   <div key={user.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50">
                     <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold ${user.role === 'admin' ? 'bg-red-600' : 'bg-blue-600'}`}>
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold ${user.role === 'admin' ? 'bg-primary-600' : 'bg-gray-600 dark:bg-gray-700'}`}>
                         {user.name.charAt(0)}
                       </div>
                       <div>
                         <p className="font-medium text-sm flex items-center gap-2">{user.name} {user.role === 'admin' ? <Badge variant="destructive" className="text-[10px]"><Shield className="w-3 h-3 ml-1" />مدير</Badge> : <Badge variant="secondary" className="text-[10px]">مبيعات</Badge>}</p>
-                        <p className="text-xs text-gray-500">PIN: {user.pin} • منذ {new Date(user.createdAt).toLocaleDateString('ar-EG')}</p>
+                        <p className="text-xs text-gray-500">رمز الدخول: {maskPin()} • منذ {new Date(user.createdAt).toLocaleDateString('ar-EG')}</p>
                       </div>
                     </div>
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setEditingUser(user); setUserForm({ name: user.name, pin: user.pin, role: user.role }); setShowUserForm(true); }}>تعديل</Button>
+                      <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setEditingUser(user); setUserForm({ name: user.name, pin: '', role: user.role }); setShowUserForm(true); }}>تعديل</Button>
                       <Button variant="ghost" size="sm" className="h-8 text-xs text-red-600" onClick={() => handleDeleteUser(user)}>حذف</Button>
                     </div>
                   </div>
@@ -285,9 +366,9 @@ export function Settings() {
             </CardContent>
           </Card>
 
-          <Button onClick={handleSave} className="w-full bg-primary-600 hover:bg-primary-700 h-12 font-bold text-base">
+          <Button onClick={handleSave} disabled={isSaving} className="w-full bg-primary-600 hover:bg-primary-700 h-12 font-bold text-base">
             <Save className="w-5 h-5 ml-2" />
-            حفظ جميع الإعدادات
+            {isSaving ? 'جاري الحفظ…' : 'حفظ جميع الإعدادات'}
           </Button>
         </div>
       </div>
@@ -305,12 +386,24 @@ export function Settings() {
                   <Input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} placeholder="مثلاً: أحمد، موظف المبيعات" required />
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">رمز الدخول PIN (4 أرقام)</label>
-                  <Input type="password" value={userForm.pin} onChange={(e) => setUserForm({ ...userForm, pin: e.target.value })} placeholder="1234" required />
+                  <label className="text-sm font-medium mb-1 block">رمز الدخول PIN (4 إلى 8 أرقام)</label>
+                  <Input
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    value={userForm.pin}
+                    onChange={(e) => setUserForm({ ...userForm, pin: e.target.value })}
+                    placeholder={editingUser ? 'اتركه فارغاً للإبقاء على الرمز الحالي' : '1234'}
+                    required={!editingUser}
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    يُحفظ كبصمة مشفّرة داخل الجهاز ولا يظهر لأي شخص.
+                    {editingUser && isHashedPin(editingUser.pin) ? '' : editingUser ? ' الرمز الحالي بصيغة قديمة وسيُحدَّث عند تغييره.' : ''}
+                  </p>
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1 block">الصلاحية</label>
-                  <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as any })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                  <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value === 'admin' ? 'admin' : 'sales' })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                     <option value="sales">موظف مبيعات - بيع فقط</option>
                     <option value="admin">مدير - كامل الصلاحيات</option>
                   </select>

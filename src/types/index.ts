@@ -65,6 +65,9 @@ export interface Invoice {
   createdAt: string;
   notes?: string;
   status: 'paid' | 'partial' | 'unpaid';
+  updatedAt?: string;
+  /** معرّف دفعة المقدمة المرتبطة بهذه الفاتورة (إن وُجدت) */
+  downPaymentId?: number;
 }
 
 export interface InvoiceItem {
@@ -89,6 +92,10 @@ export interface Payment {
   remainingAfter?: number;
   notes?: string;
   createdAt: string;
+  /** مصدر التسديد: يدوي من نافذة القبض، أو دفعة مقدمة على فاتورة */
+  source?: 'manual' | 'downpayment';
+  /** الفاتورة المرتبطة بدفعة المقدمة */
+  invoiceId?: number;
 }
 
 export interface Notification {
@@ -100,6 +107,8 @@ export interface Notification {
   createdAt: string;
   relatedId?: number;
   relatedType?: 'material' | 'customer' | 'invoice' | 'payment' | 'system';
+  /** رمز ثابت لمنع تكرار نفس التنبيه (بديل عن مطابقة نص العنوان) */
+  code?: string;
 }
 
 export interface ActivityLog {
@@ -117,6 +126,44 @@ export interface BackupMeta {
   date: string;
   size?: number;
   type: 'auto' | 'manual' | 'import';
+}
+
+/**
+ * نسخة احتياطية داخلية (IndexedDB) تُحفظ تلقائياً دون إزعاج المستخدم
+ * بصندوق حفظ أو تنزيل ملف في كل مرة.
+ */
+export interface BackupSnapshot {
+  id?: number;
+  date: string;
+  type: 'auto' | 'manual';
+  size: number;
+  payload: string;
+  /** توقيع مختصر يمنع إنشاء نسخ متطابقة متتالية */
+  signature?: string;
+}
+
+/** جدول مفاتيح/قيم عام للأعلام الداخلية مثل "تمت مصالحة الأرصدة". */
+export interface AppMeta {
+  key: string;
+  value: unknown;
+}
+
+/** بنية ملف النسخة الاحتياطية (JSON). */
+export interface BackupData {
+  version: string;
+  date: string;
+  officeName?: string;
+  data: {
+    settings: OfficeSettings[];
+    users: User[];
+    materials: Material[];
+    customers: Customer[];
+    invoices: Invoice[];
+    invoiceItems: InvoiceItem[];
+    payments: Payment[];
+    notifications: Notification[];
+    activityLogs: ActivityLog[];
+  };
 }
 
 export interface CustomerDebtInfo {

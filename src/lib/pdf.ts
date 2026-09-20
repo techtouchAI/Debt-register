@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import { OfficeSettings, Invoice, InvoiceItem, Payment, Customer } from '@/types';
-import { formatCurrency, formatDate } from './utils';
+import { formatDate } from './utils';
 
 export async function generateInvoicePDF(
   invoice: Invoice,
@@ -27,7 +27,7 @@ export async function generateInvoicePDF(
     try {
       doc.addImage(settings.logo, 'PNG', margin, y, 30, 30);
     } catch (e) {
-      console.log('Logo add failed', e);
+      console.warn('تعذّر إضافة الشعار إلى ملف PDF:', e);
     }
   }
 
@@ -302,47 +302,4 @@ export async function generateCustomerStatementPDF(
   const fileName = `Statement_${customer.fullName}_${new Date().toISOString().slice(0,10)}.pdf`;
   doc.save(fileName);
   return fileName;
-}
-
-export function printElement(elementId: string) {
-  const element = document.getElementById(elementId);
-  if (!element) return;
-  
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) return;
-  
-  const styles = Array.from(document.styleSheets)
-    .map(sheet => {
-      try {
-        return Array.from(sheet.cssRules).map(rule => rule.cssText).join('');
-      } catch {
-        return '';
-      }
-    })
-    .join('');
-
-  printWindow.document.write(`
-    <html dir="rtl" lang="ar">
-      <head>
-        <meta charset="utf-8">
-        <title>طباعة</title>
-        <style>${styles}</style>
-        <style>
-          body { font-family: 'Cairo', sans-serif; padding: 20px; }
-          @media print {
-            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          }
-        </style>
-      </head>
-      <body>
-        ${element.innerHTML}
-      </body>
-    </html>
-  `);
-  printWindow.document.close();
-  printWindow.focus();
-  setTimeout(() => {
-    printWindow.print();
-    printWindow.close();
-  }, 500);
 }

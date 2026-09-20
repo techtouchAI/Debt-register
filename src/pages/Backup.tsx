@@ -1,56 +1,99 @@
-import { useState, useEffect } from 'react';
-import { Database, Download, Upload, HardDrive, Clock, FileJson, AlertTriangle, CheckCircle, Trash2, Folder, Smartphone, Monitor } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Database, Download, Upload, HardDrive, Clock, FileJson, AlertTriangle, CheckCircle, Trash2, Folder, Smartphone, Monitor, RotateCcw, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
-import { exportBackupToFile, importBackup, createBackup } from '@/lib/backup';
+import {
+  exportBackupToFile,
+  importBackup,
+  listSnapshots,
+  saveSnapshot,
+  restoreSnapshot,
+  deleteSnapshot
+} from '@/lib/backup';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatDate, formatCurrency } from '@/lib/utils';
-import { OfficeSettings } from '@/types';
+import { formatDate } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
+import type { BackupSnapshot, OfficeSettings } from '@/types';
 
 export function Backup() {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState<number | null>(null);
   const [stats, setStats] = useState({ materials: 0, customers: 0, invoices: 0, payments: 0, totalSize: 0 });
 
   const backups = useLiveQuery(() => db.backups.orderBy('date').reverse().toArray(), []);
+  const snapshots = useLiveQuery(() => listSnapshots(), []);
 
-  useEffect(() => {
-    loadSettings();
-    loadStats();
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await getSettings();
+      setSettings(s || null);
+    } catch (error) {
+      reportError('Backup.settings', error, 'تعذّر تحميل الإعدادات');
+    }
   }, []);
 
-  const loadSettings = async () => {
-    const s = await getSettings();
-    setSettings(s || null);
-  };
+  const loadStats = useCallback(async () => {
+    try {
+      const [materials, customers, invoices, payments, invoiceItems] = await Promise.all([
+        db.materials.count(),
+        db.customers.count(),
+        db.invoices.count(),
+        db.payments.count(),
+        db.invoiceItems.count()
+      ]);
+      // تقدير الحجم من عدد السجلات بدل تصدير القاعدة كاملة في كل فتح للصفحة
+      const estimatedRows = materials + customers + invoices + payments + invoiceItems;
+      let totalSize = estimatedRows * 220;
+      try {
+        const estimate = await navigator.storage?.estimate?.();
+        if (estimate?.usage) totalSize = estimate.usage;
+      } catch {
+        /* التقدير غير مدعوم — نستخدم الحساب التقريبي */
+      }
+      setStats({ materials, customers, invoices, payments, totalSize });
+    } catch (error) {
+      reportError('Backup.stats', error, 'تعذّر حساب حجم البيانات');
+    }
+  }, []);
 
-  const loadStats = async () => {
-    const [materials, customers, invoices, payments] = await Promise.all([
-      db.materials.count(),
-      db.customers.count(),
-      db.invoices.count(),
-      db.payments.count()
-    ]);
-    // Estimate size
-    const backup = await createBackup();
-    const size = JSON.stringify(backup).length;
-    setStats({ materials, customers, invoices, payments, totalSize: size });
-  };
+  useEffect(() => {
+    void loadSettings();
+    void loadStats();
+  }, [loadSettings, loadStats]);
 
   const handleExport = async () => {
+    if (isExporting) return;
     setIsExporting(true);
     try {
       const fileName = await exportBackupToFile('manual');
-      alert(`تم إنشاء النسخ الاحتياطي بنجاح!\n\nاسم الملف: ${fileName}\n\nتم الحفظ في:\n• المتصفح: مجلد التنزيلات/Download\n• الأندرويد: Download/AgriOffice/\n• الويندوز: Documents/AgriOffice/\n\nكل نسخة لها تاريخ خاص بها كما طلبت.`);
-      loadStats();
+      toast.success('تم إنشاء النسخة الاحتياطية', `${fileName} — حُفظت في مجلد التنزيلات`);
+      void loadStats();
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء إنشاء النسخ الاحتياطي');
+      if (error instanceof Error && error.message === 'BACKUP_CANCELLED') {
+        toast.info('أُلغي الحفظ', 'لم يتم اختيار مكان للحفظ');
+      } else {
+        reportError('Backup.export', error, 'حدث خطأ أثناء إنشاء النسخ الاحتياطي');
+      }
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleCreateSnapshot = async () => {
+    try {
+      const snapshot = await saveSnapshot('manual');
+      toast.success(
+        snapshot ? 'تم إنشاء نسخة داخلية' : 'لا توجد تغييرات',
+        snapshot ? 'يمكن استعادتها من قائمة النسخ الداخلية' : 'البيانات لم تتغير منذ آخر نسخة'
+      );
+      void loadStats();
+    } catch (error) {
+      reportError('Backup.snapshot', error, 'تعذّر إنشاء نسخة داخلية');
     }
   };
 
@@ -58,51 +101,91 @@ export function Backup() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm(`هل أنت متأكد من استيراد النسخة الاحتياطية "${file.name}"؟\n\n⚠️ تحذير: سيتم حذف جميع البيانات الحالية واستبدالها ببيانات النسخة الاحتياطية.\n\nيُنصح بعمل نسخ احتياطي للبيانات الحالية قبل الاستيراد.`)) {
+    if (!confirm(`هل أنت متأكد من استيراد النسخة الاحتياطية "${file.name}"؟\n\n⚠️ تحذير: سيتم استبدال جميع البيانات الحالية ببيانات النسخة الاحتياطية.\n\nيُنصح بعمل نسخة احتياطية للبيانات الحالية قبل الاستيراد.`)) {
       e.target.value = '';
       return;
     }
 
     setIsImporting(true);
     try {
-      await importBackup(file);
-      alert(`تم استيراد النسخة الاحتياطية بنجاح!\n\nتم إنشاء نسخة احتياطية تلقائية من البيانات المستوردة في مجلد AgriOffice بتاريخ اليوم كما طلبت.\n\nسيتم إعادة تحميل الصفحة الآن.`);
-      window.location.reload();
-    } catch (error: any) {
-      console.error(error);
-      alert(`فشل الاستيراد: ${error.message}`);
+      const result = await importBackup(file);
+      toast.success(
+        'تم الاستيراد بنجاح',
+        `${result.counts.invoices} فاتورة • ${result.counts.customers} زبون • ${result.counts.payments} تسديد`
+      );
+      if (result.warnings.length) toast.warning('تنبيهات أثناء الاستيراد', result.warnings.slice(0, 3).join(' | '));
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (error) {
+      reportError('Backup.import', error, 'فشل الاستيراد');
     } finally {
       setIsImporting(false);
       e.target.value = '';
     }
   };
 
+  const handleRestoreSnapshot = async (snapshot: Omit<BackupSnapshot, 'payload'>) => {
+    if (!snapshot.id) return;
+    if (!confirm(`سيتم استبدال البيانات الحالية بنسخة ${formatDate(snapshot.date, true)}.\nهل تريد المتابعة؟`)) return;
+
+    setIsRestoring(snapshot.id);
+    try {
+      const result = await restoreSnapshot(snapshot.id);
+      toast.success('تمت الاستعادة', `${result.counts.invoices} فاتورة • ${result.counts.payments} تسديد`);
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (error) {
+      reportError('Backup.restore', error, 'فشلت الاستعادة');
+    } finally {
+      setIsRestoring(null);
+    }
+  };
+
+  const handleDeleteSnapshot = async (id: number) => {
+    if (!confirm('هل تريد حذف هذه النسخة الداخلية؟')) return;
+    try {
+      await deleteSnapshot(id);
+      toast.success('تم حذف النسخة الداخلية');
+    } catch (error) {
+      reportError('Backup.snapshot.delete', error, 'تعذّر حذف النسخة');
+    }
+  };
+
   const handleDeleteBackupMeta = async (id: number) => {
     if (!confirm('هل تريد حذف سجل هذه النسخة من القائمة؟ (لن يحذف الملف من الجهاز)')) return;
-    await db.backups.delete(id);
+    try {
+      await db.backups.delete(id);
+    } catch (error) {
+      reportError('Backup.meta.delete', error, 'تعذّر حذف السجل');
+    }
   };
 
   const handleClearAllData = async () => {
     if (!confirm('⚠️ تحذير خطير: هل أنت متأكد من حذف جميع البيانات نهائياً؟\n\nسيتم حذف:\n• جميع المواد\n• جميع العملاء\n• جميع الفواتير\n• جميع التسديدات\n\nلا يمكن التراجع عن هذا الإجراء!')) return;
-    
+
     const confirmText = prompt('للتأكيد، اكتب "حذف نهائي" بالضبط:');
     if (confirmText !== 'حذف نهائي') {
-      alert('تم إلغاء العملية - النص غير متطابق');
+      toast.info('تم إلغاء العملية', 'النص غير متطابق');
       return;
     }
 
-    await db.transaction('rw', [db.materials, db.customers, db.invoices, db.invoiceItems, db.payments, db.notifications, db.activityLogs], async () => {
-      await db.materials.clear();
-      await db.customers.clear();
-      await db.invoices.clear();
-      await db.invoiceItems.clear();
-      await db.payments.clear();
-      await db.notifications.clear();
-      await db.activityLogs.clear();
-    });
-
-    alert('تم حذف جميع البيانات بنجاح');
-    loadStats();
+    try {
+      await db.transaction(
+        'rw',
+        [db.materials, db.customers, db.invoices, db.invoiceItems, db.payments, db.notifications, db.activityLogs],
+        async () => {
+          await db.materials.clear();
+          await db.customers.clear();
+          await db.invoices.clear();
+          await db.invoiceItems.clear();
+          await db.payments.clear();
+          await db.notifications.clear();
+          await db.activityLogs.clear();
+        }
+      );
+      toast.success('تم حذف جميع البيانات');
+      void loadStats();
+    } catch (error) {
+      reportError('Backup.clear', error, 'تعذّر حذف البيانات');
+    }
   };
 
   return (
@@ -119,14 +202,14 @@ export function Backup() {
         <div className="lg:col-span-2 space-y-6">
           {/* Backup Actions */}
           <Card className="border-0 shadow-md overflow-hidden">
-            <div className="h-1 bg-gradient-to-r from-primary-600 to-green-600" />
+            <div className="h-1 bg-gradient-to-r from-primary-600 to-primary-400" />
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><HardDrive className="w-5 h-5" />إنشاء نسخ احتياطي</CardTitle>
-              <p className="text-xs text-gray-500">يتم حفظ النسخ في مجلد Downloads/AgriOffice مع تاريخ واسم المكتب</p>
+              <p className="text-xs text-gray-500">التصدير اليدوي يحفظ ملفاً باسم المكتب والتاريخ في مجلد التنزيلات</p>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-primary-50 to-green-50 dark:from-primary-900/20 dark:to-green-900/20 border border-primary-200 dark:border-primary-800/30 rounded-xl p-4">
+                <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
                   <h3 className="font-bold text-primary-800 dark:text-primary-300 flex items-center gap-2"><Download className="w-4 h-4" />تصدير نسخة احتياطية</h3>
                   <p className="text-xs text-primary-700 dark:text-primary-400 mt-2 leading-relaxed">
                     يتم حفظ ملف JSON يحتوي على جميع بياناتك في مجلد التحميلات مع اسم المكتب والتاريخ:<br/>
@@ -142,13 +225,13 @@ export function Backup() {
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800/30 rounded-xl p-4">
+                <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
                   <h3 className="font-bold text-blue-800 dark:text-blue-300 flex items-center gap-2"><Upload className="w-4 h-4" />استيراد نسخة احتياطية</h3>
                   <p className="text-xs text-blue-700 dark:text-blue-400 mt-2 leading-relaxed">
                     استيراد ملف نسخ احتياطي سابق. سيتم وضعه في مجلد خاص بالتطبيق مع تاريخ الاستيراد وحفظ نسخة تلقائية جديدة كما طلبت.
                   </p>
                   <label className="block w-full mt-4">
-                    <div className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center justify-center gap-2 cursor-pointer font-medium text-sm transition-colors">
+                    <div className="w-full h-11 bg-primary-600 hover:bg-primary-700 text-white rounded-lg flex items-center justify-center gap-2 cursor-pointer font-medium text-sm transition-colors">
                       <Upload className="w-4 h-4" />
                       {isImporting ? 'جاري الاستيراد...' : 'اختيار ملف للاستيراد'}
                     </div>
@@ -165,11 +248,65 @@ export function Backup() {
                   <ul className="list-disc pr-4 mt-1 space-y-1">
                     <li>قم بعمل نسخ احتياطي يومياً على الأقل - بيانات الديون تمتد لسنة</li>
                     <li>احفظ النسخ على فلاش ميموري خارجي أو حاسبة أخرى</li>
-                    <li>عند الاستيراد، يتم إنشاء نسخة تلقائية في مجلد Downloads/AgriOffice بتاريخ اليوم</li>
+                    <li>عند الاستيراد تُنشأ نسخة أمان داخلية تلقائياً يمكن الرجوع إليها</li>
                     <li>كل نسخة لها اسم وتاريخ خاص بها كما طلبت: اسم_المكتب_تاريخ_وقت.json</li>
                     <li>في حال تعطل الحاسبة أو فيروس، يمكنك استعادة كل شيء من النسخة</li>
                   </ul>
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Internal snapshots */}
+          <Card className="border-0 shadow-md">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <HardDrive className="w-5 h-5" />النسخ الداخلية (تلقائية)
+                </CardTitle>
+                <Badge variant="secondary" className="text-[11px]">{snapshots?.length || 0} نسخة</Badge>
+              </div>
+              <p className="text-xs text-gray-500">
+                تُحفظ داخل التطبيق كل فترة دون تنزيل ملفات، ويمكن استعادتها بضغطة واحدة. آخر 5 نسخ فقط.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button variant="outline" size="sm" className="w-full" onClick={handleCreateSnapshot}>
+                <Download className="w-4 h-4 ml-2" />إنشاء نسخة داخلية الآن
+              </Button>
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {snapshots?.length ? snapshots.map((snapshot) => (
+                  <div key={snapshot.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 flex items-center justify-center flex-shrink-0">
+                        <Database className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{formatDate(snapshot.date, true)}</p>
+                        <p className="text-[11px] text-gray-500">
+                          {(snapshot.size / 1024).toFixed(1)} KB • {snapshot.type === 'auto' ? 'تلقائية' : 'يدوية'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-[11px]"
+                        disabled={isRestoring !== null}
+                        onClick={() => handleRestoreSnapshot(snapshot)}
+                      >
+                        {isRestoring === snapshot.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 ml-1" />}
+                        استعادة
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-red-600" onClick={() => snapshot.id && handleDeleteSnapshot(snapshot.id)}>
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )) : (
+                  <p className="text-center text-sm text-gray-500 py-8">لا توجد نسخ داخلية بعد</p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -251,7 +388,7 @@ export function Backup() {
               <div className="flex justify-between"><span className="text-gray-500">الفترة</span><span>كل {settings?.autoBackupInterval || 60} دقيقة</span></div>
               <div className="flex justify-between"><span className="text-gray-500">آخر نسخة</span><span className="text-xs">{settings?.lastBackup ? new Date(settings.lastBackup).toLocaleString('ar-EG') : 'لم يتم بعد'}</span></div>
               <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 rounded-xl p-3 text-xs text-blue-800 dark:text-blue-300">
-                يتم حفظ النسخ التلقائية أيضاً في مجلد التحميلات Downloads/AgriOffice مع التاريخ كما طلبت.
+                النسخ التلقائية تُحفظ داخل التطبيق (النسخ الداخلية) حتى لا يتكرر تنزيل الملفات أو فتح صندوق الحفظ أثناء العمل.
               </div>
             </CardContent>
           </Card>

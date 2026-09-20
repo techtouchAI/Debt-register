@@ -1,55 +1,46 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Users, Plus, Search, Edit, Trash2, Phone, MapPin, DollarSign, FileText, CreditCard, Eye } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, getCustomerDebt, logActivity } from '@/lib/db';
+import { db, getSettings, logActivity } from '@/lib/db';
+import { getCustomerBalances } from '@/lib/debts';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatCurrency } from '@/lib/utils';
-import { Customer, OfficeSettings } from '@/types';
+import { formatCurrency, roundMoney } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { reportError } from '@/lib/errors';
+import { Customer } from '@/types';
 
 export function Customers() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [formData, setFormData] = useState<Partial<Customer>>({ fullName: '', phone: '', address: '', notes: '' });
-  const [debts, setDebts] = useState<Record<number, number>>({});
+
+  const settings = useLiveQuery(() => getSettings(), []);
 
   const customers = useLiveQuery(async () => {
-    let all = await db.customers.toArray();
-    if (search) {
-      all = all.filter(c => 
-        c.fullName.toLowerCase().includes(search.toLowerCase()) ||
-        c.phone?.includes(search) ||
-        c.address?.toLowerCase().includes(search.toLowerCase())
-      );
-    }
-    return all.sort((a, b) => a.fullName.localeCompare(b.fullName));
+    const all = await db.customers.toArray();
+    const query = search.trim().toLowerCase();
+    const filtered = query
+      ? all.filter(
+          (customer) =>
+            customer.fullName.toLowerCase().includes(query) ||
+            (customer.phone ?? '').includes(query) ||
+            (customer.address ?? '').toLowerCase().includes(query)
+        )
+      : all;
+    return filtered.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar'));
   }, [search]);
 
-  useEffect(() => {
-    loadSettings();
-    loadDebts();
-  }, [customers]);
-
-  const loadSettings = async () => {
-    const s = await getSettings();
-    setSettings(s || null);
-  };
-
-  const loadDebts = async () => {
-    if (!customers) return;
-    const debtsMap: Record<number, number> = {};
-    for (const customer of customers) {
-      if (customer.id) {
-        debtsMap[customer.id] = await getCustomerDebt(customer.id);
-      }
-    }
-    setDebts(debtsMap);
-  };
+  // الأرصدة تُحسب بمرور واحد وتتحدث تلقائياً مع أي فاتورة أو تسديد جديد
+  const balances = useLiveQuery(() => getCustomerBalances(), []);
+  const debts: Record<number, number> = {};
+  if (balances) {
+    for (const [customerId, balance] of balances) debts[customerId] = balance.debt;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,16 +63,17 @@ export function Customers() {
       if (editing?.id) {
         await db.customers.update(editing.id, customerData);
         await logActivity('تعديل زبون', `تم تعديل بيانات الزبون: ${customerData.fullName}`, 'customer', editing.id);
+        toast.success('تم تحديث بيانات الزبون', customerData.fullName);
       } else {
-        const id = await db.customers.add(customerData);
-        await logActivity('إضافة زبون', `تمت إضافة زبون جديد: ${customerData.fullName}`, 'customer', id as number);
+        const id = (await db.customers.add(customerData)) as number;
+        await logActivity('إضافة زبون', `تمت إضافة زبون جديد: ${customerData.fullName}`, 'customer', id);
+        toast.success('تمت إضافة الزبون', customerData.fullName);
       }
       setShowForm(false);
       setEditing(null);
       setFormData({ fullName: '', phone: '', address: '', notes: '' });
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء الحفظ');
+      reportError('Customers.save', error, 'حدث خطأ أثناء الحفظ');
     }
   };
 
@@ -92,25 +84,32 @@ export function Customers() {
   };
 
   const handleDelete = async (customer: Customer) => {
-    const debt = customer.id ? debts[customer.id] || 0 : 0;
+    if (!customer.id) return;
+    const debt = debts[customer.id] || 0;
     if (debt > 0) {
-      alert(`لا يمكن حذف الزبون "${customer.fullName}" لأنه مدين بمبلغ ${formatCurrency(debt, settings?.currency)}.\nيجب تسديد الدين أولاً.`);
+      toast.warning('لا يمكن الحذف', `الزبون "${customer.fullName}" مدين بمبلغ ${formatCurrency(debt, settings?.currency)}. يجب تسديد الدين أولاً.`);
       return;
     }
 
-    const invoicesCount = customer.id ? await db.invoices.where('customerId').equals(customer.id).count() : 0;
-    if (invoicesCount > 0) {
-      if (!confirm(`الزبون "${customer.fullName}" لديه ${invoicesCount} فاتورة.\nهل أنت متأكد من الحذف؟ سيتم الاحتفاظ بالفواتير لكن بدون ربط بالزبون.`)) return;
-    } else {
-      if (!confirm(`هل أنت متأكد من حذف الزبون "${customer.fullName}" نهائياً؟`)) return;
-    }
+    try {
+      const invoicesCount = await db.invoices.where('customerId').equals(customer.id).count();
+      const paymentsCount = await db.payments.where('customerId').equals(customer.id).count();
+      if (invoicesCount > 0 || paymentsCount > 0) {
+        if (!confirm(`الزبون "${customer.fullName}" لديه ${invoicesCount} فاتورة و${paymentsCount} تسديد.\nهل أنت متأكد من الحذف؟ ستبقى السجلات لكن بدون ربط بالزبون.`)) return;
+      } else if (!confirm(`هل أنت متأكد من حذف الزبون "${customer.fullName}" نهائياً؟`)) {
+        return;
+      }
 
-    await db.customers.delete(customer.id!);
-    await logActivity('حذف زبون', `تم حذف الزبون: ${customer.fullName}`, 'customer', customer.id);
+      await db.customers.delete(customer.id);
+      await logActivity('حذف زبون', `تم حذف الزبون: ${customer.fullName}`, 'customer', customer.id);
+      toast.success('تم حذف الزبون', customer.fullName);
+    } catch (error) {
+      reportError('Customers.delete', error, 'حدث خطأ أثناء الحذف');
+    }
   };
 
-  const totalDebt = Object.values(debts).reduce((sum, d) => sum + (d > 0 ? d : 0), 0);
-  const debtorsCount = Object.values(debts).filter(d => d > 0).length;
+  const totalDebt = roundMoney(Object.values(debts).reduce((sum, debt) => sum + (debt > 0 ? debt : 0), 0));
+  const debtorsCount = Object.values(debts).filter((debt) => debt > 0).length;
 
   return (
     <div className="space-y-6">
@@ -181,7 +180,7 @@ export function Customers() {
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-500 to-green-600 flex items-center justify-center text-white font-bold text-lg">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-lg">
                       {customer.fullName.charAt(0)}
                     </div>
                     <div>
