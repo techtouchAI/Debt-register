@@ -20,7 +20,7 @@
     "build:android": "npm run build && npx cap sync android && cd android && ./gradlew assembleDebug",
     "build:windows": "npm run build && electron-builder --win --x64 --publish=never",
     "build:all": "npm run build",
-    "workflow:android": "npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/local-notifications --save && npm run build && npx cap add android || true && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "workflow:android": "npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app @capacitor/filesystem @capacitor/local-notifications @capacitor/share --save && npm run build && npx cap add android || true && npx cap sync android && cd android && ./gradlew assembleDebug",
     "workflow:windows": "npm install electron electron-builder --save-dev && npm run build && npx electron-builder --win --x64 --publish=never",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
@@ -69,10 +69,12 @@
   },
   "optionalDependencies": {
     "@capacitor/android": "^6.1.2",
+    "@capacitor/app": "^6.0.3",
     "@capacitor/cli": "^6.1.2",
     "@capacitor/core": "^6.1.2",
     "@capacitor/filesystem": "^6.0.1",
     "@capacitor/local-notifications": "^6.1.0",
+    "@capacitor/share": "^6.0.4",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },

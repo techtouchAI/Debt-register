@@ -99,7 +99,7 @@
 - **Routing**: React Router DOM 6
 - **Build**:
   - **Web**: Vite PWA
-  - **Android**: Capacitor 6 (WebView + Filesystem + Local Notifications)
+  - **Android**: Capacitor 6 (WebView + Filesystem + Local Notifications + Share + App)
   - **Windows 10/11**: Electron (NSIS installer + Portable)
 
 ---
@@ -124,7 +124,7 @@ npm run preview  # معاينة البناء
 npm run build
 
 # 2. تثبيت Capacitor (مرة واحدة)
-npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/local-notifications
+npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app @capacitor/filesystem @capacitor/local-notifications @capacitor/share
 
 # 3. إضافة منصة Android
 npx cap add android

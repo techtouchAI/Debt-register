@@ -11,7 +11,6 @@ import {
   Wallet,
   ShoppingCart,
   ArrowUpRight,
-  Calendar,
   DollarSign
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -137,16 +136,6 @@ export function Dashboard() {
             <div>
               <h1 className="text-2xl lg:text-3xl font-bold mb-2">مرحباً بك في {settings?.officeName || 'المكتب الزراعي'} 🌾</h1>
               <p className="text-white/80 text-sm lg:text-base">نظام إدارة متكامل يعمل بدون انترنت - جميع بياناتك آمنة ومحفوظة محلياً</p>
-              <div className="flex items-center gap-4 mt-4 text-xs">
-                <span className="flex items-center gap-1.5 bg-white/20 backdrop-blur px-3 py-1.5 rounded-full">
-                  <Calendar className="w-3.5 h-3.5" />
-                  {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                </span>
-                <span className="flex items-center gap-1.5 bg-white/20 backdrop-blur px-3 py-1.5 rounded-full">
-                  <div className="w-2 h-2 bg-primary-400 rounded-full animate-pulse" />
-                  يعمل بدون انترنت
-                </span>
-              </div>
             </div>
             <div className="flex gap-2">
               <Link to="/invoices/new">

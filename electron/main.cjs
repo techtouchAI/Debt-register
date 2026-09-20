@@ -184,6 +184,43 @@ ipcMain.handle('save-backup', async (_event, payload) => {
   }
 });
 
+ipcMain.handle('save-file', async (_event, payload) => {
+  try {
+    const fileName = safeFileName(payload?.fileName);
+    if (!fileName) return { success: false, error: 'اسم الملف غير صالح' };
+    if (typeof payload?.data !== 'string' || payload.data.length === 0) {
+      return { success: false, error: 'لا توجد بيانات للحفظ' };
+    }
+
+    const extension = (fileName.split('.').pop() || '').toLowerCase();
+    const filters = [];
+    if (extension === 'pdf') filters.push({ name: 'PDF', extensions: ['pdf'] });
+    else if (extension === 'json') filters.push({ name: 'JSON', extensions: ['json'] });
+    else filters.push({ name: 'ملفات', extensions: [extension || '*'] });
+
+    const downloads = app.getPath('downloads');
+    const suggestedDir = path.join(downloads, 'AgriOffice');
+    await fsp.mkdir(suggestedDir, { recursive: true }).catch(() => {});
+
+    const { filePath } = await dialog.showSaveDialog({
+      defaultPath: path.join(suggestedDir, fileName),
+      filters
+    });
+
+    if (!filePath) return { success: false, cancelled: true };
+
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    // كتابة ذرّية: ملف مؤقت ثم إعادة تسمية
+    const tempPath = `${filePath}.tmp`;
+    await fsp.writeFile(tempPath, Buffer.from(payload.data, 'base64'));
+    await fsp.rename(tempPath, filePath);
+
+    return { success: true, path: filePath };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('show-notification', async (_event, payload) => {
   try {
     const title = String(payload?.title || 'المكتب الزراعي').slice(0, 200);

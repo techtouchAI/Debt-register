@@ -4,8 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, logActivity, createNotification, checkLowStock, getSettings } from '@/lib/db';
+import { db, getSettings, logActivity } from '@/lib/db';
+import { createMaterial, updateMaterial } from '@/lib/materials';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
@@ -57,56 +59,48 @@ export function Materials() {
     }
   }, []);
 
+  const closeForm = () => {
+    setShowForm(false);
+    setEditing(null);
+  };
+
+  useModalCloser(showForm, closeForm);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const name = (formData.name ?? '').trim();
-    const salePrice = toFiniteNumber(formData.salePrice, NaN);
-    if (!name || !Number.isFinite(salePrice) || salePrice < 0) {
-      toast.warning('حقول ناقصة', 'اسم المادة وسعر البيع مطلوبان');
-      return;
-    }
 
-    const now = new Date().toISOString();
-    const defaultThreshold = toFiniteNumber(settings?.lowStockThreshold, 5);
-    const materialData: Material = {
-      name,
-      quantity: Math.max(0, toFiniteNumber(formData.quantity)),
-      salePrice,
-      purchasePrice:
-        formData.purchasePrice === undefined || formData.purchasePrice === null
-          ? undefined
-          : Math.max(0, toFiniteNumber(formData.purchasePrice)),
-      minQuantity: Math.max(0, toFiniteNumber(formData.minQuantity, defaultThreshold)),
-      category: (formData.category ?? '').trim() || 'عام',
-      unit: formData.unit || 'قطعة',
-      description: (formData.description ?? '').trim() || undefined,
-      barcode: (formData.barcode ?? '').trim() || undefined,
-      createdAt: editing?.createdAt || now,
-      updatedAt: now
+    // الحفظ عبر الوحدة الموحّدة (نفس قواعد الإضافة السريعة داخل الفاتورة)
+    const input = {
+      name: formData.name ?? '',
+      quantity: toFiniteNumber(formData.quantity),
+      salePrice: toFiniteNumber(formData.salePrice, NaN),
+      purchasePrice: formData.purchasePrice ?? undefined,
+      minQuantity: toFiniteNumber(formData.minQuantity, toFiniteNumber(settings?.lowStockThreshold, 5)),
+      category: formData.category ?? '',
+      unit: formData.unit ?? 'قطعة',
+      barcode: formData.barcode ?? '',
+      description: formData.description ?? ''
     };
 
     try {
       if (editing?.id) {
-        await db.materials.update(editing.id, materialData);
-        await logActivity('تعديل مادة', `تم تعديل المادة: ${materialData.name}`, 'material', editing.id);
-        toast.success('تم تحديث المادة', materialData.name);
-      } else {
-        const id = (await db.materials.add(materialData)) as number;
-        await logActivity('إضافة مادة', `تمت إضافة مادة جديدة: ${materialData.name}`, 'material', id);
-        if (materialData.quantity <= materialData.minQuantity) {
-          await createNotification(
-            'تنبيه مخزون',
-            `المادة "${materialData.name}" كميتها منخفضة: ${materialData.quantity}`,
-            { type: 'warning', relatedId: id, relatedType: 'material', code: 'low-stock' }
-          );
+        const result = await updateMaterial(editing.id, input);
+        if (!result.ok) {
+          toast.warning('تعذّر الحفظ', result.error);
+          return;
         }
-        toast.success('تمت إضافة المادة', materialData.name);
+        toast.success('تم تحديث المادة', result.material.name);
+      } else {
+        const result = await createMaterial(input);
+        if (!result.ok) {
+          toast.warning('تعذّر الحفظ', result.error);
+          return;
+        }
+        toast.success('تمت إضافة المادة', result.material.name);
       }
 
-      setShowForm(false);
-      setEditing(null);
+      closeForm();
       setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: 5, category: '', unit: 'قطعة', description: '' });
-      await checkLowStock();
     } catch (error) {
       reportError('Materials.save', error, 'حدث خطأ أثناء الحفظ');
     }
@@ -245,65 +239,82 @@ export function Materials() {
         </CardContent>
       </Card>
 
-      {/* Materials Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {materials?.map((material) => {
-          const status = getStockStatus(material.quantity, material.minQuantity);
-          return (
-            <Card key={material.id} className="border-0 shadow-md hover:shadow-xl transition-all duration-300 group overflow-hidden">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <CardTitle className="text-base leading-tight group-hover:text-primary-600 transition-colors">{material.name}</CardTitle>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{material.category || 'عام'} • {material.unit}</p>
-                  </div>
-                  <Badge className={`${getStockStatusColor(status)} border text-[10px]`}>
-                    {getStockStatusText(status)}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-2.5">
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400">الكمية</p>
-                    <p className="font-bold text-gray-900 dark:text-white">{material.quantity} {material.unit}</p>
-                  </div>
-                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-2.5">
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400">سعر البيع</p>
-                    <p className="font-bold text-green-600">{formatCurrency(material.salePrice, settings?.currency)}</p>
-                  </div>
-                  {material.purchasePrice && (
-                    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-2.5">
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400">سعر الشراء</p>
-                      <p className="font-medium text-gray-700 dark:text-gray-300">{formatCurrency(material.purchasePrice, settings?.currency)}</p>
-                    </div>
-                  )}
-                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-2.5">
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400">الربح/قطعة</p>
-                    <p className="font-medium text-purple-600">
-                      {material.purchasePrice ? formatCurrency(material.salePrice - material.purchasePrice, settings?.currency) : '-'}
-                    </p>
-                  </div>
-                </div>
-
-                {material.description && (
-                  <p className="text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/30 p-2 rounded-lg line-clamp-2">{material.description}</p>
-                )}
-
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="flex-1" onClick={() => handleEdit(material)}>
-                    <Edit className="w-3.5 h-3.5 ml-1" />
-                    تعديل
-                  </Button>
-                  <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => handleDelete(material)}>
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      {/* Materials Table — سطر واحد لكل مادة مع كل معلوماتها */}
+      {(materials?.length ?? 0) > 0 && (
+        <Card className="border-0 shadow-md overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[960px]">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-800/60 text-[12px] text-gray-600 dark:text-gray-300">
+                  <th className="p-3 text-center font-bold w-10">#</th>
+                  <th className="p-3 text-right font-bold">المادة</th>
+                  <th className="p-3 text-right font-bold whitespace-nowrap">الفئة</th>
+                  <th className="p-3 text-center font-bold whitespace-nowrap">الكمية</th>
+                  <th className="p-3 text-center font-bold whitespace-nowrap">سعر الشراء</th>
+                  <th className="p-3 text-center font-bold whitespace-nowrap">سعر البيع</th>
+                  <th className="p-3 text-center font-bold whitespace-nowrap">الربح/وحدة</th>
+                  <th className="p-3 text-center font-bold whitespace-nowrap">الحالة</th>
+                  <th className="p-3 text-center font-bold whitespace-nowrap w-28">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {materials?.map((material, index) => {
+                  const status = getStockStatus(material.quantity, material.minQuantity);
+                  return (
+                    <tr
+                      key={material.id}
+                      className="border-t border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors"
+                    >
+                      <td className="p-3 text-center text-gray-400">{index + 1}</td>
+                      <td className="p-3">
+                        <p className="font-bold text-gray-900 dark:text-white leading-tight">{material.name}</p>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          {material.unit || 'قطعة'}
+                          {material.barcode ? ` • باركود: ${material.barcode}` : ''}
+                          {material.description ? ` • ${material.description}` : ''}
+                        </p>
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-gray-600 dark:text-gray-300">{material.category || 'عام'}</td>
+                      <td className="p-3 text-center font-bold whitespace-nowrap">{material.quantity}</td>
+                      <td className="p-3 text-center whitespace-nowrap text-gray-600 dark:text-gray-300">
+                        {material.purchasePrice ? formatCurrency(material.purchasePrice, settings?.currency) : '—'}
+                      </td>
+                      <td className="p-3 text-center font-bold whitespace-nowrap text-green-600">
+                        {formatCurrency(material.salePrice, settings?.currency)}
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap text-purple-600">
+                        {material.purchasePrice ? formatCurrency(material.salePrice - material.purchasePrice, settings?.currency) : '—'}
+                      </td>
+                      <td className="p-3 text-center">
+                        <Badge className={`${getStockStatusColor(status)} border text-[10px] whitespace-nowrap`}>
+                          {getStockStatusText(status)}
+                        </Badge>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleEdit(material)}>
+                            <Edit className="w-3.5 h-3.5 ml-1" />
+                            تعديل
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                            aria-label={`حذف ${material.name}`}
+                            onClick={() => handleDelete(material)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {materials?.length === 0 && (
         <Card className="border-0 shadow-md">
@@ -392,7 +403,7 @@ export function Materials() {
                 </div>
                 <div className="flex gap-2 pt-4">
                   <Button type="submit" className="flex-1 bg-primary-600 hover:bg-primary-700">{editing ? 'حفظ التعديلات' : 'إضافة المادة'}</Button>
-                  <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditing(null); }}>إلغاء</Button>
+                  <Button type="button" variant="outline" onClick={closeForm}>إلغاء</Button>
                 </div>
               </form>
             </CardContent>

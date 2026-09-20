@@ -35,8 +35,17 @@ export interface ElectronSaveResult {
   error?: string;
 }
 
+export interface ElectronFileResult {
+  success?: boolean;
+  cancelled?: boolean;
+  path?: string;
+  error?: string;
+}
+
 export interface ElectronAPI {
   saveBackup?: (fileName: string, data: string) => Promise<ElectronSaveResult>;
+  /** حفظ ملف عام (PDF/JSON/...) عبر صندوق حفظ أصلي — data بصيغة base64 */
+  saveFile?: (fileName: string, base64Data: string, mimeType: string) => Promise<ElectronFileResult>;
   showNotification?: (title: string, body: string) => Promise<unknown>;
   appInfo?: () => Promise<{ version: string; platform: string; isElectron: boolean }>;
   isElectron?: boolean;

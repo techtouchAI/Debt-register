@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { Bell, Check, Trash2, AlertTriangle, Info, CheckCircle, XCircle, Package, Users, FileText, CreditCard } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bell, BellRing, Check, Trash2, AlertTriangle, Info, CheckCircle, XCircle, Package, Users, FileText, CreditCard, Send } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, countUnreadNotifications, markAllNotificationsRead } from '@/lib/db';
+import { db, countUnreadNotifications, createNotification, markAllNotificationsRead } from '@/lib/db';
+import { getNotificationPermissionState, isNative, requestNotificationPermission, sendSystemNotification, type NotificationPermissionState } from '@/lib/notify';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -11,6 +12,48 @@ import { reportError } from '@/lib/errors';
 
 export function Notifications() {
   const [filter, setFilter] = useState<'all' | 'unread' | 'warning' | 'info'>('all');
+  const [permission, setPermission] = useState<NotificationPermissionState>('prompt');
+  const [isRequesting, setIsRequesting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getNotificationPermissionState().then((state) => {
+      if (!cancelled) setPermission(state);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleRequestPermission = async () => {
+    if (isRequesting) return;
+    setIsRequesting(true);
+    try {
+      const granted = await requestNotificationPermission();
+      setPermission(granted ? 'granted' : await getNotificationPermissionState());
+      if (granted) {
+        toast.success('تم تفعيل الإشعارات', 'ستصلك تنبيهات النظام خارج التطبيق');
+        await sendSystemNotification('تم تفعيل الإشعارات', 'ستصلك تنبيهات المخزون والديون هنا');
+      } else {
+        toast.warning('لم يُمنح الإذن', 'فعّل الإشعارات من إعدادات الجهاز ثم أعد المحاولة');
+      }
+    } finally {
+      setIsRequesting(false);
+    }
+  };
+
+  const handleTestNotification = async () => {
+    try {
+      await createNotification(
+        'إشعار تجريبي',
+        'هذا إشعار تجريبي من نظام المكتب الزراعي — يظهر داخل التطبيق وفي شريط النظام',
+        { type: 'info', relatedType: 'system', code: 'test-notification' }
+      );
+      toast.success('تم إرسال إشعار تجريبي');
+    } catch (error) {
+      reportError('Notifications.test', error, 'تعذّر إرسال الإشعار التجريبي');
+    }
+  };
 
   const notifications = useLiveQuery(async () => {
     let all = await db.notifications.orderBy('createdAt').reverse().toArray();
@@ -97,9 +140,45 @@ export function Notifications() {
         </div>
       </div>
 
+      <Card className="border-0 shadow-md overflow-hidden">
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${permission === 'granted' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600'}`}>
+                <BellRing className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-sm">إشعارات النظام {isNative() ? '(أندرويد)' : ''}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  {permission === 'granted'
+                    ? 'مفعّلة — تصلك التنبيهات في شريط النظام حتى خارج التطبيق'
+                    : permission === 'denied'
+                      ? 'مرفوضة — فعّلها من إعدادات الجهاز ثم أعد المحاولة'
+                      : permission === 'unsupported'
+                        ? 'غير مدعومة على هذه المنصة — ستعمل التنبيهات داخل التطبيق فقط'
+                        : 'غير مفعّلة — فعّلها لتصلك التنبيهات خارج التطبيق'}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              {permission !== 'granted' && permission !== 'unsupported' && (
+                <Button size="sm" onClick={handleRequestPermission} disabled={isRequesting} className="bg-primary-600 hover:bg-primary-700">
+                  <BellRing className="w-4 h-4 ml-1" />
+                  {isRequesting ? 'جاري الطلب…' : 'تفعيل الإشعارات'}
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={handleTestNotification}>
+                <Send className="w-4 h-4 ml-1" />
+                إشعار تجريبي
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card className="border-0 shadow-md">
         <CardContent className="p-4">
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button variant={filter === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('all')}>الكل ({notifications?.length || 0})</Button>
             <Button variant={filter === 'unread' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('unread')}>غير مقروءة ({unreadCount})</Button>
             <Button variant={filter === 'warning' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('warning')}>تنبيهات</Button>

@@ -73,6 +73,8 @@ export function Invoices() {
   };
 
   const handlePrint = async (invoiceId: number) => {
+    if (busyId !== null) return;
+    setBusyId(invoiceId);
     try {
       const found = await getInvoiceWithItems(invoiceId);
       const s = await getSettings();
@@ -80,12 +82,14 @@ export function Invoices() {
         toast.error('تعذّر الطباعة', 'الفاتورة أو الإعدادات غير متوفرة');
         return;
       }
-      const opened = printInvoice(found.invoice, found.items, s);
+      const opened = await printInvoice(found.invoice, found.items, s);
       if (!opened) {
-        toast.warning('المتصفح منع النافذة', 'اسمح بالنوافذ المنبثقة لهذا التطبيق ثم أعد المحاولة');
+        toast.info('لا يوجد حوار طباعة هنا', 'افتح الفاتورة ثم استخدم زر PDF للحفظ أو المشاركة');
       }
     } catch (error) {
       reportError('Invoices.print', error, 'تعذّر طباعة الفاتورة');
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -159,15 +163,15 @@ export function Invoices() {
 
       <Card className="border-0 shadow-md">
         <CardContent className="p-4">
-          <div className="flex flex-col lg:flex-row gap-4">
-            <div className="flex-1 relative">
+          <div className="flex flex-col xl:flex-row gap-3">
+            <div className="flex-1 relative min-w-0">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <Input placeholder="بحث برقم الفاتورة أو اسم الزبون..." value={search} onChange={(e) => setSearch(e.target.value)} className="pr-10" />
             </div>
-            <div className="flex gap-2">
-              <div className="relative">
-                <Calendar className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <Input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="pr-8" />
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative shrink-0">
+                <Calendar className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <Input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="pr-8 w-[160px]" />
               </div>
               <Button variant={filterType === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFilterType('all')}>الكل</Button>
               <Button variant={filterType === 'cash' ? 'default' : 'outline'} size="sm" onClick={() => setFilterType('cash')} className={filterType === 'cash' ? 'bg-green-600' : ''}>نقدي</Button>
@@ -202,13 +206,13 @@ export function Invoices() {
                     <p className="text-sm text-gray-600 dark:text-gray-400">{invoice.customerName} • {formatDate(invoice.date, true)} • {invoice.itemsCount} مادة</p>
                   </div>
                 </div>
-                <div className="flex items-center justify-between lg:justify-end gap-3">
-                  <div className="text-right">
-                    <p className="font-bold text-gray-900 dark:text-white">{formatCurrency(invoice.total, settings?.currency)}</p>
-                    {invoice.discount > 0 && <p className="text-xs text-gray-500">خصم: {formatCurrency(invoice.discount, settings?.currency)}</p>}
-                    {invoice.type === 'credit' && invoice.remaining > 0 && <p className="text-xs text-red-600">متبقي: {formatCurrency(invoice.remaining, settings?.currency)}</p>}
+                <div className="flex flex-wrap items-center justify-between lg:justify-end gap-3">
+                  <div className="text-right min-w-0">
+                    <p className="font-bold text-gray-900 dark:text-white whitespace-nowrap">{formatCurrency(invoice.total, settings?.currency)}</p>
+                    {invoice.discount > 0 && <p className="text-xs text-gray-500 whitespace-nowrap">خصم: {formatCurrency(invoice.discount, settings?.currency)}</p>}
+                    {invoice.type === 'credit' && invoice.remaining > 0 && <p className="text-xs text-red-600 whitespace-nowrap">متبقي: {formatCurrency(invoice.remaining, settings?.currency)}</p>}
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
                     <Link to={`/invoices/${invoice.id}`}>
                       <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="w-4 h-4" /></Button>
                     </Link>

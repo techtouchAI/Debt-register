@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
+import { saveFile } from '@/lib/files';
 import { getCustomerBalances } from '@/lib/debts';
 import { formatCurrency, formatDate, formatLocalDateInput, localDayRangeISO, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -210,39 +211,77 @@ export function Reports() {
 
   const totalDebt = debtsReport.reduce((sum, d) => sum + d.debt, 0);
 
-  const exportReport = () => {
+  const exportReport = async () => {
     let data: unknown = {};
     let fileName = '';
-    
+
+    const REPORT_LABELS: Record<ReportKey, string> = {
+      cash: 'حركة الصندوق',
+      debts: 'الديون الشامل',
+      materials: 'حركة مادة',
+      profit: 'الأرباح',
+      inventory: 'قيمة المخزون'
+    };
+
     switch (activeReport) {
       case 'cash':
-        data = cashReport;
+        data = { report: REPORT_LABELS.cash, from: dateFrom, to: dateTo, ...cashReport };
         fileName = `Cash_Report_${dateFrom}_to_${dateTo}.json`;
         break;
       case 'debts':
-        data = debtsReport;
+        data = {
+          report: REPORT_LABELS.debts,
+          date: formatLocalDateInput(),
+          totalDebt,
+          debtors: debtsReport.map(({ customer, debt }) => ({
+            name: customer.fullName,
+            phone: customer.phone || '',
+            debt
+          }))
+        };
         fileName = `Debts_Report_${formatLocalDateInput()}.json`;
         break;
+      case 'materials':
+        data = {
+          report: REPORT_LABELS.materials,
+          material: materialMovement?.material.name || '',
+          totalSold: materialMovement?.totalSold || 0,
+          totalRevenue: materialMovement?.totalRevenue || 0,
+          currentStock: materialMovement?.currentStock || 0,
+          sales: materialMovement?.sales || []
+        };
+        fileName = `Material_Movement_${formatLocalDateInput()}.json`;
+        break;
       case 'profit':
-        data = profitReport;
+        data = { report: REPORT_LABELS.profit, from: dateFrom, to: dateTo, ...profitReport };
         fileName = `Profit_Report_${dateFrom}_to_${dateTo}.json`;
         break;
       default:
-        data = { cash: cashReport, debts: debtsReport, inventory: inventoryReport, profit: profitReport };
-        fileName = `Full_Report_${formatLocalDateInput()}.json`;
+        data = {
+          report: REPORT_LABELS.inventory,
+          date: formatLocalDateInput(),
+          ...inventoryReport
+        };
+        fileName = `Inventory_Report_${formatLocalDateInput()}.json`;
     }
 
+    // الحفظ عبر الخدمة الموحّدة: يعمل على أندرويد (مستندات/مشاركة) بدل
+    // تنزيل المتصفح الذي لا يفعل شيئاً داخل WebView.
     try {
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-      toast.success('تم تصدير التقرير', fileName);
+      const result = await saveFile({
+        fileName,
+        mimeType: 'application/json',
+        data: JSON.stringify(data, null, 2),
+        encoding: 'utf8',
+        subDir: 'Reports',
+        shareTitle: `تقرير ${REPORT_LABELS[activeReport]}`
+      });
+      if (!result.ok) {
+        if (result.error === 'CANCELLED') return;
+        toast.error('تعذّر تصدير التقرير', result.error);
+        return;
+      }
+      toast.success('تم تصدير التقرير', result.path || fileName);
     } catch (error) {
       reportError('Reports.export', error, 'تعذّر تصدير التقرير');
     }
@@ -286,8 +325,8 @@ export function Reports() {
       {/* Date Filter */}
       <Card className="border-0 shadow-md">
         <CardContent className="p-4">
-          <div className="flex flex-col lg:flex-row gap-4 items-end">
-            <div className="flex-1 grid grid-cols-2 gap-4">
+          <div className="flex flex-col lg:flex-row gap-3 lg:items-end">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">من تاريخ</label>
                 <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
@@ -297,8 +336,10 @@ export function Reports() {
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={() => { const today = formatLocalDateInput(); setDateFrom(today); setDateTo(today); }}>اليوم</Button>
-            <Button variant="outline" size="sm" onClick={() => { const d = new Date(); const first = formatLocalDateInput(new Date(d.getFullYear(), d.getMonth(), 1)); setDateFrom(first); setDateTo(formatLocalDateInput()); }}>هذا الشهر</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" className="flex-1 lg:flex-none" onClick={() => { const today = formatLocalDateInput(); setDateFrom(today); setDateTo(today); }}>اليوم</Button>
+              <Button variant="outline" size="sm" className="flex-1 lg:flex-none" onClick={() => { const d = new Date(); const first = formatLocalDateInput(new Date(d.getFullYear(), d.getMonth(), 1)); setDateFrom(first); setDateTo(formatLocalDateInput()); }}>هذا الشهر</Button>
+            </div>
           </div>
         </CardContent>
       </Card>

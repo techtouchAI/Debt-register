@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, FileText, CreditCard, Printer, Download, Calendar, Phone, MapPin } from 'lucide-react';
+import { ArrowLeft, FileText, CreditCard, Printer, Download, Calendar, Phone, MapPin, Eye } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,8 +8,8 @@ import { db, getSettings } from '@/lib/db';
 import { getCustomerBalance } from '@/lib/debts';
 import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
-import { toast } from '@/lib/toast';
-import { printCustomerStatement } from '@/lib/print';
+import { buildCustomerStatementPrintHtml, printCustomerStatement } from '@/lib/print';
+import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 import { Customer, Invoice, Payment, OfficeSettings } from '@/types';
 import { generateCustomerStatementPDF } from '@/lib/pdf';
 
@@ -21,6 +21,7 @@ export function CustomerStatement() {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [debt, setDebt] = useState(0);
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,10 +58,10 @@ export function CustomerStatement() {
     };
   }, [id]);
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!customer || !settings) return;
-    const opened = printCustomerStatement(customer, invoices, payments, settings, debt);
-    if (!opened) toast.warning('المتصفح منع النافذة', 'اسمح بالنوافذ المنبثقة ثم أعد المحاولة');
+    const opened = await printCustomerStatement(customer, invoices, payments, settings, debt);
+    if (!opened) setShowPreview(true); // البديل: معاينة مع زر PDF
   };
 
   const handleExportPDF = async () => {
@@ -125,7 +126,8 @@ export function CustomerStatement() {
                 </div>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <Button className="bg-primary-600 hover:bg-primary-700" onClick={() => setShowPreview(true)}><Eye className="w-4 h-4 ml-2" />معاينة</Button>
               <Button variant="outline" onClick={handlePrint}><Printer className="w-4 h-4 ml-2" />طباعة</Button>
               <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 ml-2" />PDF</Button>
               <Link to={`/invoices/new?customerId=${customer.id}`}><Button className="bg-primary-600 hover:bg-primary-700">فاتورة جديدة</Button></Link>
@@ -285,6 +287,17 @@ export function CustomerStatement() {
           </CardContent>
         </Card>
       </div>
+
+      {showPreview && customer && settings && (
+        <DocumentPreviewDialog
+          open={showPreview}
+          title={`كشف حساب ${customer.fullName}`}
+          bodyHtml={buildCustomerStatementPrintHtml(customer, invoices, payments, settings, debt)}
+          fileNameBase={`Statement_${customer.fullName}`}
+          shareTitle={`كشف حساب ${customer.fullName}`}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
     </div>
   );
 }

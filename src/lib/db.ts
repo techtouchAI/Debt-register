@@ -14,7 +14,7 @@ import {
   AppMeta
 } from '@/types';
 import { toFiniteNumber } from './utils';
-import { getCapacitor, getElectronAPI } from './platform';
+import { sendSystemNotification as dispatchSystemNotification } from './notify';
 
 export class AgriOfficeDB extends Dexie {
   settings!: Table<OfficeSettings>;
@@ -161,7 +161,10 @@ export class AgriOfficeDB extends Dexie {
 export const db = new AgriOfficeDB();
 
 export const DEFAULT_SETTINGS: OfficeSettings = {
-  officeName: 'المكتب الزراعي',
+  // فارغ عمداً: اسم المكتب يُدخله المستخدم في شاشة الإعداد الأولى (معالج
+  // التشغيل الأول) ولا يُكتب أي اسم تلقائياً — يظهر الاسم في ترويسة كل
+  // فاتورة ووصل فيجب أن يكون اسم المكتب الحقيقي.
+  officeName: '',
   phone: '',
   address: '',
   currency: 'د.ع',
@@ -318,36 +321,13 @@ export interface CreateNotificationOptions {
   code?: string;
 }
 
-/** عرض إشعار نظام خارج التطبيق إن كان الإذن ممنوحاً مسبقاً (بلا طلب إذن أثناء العمل). */
+/**
+ * عرض إشعار نظام خارج التطبيق (شريط أندرويد / ويندوز / المتصفح).
+ * يُفوَّض لخدمة الإشعارات الموحّدة التي تستخدم الإضافات الأصلية الرسمية
+ * مع قناة إشعارات وأذونات صحيحة — بدل الوصول القديم غير العامل.
+ */
 async function showSystemNotification(title: string, message: string): Promise<void> {
-  try {
-    if (typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission === 'granted') {
-      new window.Notification(title, { body: message });
-      return;
-    }
-
-    const electronAPI = getElectronAPI();
-    if (electronAPI?.showNotification) {
-      await electronAPI.showNotification(title, message);
-      return;
-    }
-
-    const cap = getCapacitor();
-    if (cap?.isNativePlatform?.() && cap.Plugins?.LocalNotifications) {
-      await cap.Plugins.LocalNotifications.schedule({
-        notifications: [
-          {
-            title,
-            body: message,
-            id: Date.now() % 100000,
-            schedule: { at: new Date(Date.now() + 100) }
-          }
-        ]
-      });
-    }
-  } catch (error) {
-    console.warn('تعذّر عرض إشعار النظام:', error);
-  }
+  await dispatchSystemNotification(title, message);
 }
 
 export async function createNotification(

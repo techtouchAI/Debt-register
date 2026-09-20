@@ -5,21 +5,25 @@ import { Database, RefreshCw } from 'lucide-react';
 import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/Toaster';
 import { Button } from '@/components/ui/button';
+import { FirstRunSetup } from '@/components/setup/FirstRunSetup';
+import { NativeBackButton } from '@/components/NativeBackButton';
 import { Dashboard } from '@/pages/Dashboard';
 import { Materials } from '@/pages/Materials';
 import { Customers } from '@/pages/Customers';
 import { Invoices } from '@/pages/Invoices';
 import { InvoiceForm } from '@/pages/InvoiceForm';
+import { InvoiceView } from '@/pages/InvoiceView';
 import { Payments } from '@/pages/Payments';
 import { Reports } from '@/pages/Reports';
 import { Settings } from '@/pages/Settings';
 import { Backup } from '@/pages/Backup';
 import { Notifications } from '@/pages/Notifications';
 import { CustomerStatement } from '@/pages/CustomerStatement';
-import { checkStorageAvailable, initializeDB } from '@/lib/db';
+import { checkStorageAvailable, getSettings, initializeDB } from '@/lib/db';
 import { setupAutoBackup } from '@/lib/backup';
 import { runStartupMaintenance } from '@/lib/maintenance';
 import { installGlobalErrorHandlers, reportError } from '@/lib/errors';
+import { initSystemNotifications } from '@/lib/notify';
 
 type BootState =
   | { status: 'loading' }
@@ -58,6 +62,9 @@ function StorageErrorScreen({ error }: { error: string }) {
 
 function App() {
   const [boot, setBoot] = useState<BootState>({ status: 'loading' });
+  // معالج التشغيل الأول: يظهر عندما لا يوجد اسم مكتب مُدخل (تثبيت جديد
+  // أو نسخة مستوردة بلا اسم) — لا يُكتب أي اسم تلقائياً.
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
     installGlobalErrorHandlers();
@@ -76,6 +83,12 @@ function App() {
         await initializeDB();
         await runStartupMaintenance();
         stopAutoBackup = setupAutoBackup();
+        await initSystemNotifications();
+
+        const settings = await getSettings();
+        if (!cancelled && !settings?.officeName?.trim()) {
+          setNeedsSetup(true);
+        }
       } catch (error) {
         reportError('app.init', error, 'تعذّر تهيئة التطبيق');
       }
@@ -89,20 +102,6 @@ function App() {
       cancelled = true;
       stopAutoBackup?.();
     };
-  }, []);
-
-  // طلب إذن الإشعارات — يُتجاهل بأمان في البيئات غير الآمنة
-  useEffect(() => {
-    const requestPermission = async () => {
-      try {
-        if ('Notification' in window && Notification.permission === 'default' && window.isSecureContext) {
-          await Notification.requestPermission();
-        }
-      } catch {
-        /* البيئات غير الآمنة لا تدعم الإشعارات */
-      }
-    };
-    void requestPermission();
   }, []);
 
   if (boot.status === 'storage-error') return <StorageErrorScreen error={boot.error} />;
@@ -119,8 +118,18 @@ function App() {
     );
   }
 
+  if (needsSetup) {
+    return (
+      <div dir="rtl" className="font-cairo">
+        <FirstRunSetup onDone={() => setNeedsSetup(false)} />
+        <Toaster />
+      </div>
+    );
+  }
+
   return (
     <Router>
+      <NativeBackButton />
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -129,7 +138,7 @@ function App() {
           <Route path="/customers/:id" element={<CustomerStatement />} />
           <Route path="/invoices" element={<Invoices />} />
           <Route path="/invoices/new" element={<InvoiceForm />} />
-          <Route path="/invoices/:id" element={<InvoiceForm />} />
+          <Route path="/invoices/:id" element={<InvoiceView />} />
           <Route path="/invoices/:id/edit" element={<InvoiceForm />} />
           <Route path="/payments" element={<Payments />} />
           <Route path="/payments/new" element={<Payments />} />

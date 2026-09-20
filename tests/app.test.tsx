@@ -1,7 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+
+// إزالة كل تركيب سابق بعد كل اختبار حتى لا تتداخل نسخ التطبيق
+afterEach(() => cleanup());
 import App from '@/App';
-import { db } from '@/lib/db';
+import { db, getSettings, updateSettings } from '@/lib/db';
 
 /**
  * اختبار إقلاع حقيقي: يُركّب التطبيق بالكامل (ErrorBoundary + Router + Layout +
@@ -9,6 +12,8 @@ import { db } from '@/lib/db';
  */
 describe('إقلاع التطبيق', () => {
   it('يعرض لوحة التحكم بعد تهيئة قاعدة البيانات', async () => {
+    // مكتب مُعد مسبقاً حتى لا يظهر معالج التشغيل الأول
+    await updateSettings({ officeName: 'مكتب الاختبار' });
     const now = new Date().toISOString();
     await db.materials.add({
       name: 'سماد يوريا',
@@ -38,6 +43,36 @@ describe('إقلاع التطبيق', () => {
     expect(screen.getByText('آخر الفواتير')).toBeTruthy();
     // لم نسقط في حاجز الأخطاء
     expect(screen.queryByText('حدث خطأ غير متوقع')).toBeNull();
+  });
+
+  it('يعرض معالج إعداد المكتب في التشغيل الأول بدل اسم تلقائي', async () => {
+    // قاعدة جديدة: الإعدادات الافتراضية بلا اسم مكتب
+    const settings = await getSettings();
+    expect(settings?.officeName ?? '').toBe('');
+
+    render(<App />);
+
+    await waitFor(
+      () => {
+        expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeTruthy();
+      },
+      { timeout: 4000 }
+    );
+
+    // حقل الاسم فارغ — لا يُكتب أي اسم تلقائياً
+    const nameInput = screen.getByPlaceholderText(/اكتب اسم مكتبك هنا/) as HTMLInputElement;
+    expect(nameInput.value).toBe('');
+
+    fireEvent.change(nameInput, { target: { value: 'مكتب الرافدين الزراعي' } });
+    fireEvent.click(screen.getByText(/حفظ وبدء استخدام النظام/));
+
+    await waitFor(
+      () => {
+        expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+      },
+      { timeout: 4000 }
+    );
+    expect((await getSettings())?.officeName).toBe('مكتب الرافدين الزراعي');
   });
 
   it('يعرض شاشة خطأ واضحة عندما يتعذّر فتح قاعدة البيانات', async () => {

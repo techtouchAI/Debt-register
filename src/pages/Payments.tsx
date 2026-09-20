@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CreditCard, Plus, Search, Printer, Download, Trash2, DollarSign, User, FileText } from 'lucide-react';
+import { CreditCard, Plus, Search, Printer, Download, Trash2, DollarSign, User, FileText, Eye } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,8 +8,10 @@ import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { getCustomerBalance } from '@/lib/debts';
 import { savePayment, deletePayment } from '@/lib/payments';
-import { printReceipt } from '@/lib/print';
+import { buildReceiptPrintHtml, printReceipt } from '@/lib/print';
 import { generateReceiptPDF } from '@/lib/pdf';
+import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { useModalCloser } from '@/hooks/useModalCloser';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate, formatLocalDateInput, formatLocalDateTimeInput, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -30,6 +32,8 @@ export function Payments() {
   const [notes, setNotes] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [previewPayment, setPreviewPayment] = useState<Payment | null>(null);
+  const [previewDebt, setPreviewDebt] = useState(0);
 
   const settings = useLiveQuery(() => getSettings(), []);
   useEffect(() => {
@@ -94,6 +98,8 @@ export function Payments() {
     setMethod('cash');
     setDate(formatLocalDateTimeInput());
   };
+
+  useModalCloser(showForm, closeForm);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,15 +170,46 @@ export function Payments() {
   };
 
   const handlePrintReceipt = async (payment: Payment) => {
+    if (busyId !== null) return;
+    setBusyId(payment.id ?? -1);
     try {
       const s = await getSettingsOrDefault();
       const balance = await getCustomerBalance(payment.customerId);
-      const opened = printReceipt(payment, s, Math.max(0, balance.debt));
+      const opened = await printReceipt(payment, s, Math.max(0, balance.debt));
       if (!opened) {
-        toast.warning('المتصفح منع النافذة', 'اسمح بالنوافذ المنبثقة ثم أعد المحاولة');
+        // لا حوار طباعة (أندرويد أصلي): نفتح المعاينة مع زر PDF بدل لا شيء
+        setPreviewDebt(Math.max(0, roundMoney(balance.debt)));
+        setPreviewPayment(payment);
       }
     } catch (error) {
       reportError('Payments.print', error, 'تعذّر طباعة الوصل');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDownloadPdf = async (payment: Payment) => {
+    if (busyId !== null) return;
+    setBusyId(payment.id ?? -1);
+    try {
+      const s = await getSettingsOrDefault();
+      const balance = await getCustomerBalance(payment.customerId);
+      const fileName = await generateReceiptPDF(payment, s, Math.max(0, roundMoney(balance.debt)));
+      toast.success('تم إنشاء ملف PDF', fileName);
+    } catch (error) {
+      reportError('Payments.pdf', error, 'تعذّر إنشاء ملف PDF');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handlePreview = async (payment: Payment) => {
+    try {
+      const balance = await getCustomerBalance(payment.customerId);
+      setPreviewDebt(Math.max(0, roundMoney(balance.debt)));
+      setPreviewPayment(payment);
+    } catch (error) {
+      reportError('Payments.preview', error, 'تعذّر فتح المعاينة');
     }
   };
 
@@ -265,9 +302,10 @@ export function Payments() {
                       <p className="text-xs text-gray-500">متبقي: {formatCurrency(payment.remainingAfter, currency)}</p>
                     )}
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="معاينة الوصل" onClick={() => handlePreview(payment)}><Eye className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="طباعة الوصل" onClick={() => handlePrintReceipt(payment)}><Printer className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="تنزيل PDF" onClick={() => handlePrintReceipt(payment)}><Download className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="تنزيل PDF" onClick={() => handleDownloadPdf(payment)}><Download className="w-4 h-4" /></Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -400,6 +438,18 @@ export function Payments() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {previewPayment && (
+        <DocumentPreviewDialog
+          open={previewPayment !== null}
+          title={`وصل قبض ${previewPayment.receiptNumber}`}
+          bodyHtml={buildReceiptPrintHtml(previewPayment, settings ?? { officeName: '', phone: '', address: '', currency, lowStockThreshold: 5, theme: 'light', autoBackupEnabled: true, autoBackupInterval: 60, language: 'ar' }, previewDebt)}
+          fileNameBase={previewPayment.receiptNumber}
+          pdfFormat="receipt80"
+          shareTitle={`وصل قبض ${previewPayment.receiptNumber}`}
+          onClose={() => setPreviewPayment(null)}
+        />
       )}
     </div>
   );

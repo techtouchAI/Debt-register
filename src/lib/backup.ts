@@ -2,7 +2,7 @@ import { db, getSettings, getSettingsOrDefault, updateSettings } from './db';
 import { normalizeBackup, readBackupFile } from './validate';
 import { reallocateCustomerInvoices } from './invoices';
 import { sanitizeFileName } from './utils';
-import { getCapacitor, getElectronAPI } from './platform';
+import { saveFile } from './files';
 import type { BackupData, BackupSnapshot } from '@/types';
 
 export type { BackupData };
@@ -68,63 +68,25 @@ async function recordBackupMeta(fileName: string, size: number, type: 'auto' | '
 export async function exportBackupToFile(type: 'auto' | 'manual' = 'manual'): Promise<string> {
   const backupData = await createBackup();
   const jsonString = JSON.stringify(backupData, null, 2);
-  const blob = new Blob([jsonString], { type: 'application/json' });
   const fileName = backupFileName(backupData.officeName);
 
-  // أندرويد (Capacitor) إن كان متاحاً
-  try {
-    const cap = getCapacitor();
-    if (cap?.isNativePlatform?.() && cap.Plugins?.Filesystem) {
-      const Filesystem = cap.Plugins.Filesystem;
-      const attempts = [
-        { path: `Download/AgriOffice/${fileName}`, directory: 'EXTERNAL_STORAGE' },
-        { path: `AgriOffice/${fileName}`, directory: 'DOCUMENTS' }
-      ];
-      for (const attempt of attempts) {
-        try {
-          await Filesystem.writeFile({ ...attempt, data: jsonString, recursive: true });
-          await recordBackupMeta(fileName, blob.size, type);
-          return fileName;
-        } catch {
-          /* جرّب المسار التالي */
-        }
-      }
-    }
-  } catch (error) {
-    console.warn('تعذّر الحفظ عبر Capacitor، سيتم التنزيل عبر المتصفح:', error);
+  // الحفظ عبر الخدمة الموحّدة: مستندات/مشاركة على أندرويد، صندوق حفظ
+  // على ويندوز، تنزيل في المتصفح.
+  const result = await saveFile({
+    fileName,
+    mimeType: 'application/json',
+    data: jsonString,
+    encoding: 'utf8',
+    subDir: 'Backups',
+    shareTitle: `نسخة احتياطية - ${backupData.officeName || 'المكتب الزراعي'}`
+  });
+
+  if (!result.ok) {
+    if (result.error === 'CANCELLED') throw new Error('BACKUP_CANCELLED');
+    throw new Error(result.error || 'تعذّر حفظ النسخة الاحتياطية');
   }
 
-  // سطح المكتب (Electron)
-  try {
-    const electronAPI = getElectronAPI();
-    if (electronAPI?.saveBackup) {
-      const result = await electronAPI.saveBackup(fileName, jsonString);
-      if (result?.success) {
-        await recordBackupMeta(fileName, blob.size, type);
-        return fileName;
-      }
-      if (result && result.success === false) {
-        // ألغى المستخدم الحوار: لا نُكمل إلى التنزيل التلقائي
-        throw new Error('BACKUP_CANCELLED');
-      }
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message === 'BACKUP_CANCELLED') throw error;
-    console.warn('تعذّر الحفظ عبر Electron:', error);
-  }
-
-  // المتصفح: تنزيل الملف
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  // التأجيل يمنع إلغاء التنزيل في بعض المتصفحات
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-
-  await recordBackupMeta(fileName, blob.size, type);
+  await recordBackupMeta(fileName, jsonString.length, type);
   return fileName;
 }
 

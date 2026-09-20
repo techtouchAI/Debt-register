@@ -1,225 +1,165 @@
 import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import { OfficeSettings, Invoice, InvoiceItem, Payment, Customer } from '@/types';
-import { formatDate } from './utils';
+import {
+  buildEmbeddableDocument,
+  buildInvoicePrintHtml,
+  buildReceiptPrintHtml,
+  buildCustomerStatementPrintHtml
+} from './print';
+import { saveFile } from './files';
+import { sanitizeFileName } from './utils';
+
+/**
+ * توليد ملفات PDF من قوالب HTML نفسها المستخدمة في المعاينة والطباعة.
+ *
+ * لماذا الرسم (html2canvas) بدل نص jsPDF المباشر؟
+ * خط jsPDF الافتراضي (helvetica) لا يدعم العربية إطلاقاً — كان النص العربي
+ * يظهر مفككاً ومقلوباً في الملفات السابقة. الرسم من HTML يعطي عربية سليمة
+ * تماماً ويضمن تطابق المعاينة والطباعة وملف PDF حرفياً (مصدر واحد للحقيقة).
+ *
+ * الحفظ يتم عبر خدمة الملفات الموحّدة: مشاركة/مستندات على أندرويد، صندوق
+ * حفظ على ويندوز، تنزيل في المتصفح — بدل `doc.save` الذي لا يفعل شيئاً
+ * داخل WebView.
+ */
+
+type PdfFormat = 'a4' | 'receipt80';
+
+const RENDER_WIDTH: Record<PdfFormat, number> = {
+  a4: 794, // عرض A4 بالبكسل (96dpi)
+  receipt80: 302 // عرض 80مم بالبكسل
+};
+
+async function waitForImages(root: HTMLElement, timeoutMs = 3000): Promise<void> {
+  const images = Array.from(root.querySelectorAll('img'));
+  if (images.length === 0) return;
+  await Promise.race([
+    Promise.all(
+      images.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) return resolve();
+            const done = () => resolve();
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+          })
+      )
+    ),
+    new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs))
+  ]);
+}
+
+async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise<Blob> {
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-12000px';
+  container.style.top = '0';
+  container.style.width = `${RENDER_WIDTH[format]}px`;
+  container.style.background = '#ffffff';
+  container.style.padding = format === 'a4' ? '24px' : '8px';
+  container.setAttribute('aria-hidden', 'true');
+  container.innerHTML = buildEmbeddableDocument(bodyHtml);
+  document.body.appendChild(container);
+
+  try {
+    try {
+      await Promise.race([
+        document.fonts.ready,
+        new Promise<void>((resolve) => window.setTimeout(resolve, 1500))
+      ]);
+    } catch {
+      /* الخطوط غير حرجة — نتابع بالبدائل */
+    }
+    await waitForImages(container);
+
+    const canvas = await html2canvas(container, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false
+    });
+
+    if (format === 'receipt80') {
+      // صفحة حرارية واحدة بارتفاع ديناميكي حسب المحتوى
+      const widthMm = 80;
+      const heightMm = Math.min(500, Math.max(60, (canvas.height * widthMm) / canvas.width));
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [widthMm, heightMm] });
+      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthMm, heightMm);
+      const blob = doc.output('blob');
+      return blob as Blob;
+    }
+
+    // A4 مع تقسيم ذكي لصفحات متعددة عند الحاجة
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidthMm = 210;
+    const pageHeightMm = 297;
+    const pxPerPage = Math.floor(canvas.width * (pageHeightMm / pageWidthMm));
+
+    let renderedPx = 0;
+    let firstPage = true;
+    while (renderedPx < canvas.height) {
+      const sliceHeight = Math.min(pxPerPage, canvas.height - renderedPx);
+      const slice = document.createElement('canvas');
+      slice.width = canvas.width;
+      slice.height = sliceHeight;
+      const ctx = slice.getContext('2d');
+      if (!ctx) throw new Error('تعذّر تجهيز صفحة PDF');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, slice.width, slice.height);
+      ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
+
+      if (!firstPage) doc.addPage();
+      doc.addImage(
+        slice.toDataURL('image/png'),
+        'PNG',
+        0,
+        0,
+        pageWidthMm,
+        (sliceHeight * pageWidthMm) / canvas.width
+      );
+      firstPage = false;
+      renderedPx += sliceHeight;
+    }
+
+    return doc.output('blob') as Blob;
+  } finally {
+    container.remove();
+  }
+}
+
+async function savePdfBlob(blob: Blob, fileName: string, shareTitle: string): Promise<string> {
+  const safeName = sanitizeFileName(fileName, 'document') + '.pdf';
+  const result = await saveFile({
+    fileName: safeName,
+    mimeType: 'application/pdf',
+    data: blob,
+    shareTitle
+  });
+  if (!result.ok && result.error !== 'CANCELLED') {
+    throw new Error(result.error || 'تعذّر حفظ ملف PDF');
+  }
+  return safeName;
+}
 
 export async function generateInvoicePDF(
   invoice: Invoice,
   items: InvoiceItem[],
   settings: OfficeSettings,
-  customer?: Customer
-) {
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: 'A4'
-  });
-
-  // For Arabic support, we need to handle RTL. jsPDF has limited Arabic support.
-  // We'll create a visually appealing invoice with English numbers but Arabic labels
-  // In production, you'd want to use a custom font with Arabic support
-
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 15;
-  let y = 20;
-
-  // Header - Office Info
-  if (settings.logo) {
-    try {
-      doc.addImage(settings.logo, 'PNG', margin, y, 30, 30);
-    } catch (e) {
-      console.warn('تعذّر إضافة الشعار إلى ملف PDF:', e);
-    }
-  }
-
-  doc.setFontSize(20);
-  doc.setFont('helvetica', 'bold');
-  doc.text(settings.officeName || 'المكتب الزراعي', pageWidth / 2, y + 10, { align: 'center' });
-  
-  y += 15;
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  if (settings.address) {
-    doc.text(settings.address, pageWidth / 2, y, { align: 'center' });
-    y += 5;
-  }
-  if (settings.phone) {
-    doc.text(`Phone: ${settings.phone}`, pageWidth / 2, y, { align: 'center' });
-    y += 5;
-  }
-  
-  y += 10;
-  doc.setLineWidth(0.5);
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 10;
-
-  // Invoice Title
-  doc.setFontSize(16);
-  doc.setFont('helvetica', 'bold');
-  const invoiceTitle = invoice.type === 'cash' ? 'فاتورة نقدية - Cash Invoice' : 'فاتورة آجلة - Credit Invoice';
-  doc.text(invoiceTitle, pageWidth / 2, y, { align: 'center' });
-  y += 10;
-
-  // Invoice Info
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Invoice No: ${invoice.invoiceNumber}`, margin, y);
-  doc.text(`Date: ${formatDate(invoice.date, true)}`, pageWidth - margin, y, { align: 'right' });
-  y += 7;
-  
-  doc.text(`Customer: ${invoice.customerName}`, margin, y);
-  if (customer?.phone) {
-    doc.text(`Phone: ${customer.phone}`, pageWidth - margin, y, { align: 'right' });
-  }
-  y += 7;
-  
-  if (customer?.address) {
-    doc.text(`Address: ${customer.address}`, margin, y);
-    y += 7;
-  }
-
-  y += 5;
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 10;
-
-  // Items Table Header
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.setFillColor(240, 240, 240);
-  doc.rect(margin, y - 6, pageWidth - 2 * margin, 10, 'F');
-  
-  doc.text('#', margin + 2, y);
-  doc.text('Item', margin + 10, y);
-  doc.text('Qty', pageWidth - margin - 60, y, { align: 'center' });
-  doc.text('Price', pageWidth - margin - 40, y, { align: 'center' });
-  doc.text('Total', pageWidth - margin - 10, y, { align: 'right' });
-  y += 8;
-
-  // Items
-  doc.setFont('helvetica', 'normal');
-  items.forEach((item, index) => {
-    if (y > 270) {
-      doc.addPage();
-      y = 20;
-    }
-    doc.text(`${index + 1}`, margin + 2, y);
-    doc.text(item.materialName.substring(0, 35), margin + 10, y);
-    doc.text(`${item.quantity}`, pageWidth - margin - 60, y, { align: 'center' });
-    doc.text(`${item.unitPrice.toLocaleString()}`, pageWidth - margin - 40, y, { align: 'center' });
-    doc.text(`${item.total.toLocaleString()}`, pageWidth - margin - 10, y, { align: 'right' });
-    y += 7;
-  });
-
-  y += 5;
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 10;
-
-  // Totals
-  doc.setFont('helvetica', 'bold');
-  doc.text(`Subtotal: ${invoice.subtotal.toLocaleString()} ${settings.currency}`, pageWidth - margin, y, { align: 'right' });
-  y += 7;
-  if (invoice.discount > 0) {
-    doc.text(`Discount: ${invoice.discount.toLocaleString()} ${settings.currency}`, pageWidth - margin, y, { align: 'right' });
-    y += 7;
-  }
-  doc.setFontSize(13);
-  doc.text(`TOTAL: ${invoice.total.toLocaleString()} ${settings.currency}`, pageWidth - margin, y, { align: 'right' });
-  y += 10;
-
-  // Payment info for credit
-  if (invoice.type === 'credit') {
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Paid: ${invoice.paidAmount.toLocaleString()} | Remaining: ${invoice.remaining.toLocaleString()}`, pageWidth - margin, y, { align: 'right' });
-    y += 10;
-  }
-
-  // Footer
-  if (settings.invoiceFooter) {
-    y += 10;
-    doc.setFontSize(9);
-    doc.text(settings.invoiceFooter, pageWidth / 2, y, { align: 'center' });
-  }
-
-  // Save
-  const fileName = `${invoice.invoiceNumber}_${invoice.customerName}.pdf`;
-  doc.save(fileName);
-  return fileName;
+  _customer?: Customer
+): Promise<string> {
+  void _customer;
+  const blob = await renderHtmlToPdfBlob(buildInvoicePrintHtml(invoice, items, settings), 'a4');
+  const fileName = `${invoice.invoiceNumber}_${invoice.customerName}`;
+  return savePdfBlob(blob, fileName, `فاتورة ${invoice.invoiceNumber}`);
 }
 
 export async function generateReceiptPDF(
   payment: Payment,
   settings: OfficeSettings,
   customerDebtAfter?: number
-) {
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: [80, 200] // Thermal printer size
-  });
-
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 5;
-  let y = 10;
-
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text(settings.officeName || 'المكتب الزراعي', pageWidth / 2, y, { align: 'center' });
-  y += 7;
-
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  if (settings.phone) {
-    doc.text(settings.phone, pageWidth / 2, y, { align: 'center' });
-    y += 4;
-  }
-
-  y += 3;
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 6;
-
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.text('وصل قبض - Payment Receipt', pageWidth / 2, y, { align: 'center' });
-  y += 8;
-
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Receipt No: ${payment.receiptNumber}`, margin, y);
-  y += 5;
-  doc.text(`Date: ${formatDate(payment.date, true)}`, margin, y);
-  y += 5;
-  doc.text(`Customer: ${payment.customerName}`, margin, y);
-  y += 5;
-  doc.text(`Amount: ${payment.amount.toLocaleString()} ${settings.currency}`, margin, y);
-  y += 8;
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text(`Paid: ${payment.amount.toLocaleString()} ${settings.currency}`, pageWidth / 2, y, { align: 'center' });
-  y += 6;
-
-  if (customerDebtAfter !== undefined) {
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Remaining Debt: ${customerDebtAfter.toLocaleString()} ${settings.currency}`, pageWidth / 2, y, { align: 'center' });
-    y += 6;
-  }
-
-  if (payment.notes) {
-    doc.text(`Notes: ${payment.notes}`, margin, y);
-    y += 5;
-  }
-
-  y += 5;
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 6;
-
-  doc.setFontSize(7);
-  doc.text('Thank you - شكرا لكم', pageWidth / 2, y, { align: 'center' });
-
-  const fileName = `${payment.receiptNumber}.pdf`;
-  doc.save(fileName);
-  return fileName;
+): Promise<string> {
+  const blob = await renderHtmlToPdfBlob(buildReceiptPrintHtml(payment, settings, customerDebtAfter), 'receipt80');
+  return savePdfBlob(blob, payment.receiptNumber, `وصل قبض ${payment.receiptNumber}`);
 }
 
 export async function generateCustomerStatementPDF(
@@ -228,78 +168,22 @@ export async function generateCustomerStatementPDF(
   payments: Payment[],
   settings: OfficeSettings,
   totalDebt: number
-) {
-  const doc = new jsPDF();
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 15;
-  let y = 20;
+): Promise<string> {
+  const blob = await renderHtmlToPdfBlob(
+    buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt),
+    'a4'
+  );
+  const fileName = `Statement_${customer.fullName}_${new Date().toISOString().slice(0, 10)}`;
+  return savePdfBlob(blob, fileName, `كشف حساب ${customer.fullName}`);
+}
 
-  doc.setFontSize(18);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`كشف حساب - ${customer.fullName}`, pageWidth / 2, y, { align: 'center' });
-  y += 10;
-
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Phone: ${customer.phone || '-'} | Address: ${customer.address || '-'}`, pageWidth / 2, y, { align: 'center' });
-  y += 8;
-  doc.text(`Total Remaining Debt: ${totalDebt.toLocaleString()} ${settings.currency}`, pageWidth / 2, y, { align: 'center' });
-  y += 10;
-
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 10;
-
-  // Invoices
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Invoices / الفواتير', margin, y);
-  y += 8;
-
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Date', margin, y);
-  doc.text('Invoice No', margin + 30, y);
-  doc.text('Type', margin + 70, y);
-  doc.text('Total', pageWidth - margin - 10, y, { align: 'right' });
-  y += 6;
-
-  doc.setFont('helvetica', 'normal');
-  invoices.forEach(inv => {
-    if (y > 270) {
-      doc.addPage();
-      y = 20;
-    }
-    doc.text(formatDate(inv.date), margin, y);
-    doc.text(inv.invoiceNumber, margin + 30, y);
-    doc.text(inv.type === 'cash' ? 'Cash' : 'Credit', margin + 70, y);
-    doc.text(`${inv.total.toLocaleString()}`, pageWidth - margin - 10, y, { align: 'right' });
-    y += 6;
-  });
-
-  y += 10;
-  doc.setFont('helvetica', 'bold');
-  doc.text('Payments / المدفوعات', margin, y);
-  y += 8;
-
-  doc.setFontSize(9);
-  doc.text('Date', margin, y);
-  doc.text('Receipt No', margin + 30, y);
-  doc.text('Amount', pageWidth - margin - 10, y, { align: 'right' });
-  y += 6;
-
-  doc.setFont('helvetica', 'normal');
-  payments.forEach(pay => {
-    if (y > 270) {
-      doc.addPage();
-      y = 20;
-    }
-    doc.text(formatDate(pay.date), margin, y);
-    doc.text(pay.receiptNumber, margin + 30, y);
-    doc.text(`${pay.amount.toLocaleString()}`, pageWidth - margin - 10, y, { align: 'right' });
-    y += 6;
-  });
-
-  const fileName = `Statement_${customer.fullName}_${new Date().toISOString().slice(0,10)}.pdf`;
-  doc.save(fileName);
-  return fileName;
+/** توليد PDF من أي مستند مبني مسبقاً (للمسودات والمعاينات). */
+export async function generatePdfFromBodyHtml(
+  bodyHtml: string,
+  fileName: string,
+  shareTitle: string,
+  format: PdfFormat = 'a4'
+): Promise<string> {
+  const blob = await renderHtmlToPdfBlob(bodyHtml, format);
+  return savePdfBlob(blob, fileName, shareTitle);
 }
