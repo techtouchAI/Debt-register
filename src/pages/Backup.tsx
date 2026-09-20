@@ -23,7 +23,7 @@ export function Backup() {
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState<number | null>(null);
-  const [stats, setStats] = useState({ materials: 0, customers: 0, invoices: 0, payments: 0, totalSize: 0 });
+  const [stats, setStats] = useState({ materials: 0, customers: 0, invoices: 0, payments: 0, purchases: 0, totalSize: 0 });
 
   const backups = useLiveQuery(() => db.backups.orderBy('date').reverse().toArray(), []);
   const snapshots = useLiveQuery(() => listSnapshots(), []);
@@ -39,15 +39,17 @@ export function Backup() {
 
   const loadStats = useCallback(async () => {
     try {
-      const [materials, customers, invoices, payments, invoiceItems] = await Promise.all([
+      const [materials, customers, invoices, payments, purchases, invoiceItems, purchaseItems] = await Promise.all([
         db.materials.count(),
         db.customers.count(),
         db.invoices.count(),
         db.payments.count(),
-        db.invoiceItems.count()
+        db.purchases.count(),
+        db.invoiceItems.count(),
+        db.purchaseItems.count()
       ]);
       // تقدير الحجم من عدد السجلات بدل تصدير القاعدة كاملة في كل فتح للصفحة
-      const estimatedRows = materials + customers + invoices + payments + invoiceItems;
+      const estimatedRows = materials + customers + invoices + payments + purchases + invoiceItems + purchaseItems;
       let totalSize = estimatedRows * 220;
       try {
         const estimate = await navigator.storage?.estimate?.();
@@ -55,7 +57,7 @@ export function Backup() {
       } catch {
         /* التقدير غير مدعوم — نستخدم الحساب التقريبي */
       }
-      setStats({ materials, customers, invoices, payments, totalSize });
+      setStats({ materials, customers, invoices, payments, purchases, totalSize });
     } catch (error) {
       reportError('Backup.stats', error, 'تعذّر حساب حجم البيانات');
     }
@@ -111,7 +113,7 @@ export function Backup() {
       const result = await importBackup(file);
       toast.success(
         'تم الاستيراد بنجاح',
-        `${result.counts.invoices} فاتورة • ${result.counts.customers} زبون • ${result.counts.payments} تسديد`
+        `${result.counts.invoices} فاتورة • ${result.counts.purchases} وصل شراء • ${result.counts.customers} زبون • ${result.counts.payments} تسديد`
       );
       if (result.warnings.length) toast.warning('تنبيهات أثناء الاستيراد', result.warnings.slice(0, 3).join(' | '));
       window.setTimeout(() => window.location.reload(), 1200);
@@ -159,7 +161,7 @@ export function Backup() {
   };
 
   const handleClearAllData = async () => {
-    if (!confirm('⚠️ تحذير خطير: هل أنت متأكد من حذف جميع البيانات نهائياً؟\n\nسيتم حذف:\n• جميع المواد\n• جميع العملاء\n• جميع الفواتير\n• جميع التسديدات\n\nلا يمكن التراجع عن هذا الإجراء!')) return;
+    if (!confirm('⚠️ تحذير خطير: هل أنت متأكد من حذف جميع البيانات نهائياً؟\n\nسيتم حذف:\n• جميع المواد\n• جميع العملاء\n• جميع الفواتير\n• جميع وصول الشراء\n• جميع التسديدات\n\nلا يمكن التراجع عن هذا الإجراء!')) return;
 
     const confirmText = prompt('للتأكيد، اكتب "حذف نهائي" بالضبط:');
     if (confirmText !== 'حذف نهائي') {
@@ -170,13 +172,15 @@ export function Backup() {
     try {
       await db.transaction(
         'rw',
-        [db.materials, db.customers, db.invoices, db.invoiceItems, db.payments, db.notifications, db.activityLogs],
+        [db.materials, db.customers, db.invoices, db.invoiceItems, db.payments, db.purchases, db.purchaseItems, db.notifications, db.activityLogs],
         async () => {
           await db.materials.clear();
           await db.customers.clear();
           await db.invoices.clear();
           await db.invoiceItems.clear();
           await db.payments.clear();
+          await db.purchases.clear();
+          await db.purchaseItems.clear();
           await db.notifications.clear();
           await db.activityLogs.clear();
         }
@@ -363,6 +367,7 @@ export function Backup() {
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">المواد</p><p className="font-bold text-lg">{stats.materials}</p></div>
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">العملاء</p><p className="font-bold text-lg">{stats.customers}</p></div>
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">الفواتير</p><p className="font-bold text-lg">{stats.invoices}</p></div>
+                <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">وصول الشراء</p><p className="font-bold text-lg">{stats.purchases}</p></div>
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">التسديدات</p><p className="font-bold text-lg">{stats.payments}</p></div>
               </div>
               <div className="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800/30 rounded-xl p-3">

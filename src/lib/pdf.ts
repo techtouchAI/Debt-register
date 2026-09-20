@@ -1,11 +1,12 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { OfficeSettings, Invoice, InvoiceItem, Payment, Customer } from '@/types';
+import { OfficeSettings, Invoice, InvoiceItem, Payment, Customer, Purchase, PurchaseItem } from '@/types';
 import {
   buildEmbeddableDocument,
   buildInvoicePrintHtml,
   buildReceiptPrintHtml,
-  buildCustomerStatementPrintHtml
+  buildCustomerStatementPrintHtml,
+  buildPurchasePrintHtml
 } from './print';
 import { saveFile } from './files';
 import { sanitizeFileName } from './utils';
@@ -175,6 +176,16 @@ export async function generateCustomerStatementPDF(
   );
   const fileName = `Statement_${customer.fullName}_${new Date().toISOString().slice(0, 10)}`;
   return savePdfBlob(blob, fileName, `كشف حساب ${customer.fullName}`);
+}
+
+export async function generatePurchasePDF(
+  purchase: Purchase,
+  items: PurchaseItem[],
+  settings: OfficeSettings
+): Promise<string> {
+  const blob = await renderHtmlToPdfBlob(buildPurchasePrintHtml(purchase, items, settings), 'a4');
+  const fileName = `${purchase.purchaseNumber}_${purchase.supplierName}`;
+  return savePdfBlob(blob, fileName, `وصل شراء ${purchase.purchaseNumber}`);
 }
 
 /** توليد PDF من أي مستند مبني مسبقاً (للمسودات والمعاينات). */

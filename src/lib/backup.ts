@@ -15,6 +15,8 @@ type TableKey =
   | 'invoices'
   | 'invoiceItems'
   | 'payments'
+  | 'purchases'
+  | 'purchaseItems'
   | 'notifications'
   | 'activityLogs';
 
@@ -22,7 +24,7 @@ type TableKey =
 const MAX_SNAPSHOTS = 5;
 
 export async function createBackup(): Promise<BackupData> {
-  const [settings, users, materials, customers, invoices, invoiceItems, payments, notifications, activityLogs] =
+  const [settings, users, materials, customers, invoices, invoiceItems, payments, purchases, purchaseItems, notifications, activityLogs] =
     await Promise.all([
       db.settings.toArray(),
       db.users.toArray(),
@@ -31,15 +33,17 @@ export async function createBackup(): Promise<BackupData> {
       db.invoices.toArray(),
       db.invoiceItems.toArray(),
       db.payments.toArray(),
+      db.purchases.toArray(),
+      db.purchaseItems.toArray(),
       db.notifications.toArray(),
       db.activityLogs.toArray()
     ]);
 
   return {
-    version: '1.1.0',
+    version: '1.2.0',
     date: new Date().toISOString(),
     officeName: settings[0]?.officeName,
-    data: { settings, users, materials, customers, invoices, invoiceItems, payments, notifications, activityLogs }
+    data: { settings, users, materials, customers, invoices, invoiceItems, payments, purchases, purchaseItems, notifications, activityLogs }
   };
 }
 
@@ -102,17 +106,21 @@ async function computeDataSignature(): Promise<string> {
     db.invoices.count(),
     db.invoiceItems.count(),
     db.payments.count(),
+    db.purchases.count(),
+    db.purchaseItems.count(),
     db.notifications.count(),
     db.activityLogs.count(),
     db.settings.count()
   ]);
   const lastInvoice = await db.invoices.orderBy('id').last();
   const lastPayment = await db.payments.orderBy('id').last();
+  const lastPurchase = await db.purchases.orderBy('id').last();
   const lastActivity = await db.activityLogs.orderBy('id').last();
   return [
     ...counts,
     lastInvoice?.updatedAt ?? lastInvoice?.createdAt ?? '',
     lastPayment?.createdAt ?? '',
+    lastPurchase?.createdAt ?? '',
     lastActivity?.timestamp ?? ''
   ].join('|');
 }
@@ -184,6 +192,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       db.invoices,
       db.invoiceItems,
       db.payments,
+      db.purchases,
+      db.purchaseItems,
       db.notifications,
       db.activityLogs
     ],
@@ -195,6 +205,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       await db.invoices.clear();
       await db.invoiceItems.clear();
       await db.payments.clear();
+      await db.purchases.clear();
+      await db.purchaseItems.clear();
       await db.notifications.clear();
       await db.activityLogs.clear();
 
@@ -205,6 +217,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       if (data.invoices.length) await db.invoices.bulkAdd(data.invoices);
       if (data.invoiceItems.length) await db.invoiceItems.bulkAdd(data.invoiceItems);
       if (data.payments.length) await db.payments.bulkAdd(data.payments);
+      if (data.purchases?.length) await db.purchases.bulkAdd(data.purchases);
+      if (data.purchaseItems?.length) await db.purchaseItems.bulkAdd(data.purchaseItems);
       if (data.notifications.length) await db.notifications.bulkAdd(data.notifications);
       if (data.activityLogs.length) await db.activityLogs.bulkAdd(data.activityLogs);
     }
@@ -234,6 +248,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       invoices: data.invoices.length,
       invoiceItems: data.invoiceItems.length,
       payments: data.payments.length,
+      purchases: data.purchases?.length ?? 0,
+      purchaseItems: data.purchaseItems?.length ?? 0,
       notifications: data.notifications.length,
       activityLogs: data.activityLogs.length
     }

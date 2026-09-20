@@ -4,9 +4,10 @@ import {
   buildCustomerStatementPrintHtml,
   buildInvoicePrintHtml,
   buildPrintDocument,
+  buildPurchasePrintHtml,
   buildReceiptPrintHtml
 } from '@/lib/print';
-import type { Customer, Invoice, InvoiceItem, Payment } from '@/types';
+import type { Customer, Invoice, InvoiceItem, Payment, Purchase, PurchaseItem } from '@/types';
 
 const settings = { ...DEFAULT_SETTINGS, officeName: 'مكتب الاختبار', phone: '0700000000', address: 'بغداد' };
 
@@ -73,6 +74,27 @@ describe('قوالب المستندات', () => {
     const statement = buildCustomerStatementPrintHtml(customer, [invoice], [payment], settings, 5000);
     expect(statement).toContain('كشف حساب الزبون');
     expect(statement).toContain('INV-1');
+  });
+
+  it('يبني وصل شراء بنفس قالب الطباعة والمعاينة', () => {
+    const purchase: Purchase = {
+      purchaseNumber: 'PUR-1',
+      supplierName: 'مورد الاختبار',
+      itemsCount: 1,
+      subtotal: 12000,
+      discount: 0,
+      total: 12000,
+      date: '2026-09-20T09:00:00.000Z',
+      createdAt: '2026-09-20T09:00:00.000Z',
+      paymentMethod: 'cash',
+      paidAmount: 12000,
+      remaining: 0
+    };
+    const purchaseItems: PurchaseItem[] = [{ purchaseId: 1, materialId: 1, materialName: 'مادة شراء', quantity: 2, purchasePrice: 6000, total: 12000 }];
+    const html = buildPurchasePrintHtml(purchase, purchaseItems, settings);
+    expect(html).toContain('PUR-1');
+    expect(html).toContain('وصل شراء');
+    expect(buildPrintDocument('PUR-1', html)).toContain('table-layout: fixed');
   });
 
   it('يبني وثيقة كاملة صالحة للمعاينة والطباعة', () => {

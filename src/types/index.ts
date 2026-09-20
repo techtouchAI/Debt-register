@@ -98,6 +98,35 @@ export interface Payment {
   invoiceId?: number;
 }
 
+export interface Purchase {
+  id?: number;
+  purchaseNumber: string;
+  supplierName: string;
+  itemsCount: number;
+  subtotal: number;
+  discount: number;
+  total: number;
+  date: string;
+  createdAt: string;
+  notes?: string;
+  /** طريقة الدفع عند الشراء */
+  paymentMethod: 'cash' | 'credit';
+  /** المبلغ المدفوع عند الشراء نقداً */
+  paidAmount: number;
+  /** المتبقي على المكتب للمورد */
+  remaining: number;
+}
+
+export interface PurchaseItem {
+  id?: number;
+  purchaseId: number;
+  materialId: number;
+  materialName: string;
+  quantity: number;
+  purchasePrice: number;
+  total: number;
+}
+
 export interface Notification {
   id?: number;
   title: string;
@@ -161,6 +190,8 @@ export interface BackupData {
     invoices: Invoice[];
     invoiceItems: InvoiceItem[];
     payments: Payment[];
+    purchases?: Purchase[];
+    purchaseItems?: PurchaseItem[];
     notifications: Notification[];
     activityLogs: ActivityLog[];
   };

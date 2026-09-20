@@ -122,15 +122,15 @@ export function Invoices() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">سجل المبيعات اليومي - قلب النظام</p>
         </div>
-        <Link to="/invoices/new">
-          <Button className="bg-primary-600 hover:bg-primary-700">
+        <Link to="/invoices/new" className="w-full lg:w-auto">
+          <Button className="bg-primary-600 hover:bg-primary-700 w-full lg:w-auto">
             <Plus className="w-4 h-4 ml-2" />
             فاتورة بيع جديدة
           </Button>
         </Link>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="border-0 shadow-md">
           <CardContent className="p-4">
             <p className="text-xs text-gray-500 dark:text-gray-400">إجمالي المبيعات</p>

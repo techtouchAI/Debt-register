@@ -113,6 +113,7 @@ export function Dashboard() {
 
   const quickActions = [
     { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null },
+    { title: 'وصل شراء جديد', desc: 'إدخال مواد وتحديث المخزن', icon: ShoppingCart, color: 'bg-gray-900 dark:bg-white', href: '/purchases/new', count: null },
     { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null },
     { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials },
     { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers },
@@ -134,8 +135,8 @@ export function Dashboard() {
         <div className="relative z-10">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
-              <h1 className="text-2xl lg:text-3xl font-bold mb-2">مرحباً بك في {settings?.officeName || 'المكتب الزراعي'} 🌾</h1>
-              <p className="text-white/80 text-sm lg:text-base">نظام إدارة متكامل يعمل بدون انترنت - جميع بياناتك آمنة ومحفوظة محلياً</p>
+              <h1 className="text-2xl lg:text-3xl font-bold mb-2">{settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'} 🌾</h1>
+              <p className="text-white/80 text-sm lg:text-base">نظام إدارة متكامل — جميع بياناتك آمنة ومحفوظة محلياً</p>
             </div>
             <div className="flex gap-2">
               <Link to="/invoices/new">
@@ -152,7 +153,7 @@ export function Dashboard() {
       {/* Quick Actions - Big Buttons */}
       <div>
         <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">إجراءات سريعة</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
           {quickActions.map((action, idx) => (
             <Link key={idx} to={action.href}>
               <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer group border-0 shadow-md h-full">

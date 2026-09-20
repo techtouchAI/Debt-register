@@ -78,3 +78,9 @@ export function nextReceiptNumber(date: Date = new Date()): Promise<string> {
   const prefix = `REC-${date.getFullYear()}-`;
   return allocate(db.payments as unknown as Table<Record<string, unknown>, number>, 'receiptNumber', prefix, 5);
 }
+
+/** رقم وصل شراء بصيغة PUR-YYYYMM-0001 حسب تاريخ الشراء. */
+export function nextPurchaseNumber(date: Date = new Date()): Promise<string> {
+  const prefix = `PUR-${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}-`;
+  return allocate(db.purchases as unknown as Table<Record<string, unknown>, number>, 'purchaseNumber', prefix, 4);
+}
