@@ -25,7 +25,7 @@ interface FirstRunSetupProps {
 export const SETUP_COMPLETED_KEY = 'office-setup-completed';
 
 export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
-  const [officeName, setOfficeName] = useState('');
+  const [officeName, setOfficeName] = useState(initial?.officeName || '');
   const [phone, setPhone] = useState(initial?.phone || '');
   const [address, setAddress] = useState(initial?.address || '');
   const [currency, setCurrency] = useState(initial?.currency || 'د.ع');

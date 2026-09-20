@@ -13,6 +13,9 @@ import { Customers } from '@/pages/Customers';
 import { Invoices } from '@/pages/Invoices';
 import { InvoiceForm } from '@/pages/InvoiceForm';
 import { InvoiceView } from '@/pages/InvoiceView';
+import { Purchases } from '@/pages/Purchases';
+import { PurchaseForm } from '@/pages/PurchaseForm';
+import { PurchaseView } from '@/pages/PurchaseView';
 import { Payments } from '@/pages/Payments';
 import { Reports } from '@/pages/Reports';
 import { Settings } from '@/pages/Settings';
@@ -24,6 +27,7 @@ import { setupAutoBackup } from '@/lib/backup';
 import { runStartupMaintenance } from '@/lib/maintenance';
 import { installGlobalErrorHandlers, reportError } from '@/lib/errors';
 import { initSystemNotifications } from '@/lib/notify';
+import type { OfficeSettings } from '@/types';
 
 type BootState =
   | { status: 'loading' }
@@ -65,6 +69,7 @@ function App() {
   // معالج التشغيل الأول: يظهر عندما لا يوجد اسم مكتب مُدخل (تثبيت جديد
   // أو نسخة مستوردة بلا اسم) — لا يُكتب أي اسم تلقائياً.
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [setupSettings, setSetupSettings] = useState<OfficeSettings | null>(null);
 
   useEffect(() => {
     installGlobalErrorHandlers();
@@ -87,6 +92,7 @@ function App() {
 
         const settings = await getSettings();
         if (!cancelled && !settings?.officeName?.trim()) {
+          setSetupSettings(settings || null);
           setNeedsSetup(true);
         }
       } catch (error) {
@@ -121,7 +127,7 @@ function App() {
   if (needsSetup) {
     return (
       <div dir="rtl" className="font-cairo">
-        <FirstRunSetup onDone={() => setNeedsSetup(false)} />
+        <FirstRunSetup initial={setupSettings} onDone={(saved) => { setSetupSettings(saved); setNeedsSetup(false); }} />
         <Toaster />
       </div>
     );
@@ -140,6 +146,10 @@ function App() {
           <Route path="/invoices/new" element={<InvoiceForm />} />
           <Route path="/invoices/:id" element={<InvoiceView />} />
           <Route path="/invoices/:id/edit" element={<InvoiceForm />} />
+          <Route path="/purchases" element={<Purchases />} />
+          <Route path="/purchases/new" element={<PurchaseForm />} />
+          <Route path="/purchases/:id" element={<PurchaseView />} />
+          <Route path="/purchases/:id/edit" element={<PurchaseForm />} />
           <Route path="/payments" element={<Payments />} />
           <Route path="/payments/new" element={<Payments />} />
           <Route path="/reports" element={<Reports />} />

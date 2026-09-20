@@ -7,6 +7,8 @@ import {
   Invoice,
   InvoiceItem,
   Payment,
+  Purchase,
+  PurchaseItem,
   Notification as AppNotification,
   ActivityLog,
   BackupMeta,
@@ -24,6 +26,8 @@ export class AgriOfficeDB extends Dexie {
   invoices!: Table<Invoice>;
   invoiceItems!: Table<InvoiceItem>;
   payments!: Table<Payment>;
+  purchases!: Table<Purchase>;
+  purchaseItems!: Table<PurchaseItem>;
   notifications!: Table<AppNotification>;
   activityLogs!: Table<ActivityLog>;
   backups!: Table<BackupMeta>;
@@ -155,6 +159,24 @@ export class AgriOfficeDB extends Dexie {
             item.total = toFiniteNumber(item.total, item.quantity * item.unitPrice);
           });
       });
+
+    // الإصدار 4: إضافة جداول المشتريات (وصل شراء) لإدخال المواد للمخزن.
+    this.version(4).stores({
+      settings: '++id',
+      users: '++id, name, role',
+      materials: '++id, name, category, quantity',
+      customers: '++id, fullName, phone',
+      invoices: '++id, invoiceNumber, customerId, type, date, customerName, createdAt, status',
+      invoiceItems: '++id, invoiceId, materialId',
+      payments: '++id, customerId, date, receiptNumber, createdAt',
+      purchases: '++id, purchaseNumber, supplierName, date, createdAt',
+      purchaseItems: '++id, purchaseId, materialId',
+      notifications: '++id, createdAt, relatedType, relatedId, code',
+      activityLogs: '++id, timestamp, entityType',
+      backups: '++id, date',
+      snapshots: '++id, date',
+      meta: '&key'
+    });
   }
 }
 
@@ -391,6 +413,22 @@ export async function checkLowStock(transaction?: Transaction): Promise<Material
       `المادة "${material.name}" أوشكت على النفاد. الكمية المتبقية: ${material.quantity}`,
       { type: 'warning', relatedId: material.id, relatedType: 'material', code: 'low-stock' }
     );
+  }
+
+  // عند إعادة تعبئة مادة يجب أن يختفي التنبيه القديم من عدّاد الجرس،
+  // وإلا سيبقى المستخدم يرى إشعاراً نشطاً رغم أن سبب التنبيه زال.
+  if (!transaction) {
+    const lowIds = new Set(lowStockMaterials.map((material) => material.id).filter((id): id is number => id !== undefined));
+    const activeLowStock = await db.notifications
+      .where('relatedType')
+      .equals('material')
+      .filter((notification) => notification.code === 'low-stock' && !notification.isRead)
+      .toArray();
+    for (const notification of activeLowStock) {
+      if (notification.relatedId !== undefined && !lowIds.has(notification.relatedId) && notification.id !== undefined) {
+        await db.notifications.update(notification.id, { isRead: true });
+      }
+    }
   }
 
   return lowStockMaterials;

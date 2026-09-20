@@ -8,6 +8,8 @@ import type {
   Material,
   OfficeSettings,
   Payment,
+  Purchase,
+  PurchaseItem,
   User
 } from '@/types';
 import { DEFAULT_SETTINGS } from './db';
@@ -258,6 +260,67 @@ function sanitizePayments(rows: unknown[], now: string, warnings: string[]): Pay
   return payments;
 }
 
+function sanitizePurchases(rows: unknown[], now: string, warnings: string[]): Purchase[] {
+  const purchases: Purchase[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) {
+      warnings.push('تم تجاهل سجل شراء غير صالح');
+      continue;
+    }
+    const total = asNumber(row.total);
+    const subtotal = asNumber(row.subtotal, total);
+    const discount = asNumber(row.discount);
+    const paidAmount = asNumber(row.paidAmount, total);
+    const remaining = asNumber(row.remaining, Math.max(0, total - paidAmount));
+    const date = asDate(row.date, now);
+    const method: Purchase['paymentMethod'] = row.paymentMethod === 'credit' ? 'credit' : 'cash';
+    purchases.push({
+      id: asId(row.id),
+      purchaseNumber: asString(row.purchaseNumber) || `PUR-RESTORED-${purchases.length + 1}`,
+      supplierName: asString(row.supplierName, 'مورد غير معروف'),
+      itemsCount: asNumber(row.itemsCount),
+      subtotal,
+      discount,
+      total,
+      date,
+      createdAt: asDate(row.createdAt, date),
+      notes: asString(row.notes) || undefined,
+      paymentMethod: method,
+      paidAmount: method === 'cash' ? total : Math.min(paidAmount, total),
+      remaining: method === 'cash' ? 0 : remaining
+    });
+  }
+  return purchases;
+}
+
+function sanitizePurchaseItems(rows: unknown[], warnings: string[]): PurchaseItem[] {
+  const items: PurchaseItem[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) {
+      warnings.push('تم تجاهل بند شراء غير صالح');
+      continue;
+    }
+    const purchaseId = asId(row.purchaseId);
+    const materialId = asId(row.materialId);
+    if (purchaseId === undefined || materialId === undefined) {
+      warnings.push('تم تجاهل بند شراء بلا ربط صحيح');
+      continue;
+    }
+    const quantity = asNumber(row.quantity);
+    const purchasePrice = asNumber(row.purchasePrice);
+    items.push({
+      id: asId(row.id),
+      purchaseId,
+      materialId,
+      materialName: asString(row.materialName, 'مادة'),
+      quantity,
+      purchasePrice,
+      total: asNumber(row.total, quantity * purchasePrice)
+    });
+  }
+  return items;
+}
+
 function sanitizeNotifications(rows: unknown[], now: string): AppNotification[] {
   const notifications: AppNotification[] = [];
   for (const row of rows) {
@@ -333,6 +396,8 @@ export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
       invoices: sanitizeInvoices(toArray(data.invoices), now, warnings),
       invoiceItems: sanitizeInvoiceItems(toArray(data.invoiceItems), warnings),
       payments: sanitizePayments(toArray(data.payments), now, warnings),
+      purchases: sanitizePurchases(toArray(data.purchases), now, warnings),
+      purchaseItems: sanitizePurchaseItems(toArray(data.purchaseItems), warnings),
       notifications: sanitizeNotifications(toArray(data.notifications), now),
       activityLogs: sanitizeActivityLogs(toArray(data.activityLogs), now)
     }
@@ -342,7 +407,8 @@ export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
     backup.data.materials.length > 0 ||
     backup.data.customers.length > 0 ||
     backup.data.invoices.length > 0 ||
-    backup.data.payments.length > 0;
+    backup.data.payments.length > 0 ||
+    (backup.data.purchases?.length ?? 0) > 0;
 
   if (!hasAnyData) {
     warnings.push('النسخة الاحتياطية لا تحتوي على أي سجلات بيانات');

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, DollarSign, Users, Package, TrendingUp, Download } from 'lucide-react';
+import { BarChart3, DollarSign, Users, Package, TrendingUp, Download, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,6 +41,7 @@ export function Reports() {
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
   const [searchMaterial, setSearchMaterial] = useState('');
   const [activeReport, setActiveReport] = useState<ReportKey>('cash');
+  const [isExporting, setIsExporting] = useState(false);
 
   const materials = useLiveQuery(() => db.materials.toArray(), []);
 
@@ -212,6 +213,12 @@ export function Reports() {
   const totalDebt = debtsReport.reduce((sum, d) => sum + d.debt, 0);
 
   const exportReport = async () => {
+    if (isExporting) return;
+    if (activeReport === 'materials' && !materialMovement) {
+      toast.warning('اختر مادة أولاً', 'حدد مادة لعرض تقرير حركتها ثم صدّر التقرير');
+      return;
+    }
+    setIsExporting(true);
     let data: unknown = {};
     let fileName = '';
 
@@ -284,6 +291,8 @@ export function Reports() {
       toast.success('تم تصدير التقرير', result.path || fileName);
     } catch (error) {
       reportError('Reports.export', error, 'تعذّر تصدير التقرير');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -297,11 +306,14 @@ export function Reports() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">تقارير شاملة لإدارة المكتب الزراعي</p>
         </div>
-        <Button variant="outline" onClick={exportReport}><Download className="w-4 h-4 ml-2" />تصدير التقرير</Button>
+        <Button variant="outline" onClick={exportReport} disabled={isExporting}>
+          {isExporting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Download className="w-4 h-4 ml-2" />}
+          {isExporting ? 'جاري التخزين…' : 'تصدير التقرير'}
+        </Button>
       </div>
 
       {/* Report Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-2">
+      <div className="flex gap-2 overflow-x-auto pb-2" role="tablist" aria-label="أنواع التقارير">
         {[
           { id: 'cash', label: 'حركة الصندوق', icon: DollarSign },
           { id: 'debts', label: 'الديون الشامل', icon: Users },
@@ -314,7 +326,9 @@ export function Reports() {
             variant={activeReport === tab.id ? 'default' : 'outline'}
             size="sm"
             onClick={() => setActiveReport(tab.id as ReportKey)}
-            className={activeReport === tab.id ? 'bg-primary-600' : ''}
+            className={`shrink-0 ${activeReport === tab.id ? 'bg-primary-600' : ''}`}
+            role="tab"
+            aria-selected={activeReport === tab.id}
           >
             <tab.icon className="w-4 h-4 ml-1" />
             {tab.label}

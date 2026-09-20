@@ -5,6 +5,7 @@ import {
   Package, 
   Users, 
   FileText, 
+  ClipboardList,
   CreditCard, 
   BarChart3, 
   Settings, 
@@ -30,7 +31,8 @@ const navigation = [
   { name: 'لوحة التحكم', href: '/', icon: LayoutDashboard },
   { name: 'المخزن والمواد', href: '/materials', icon: Package },
   { name: 'العملاء', href: '/customers', icon: Users },
-  { name: 'الفواتير', href: '/invoices', icon: FileText },
+  { name: 'الفواتير والمبيعات', href: '/invoices', icon: FileText },
+  { name: 'وصول الشراء', href: '/purchases', icon: ClipboardList },
   { name: 'التسديدات', href: '/payments', icon: CreditCard },
   { name: 'التقارير', href: '/reports', icon: BarChart3 },
   { name: 'النسخ الاحتياطي', href: '/backup', icon: Database },
@@ -111,7 +113,7 @@ export function Layout({ children }: LayoutProps) {
                 </div>
               )}
               <div>
-                <h1 className="font-bold text-gray-900 dark:text-white text-sm leading-tight">{settings?.officeName || 'المكتب الزراعي'}</h1>
+                <h1 className="font-bold text-gray-900 dark:text-white text-sm leading-tight">{settings?.officeName || 'إعداد المكتب مطلوب'}</h1>
                 <p className="text-xs text-gray-500 dark:text-gray-400">إدارة متكاملة</p>
               </div>
             </div>
@@ -149,10 +151,6 @@ export function Layout({ children }: LayoutProps) {
 
           {/* Footer */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
-            <div className="bg-gray-100/70 dark:bg-gray-800/40 rounded-xl p-4 border border-gray-200 dark:border-gray-700/60">
-              <p className="text-xs font-medium text-primary-800 dark:text-primary-300">نظام بدون انترنت</p>
-              <p className="text-[11px] text-primary-600 dark:text-primary-400 mt-1">جميع البيانات محفوظة محلياً وآمنة</p>
-            </div>
             <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-2">
               <span>الإصدار 1.0.0</span>
               <span>© 2024</span>
@@ -174,7 +172,6 @@ export function Layout({ children }: LayoutProps) {
                 <h2 className="font-bold text-gray-900 dark:text-white">
                   {navigation.find(n => n.href === location.pathname || (n.href !== '/' && location.pathname.startsWith(n.href)))?.name || 'لوحة التحكم'}
                 </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
               </div>
             </div>
 

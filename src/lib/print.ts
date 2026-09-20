@@ -1,5 +1,5 @@
 import { escapeHtml, formatDate } from './utils';
-import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment } from '@/types';
+import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase, PurchaseItem } from '@/types';
 
 /**
  * مستندات الطباعة والمعاينة وملفات PDF.
@@ -36,26 +36,26 @@ const DOCUMENT_CSS = `
 .doc h1, .doc h2, .doc h3, .doc p { margin: 0; }
 .doc .page { max-width: 770px; margin: 0 auto; background: #fff; }
 .doc-header { text-align: center; border-bottom: 2px solid #8f7048; padding-bottom: 12px; margin-bottom: 14px; }
-.doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.4; }
-.doc-header .sub { color: #6b7280; font-size: 12px; margin-top: 4px; }
+.doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.4; overflow-wrap: anywhere; }
+.doc-header .sub { color: #6b7280; font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .doc-header img { max-height: 60px; max-width: 180px; margin-top: 8px; object-fit: contain; }
 .doc-meta { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: space-between; margin-bottom: 14px; font-size: 13px; }
 .doc-meta .col { min-width: 0; }
 .doc-meta .pair { white-space: nowrap; }
 .doc-meta .pair .v { font-weight: 700; }
-.doc-meta .wrap { white-space: normal; word-break: normal; overflow-wrap: break-word; }
+.doc-meta .wrap { white-space: normal; word-break: normal; overflow-wrap: anywhere; }
 .doc table.grid { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 14px; font-size: 13px; }
 .doc table.grid th, .doc table.grid td { border: 1px solid #d1d5db; padding: 7px 8px; vertical-align: top; }
 .doc table.grid thead th { background: #f0fdf4; font-size: 12.5px; }
 .doc table.grid tbody tr { break-inside: avoid; page-break-inside: avoid; }
-.doc table.grid td.name { word-break: normal; overflow-wrap: break-word; }
+.doc table.grid td.name { word-break: normal; overflow-wrap: anywhere; }
 .doc .num { white-space: nowrap; direction: ltr; unicode-bidi: embed; font-variant-numeric: tabular-nums; }
 .doc .c { text-align: center; }
 .doc .l { text-align: left; }
 .doc .totals { text-align: left; border-top: 2px solid #8f7048; padding-top: 10px; font-size: 13px; }
 .doc .totals p { white-space: nowrap; }
 .doc .totals .grand { font-size: 17px; font-weight: 800; color: #8f7048; }
-.doc .notes { margin-top: 10px; font-size: 12px; color: #4b5563; word-break: normal; overflow-wrap: break-word; }
+.doc .notes { margin-top: 10px; font-size: 12px; color: #4b5563; word-break: normal; overflow-wrap: anywhere; }
 .doc .doc-footer { text-align: center; margin-top: 20px; padding-top: 10px; border-top: 1px dashed #d1d5db; color: #6b7280; font-size: 12px; }
 .doc .section-title { font-size: 14px; font-weight: 800; margin: 0 0 6px; }
 .doc .balance { font-size: 15px; font-weight: 800; white-space: nowrap; }
@@ -64,7 +64,7 @@ const DOCUMENT_CSS = `
 .doc.receipt h2 { font-size: 17px; }
 .doc.receipt hr { border: 0; border-top: 1px dashed #9ca3af; margin: 10px 0; }
 .doc.receipt .lines { text-align: right; line-height: 2; }
-.doc.receipt .lines p { word-break: normal; overflow-wrap: break-word; }
+.doc.receipt .lines p { word-break: normal; overflow-wrap: anywhere; }
 .doc.receipt .amount { font-size: 18px; font-weight: 800; color: #8f7048; white-space: nowrap; }
 .doc.receipt .muted { color: #6b7280; font-size: 12px; }
 @media print {
@@ -353,4 +353,72 @@ export async function printCustomerStatement(
     `كشف حساب - ${customer.fullName}`,
     buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt)
   );
+}
+
+export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): string {
+  const currency = escapeHtml(settings.currency || '');
+  const rows = items
+    .map(
+      (item, index) => `
+        <tr>
+          <td class="c num">${index + 1}</td>
+          <td class="name">${escapeHtml(item.materialName)}</td>
+          <td class="c num">${escapeHtml(item.quantity)}</td>
+          <td class="c num">${escapeHtml(item.purchasePrice.toLocaleString('ar-IQ'))}</td>
+          <td class="l num">${escapeHtml(item.total.toLocaleString('ar-IQ'))}</td>
+        </tr>`
+    )
+    .join('');
+
+  const methodText = purchase.paymentMethod === 'cash' ? 'نقدي' : 'آجل';
+
+  return `
+    <div class="doc"><div class="page">
+      <div class="doc-header">
+        <h1>${escapeHtml(settings.officeName)}</h1>
+        ${settings.logo ? `<img src="${escapeHtml(settings.logo)}" alt="" />` : ''}
+        <p class="sub">${escapeHtml(settings.address || '')}${settings.address && settings.phone ? ' | ' : ''}<span class="num">${escapeHtml(settings.phone || '')}</span></p>
+        <h2 style="font-size:16px; margin-top:8px; color:#8f7048;">وصل شراء / إدخال مخزن</h2>
+      </div>
+
+      <div class="doc-meta">
+        <div class="col">
+          <p class="pair">رقم الوصل: <span class="v num">${escapeHtml(purchase.purchaseNumber)}</span></p>
+          <p class="wrap">المورد: <strong>${escapeHtml(purchase.supplierName)}</strong></p>
+          <p class="pair">طريقة الدفع: <span class="v">${methodText}</span></p>
+        </div>
+        <div class="col">
+          <p class="pair">التاريخ: <span class="v">${escapeHtml(formatDate(purchase.date, true))}</span></p>
+          <p class="pair">عدد المواد: <span class="v">${purchase.itemsCount}</span></p>
+        </div>
+      </div>
+
+      <table class="grid">
+        <colgroup>
+          <col style="width:8%" />
+          <col style="width:42%" />
+          <col style="width:13%" />
+          <col style="width:17%" />
+          <col style="width:20%" />
+        </colgroup>
+        <thead>
+          <tr><th class="c">#</th><th>المادة</th><th class="c">الكمية</th><th class="c">سعر الشراء</th><th class="l">الإجمالي</th></tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="5" class="c" style="color:#6b7280;">لا توجد مواد</td></tr>'}</tbody>
+      </table>
+
+      <div class="totals">
+        <p>المجموع: <span class="num">${escapeHtml(purchase.subtotal.toLocaleString('ar-IQ'))}</span> ${currency}</p>
+        ${purchase.discount > 0 ? `<p>الخصم: <span class="num">${escapeHtml(purchase.discount.toLocaleString('ar-IQ'))}</span> ${currency}</p>` : ''}
+        <p class="grand">الإجمالي: <span class="num">${escapeHtml(purchase.total.toLocaleString('ar-IQ'))}</span> ${currency}</p>
+        ${purchase.paymentMethod === 'credit' ? `<p>المدفوع: <span class="num">${escapeHtml(purchase.paidAmount.toLocaleString('ar-IQ'))}</span> | المتبقي على المكتب: <span class="num">${escapeHtml(purchase.remaining.toLocaleString('ar-IQ'))}</span></p>` : ''}
+      </div>
+
+      ${purchase.notes ? `<p class="notes">ملاحظات: ${escapeHtml(purchase.notes)}</p>` : ''}
+      ${settings.invoiceFooter ? `<div class="doc-footer">${escapeHtml(settings.invoiceFooter)}</div>` : ''}
+    </div></div>`;
+}
+
+export async function printPurchase(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): Promise<boolean> {
+  return printHtmlDocument(purchase.purchaseNumber, buildPurchasePrintHtml(purchase, items, settings));
 }
