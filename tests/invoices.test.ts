@@ -291,6 +291,43 @@ describe('أرقام الفواتير', () => {
 });
 
 describe('الفواتير الآجلة ودفعة المقدمة', () => {
+  it('ينقل الدفعة المقدمة مع الفاتورة عند تغيير الزبون ولا يخلط التسديدات', async () => {
+    const firstCustomerId = await addCustomer('الزبون الأول');
+    const secondCustomerId = await addCustomer('الزبون الثاني');
+    const materialId = await addMaterial({ name: 'مادة النقل', quantity: 20 });
+    const created = await saveInvoice({
+      type: 'credit',
+      customerId: firstCustomerId,
+      customerName: 'الزبون الأول',
+      dateISO,
+      discount: 0,
+      paidAmount: 4000,
+      items: [{ materialId, materialName: 'مادة النقل', quantity: 5, unitPrice: 2000 }]
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const updated = await saveInvoice({
+      id: created.invoiceId,
+      type: 'credit',
+      customerId: secondCustomerId,
+      customerName: 'الزبون الثاني',
+      dateISO,
+      discount: 0,
+      paidAmount: 3000,
+      items: [{ materialId, materialName: 'مادة النقل', quantity: 5, unitPrice: 2000 }]
+    });
+    expect(updated.ok).toBe(true);
+    expect((await db.payments.toArray())[0]).toMatchObject({
+      customerId: secondCustomerId,
+      amount: 3000,
+      invoiceId: created.invoiceId,
+      source: 'downpayment'
+    });
+    expect((await getCustomerBalance(firstCustomerId)).debt).toBe(0);
+    expect((await getCustomerBalance(secondCustomerId)).debt).toBe(7000);
+  });
+
   it('يسجّل دفعة المقدمة كوصل قبض ويوزع المسدد على أقدم فاتورة', async () => {
     const customerId = await addCustomer('زبون آجل');
     const materialId = await addMaterial({ name: 'سماد', quantity: 100 });

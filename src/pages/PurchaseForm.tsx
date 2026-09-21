@@ -10,7 +10,7 @@ import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDia
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { getPurchaseWithItems, savePurchase, computePurchaseTotals, type PurchaseDraft } from '@/lib/purchases';
 import { buildPurchasePrintHtml } from '@/lib/print';
-import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import type { Material, OfficeSettings, Purchase } from '@/types';
@@ -154,12 +154,18 @@ export function PurchaseForm() {
       toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل لوصل الشراء');
       return;
     }
+    const dateISO = toISOStringOrNull(date);
+    if (!dateISO) {
+      toast.warning('تاريخ غير صالح', 'اختر تاريخ ووقت الوصل ثم أعد المحاولة');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const draft: PurchaseDraft = {
         id: isEdit ? purchaseId : undefined,
         supplierName,
-        dateISO: new Date(date).toISOString(),
+        dateISO,
         discount: safeDiscount,
         paymentMethod,
         paidAmount: safePaid,
@@ -193,6 +199,11 @@ export function PurchaseForm() {
       toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل قبل المعاينة');
       return;
     }
+    const previewDate = toISOStringOrNull(date);
+    if (!previewDate) {
+      toast.warning('تاريخ غير صالح', 'اختر تاريخ ووقت الوصل ثم أعد المعاينة');
+      return;
+    }
     try {
       const s = settings || await getSettingsOrDefault();
       const previewPurchase: Purchase = {
@@ -202,7 +213,7 @@ export function PurchaseForm() {
         subtotal,
         discount: safeDiscount,
         total,
-        date: new Date(date).toISOString(),
+        date: previewDate,
         createdAt: new Date().toISOString(),
         paymentMethod,
         paidAmount: safePaid,

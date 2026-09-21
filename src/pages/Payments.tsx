@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { CreditCard, Plus, Search, Printer, Download, Trash2, DollarSign, User, FileText, Eye } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,13 +13,14 @@ import { generateReceiptPDF } from '@/lib/pdf';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatCurrency, formatDate, formatLocalDateInput, formatLocalDateTimeInput, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { formatCurrency, formatDate, formatLocalDateInput, formatLocalDateTimeInput, isSameLocalDay, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { Customer, Payment } from '@/types';
 
 export function Payments() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const [currency, setCurrency] = useState('د.ع');
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -63,11 +64,17 @@ export function Payments() {
 
   useEffect(() => {
     let cancelled = false;
-    const customerId = searchParams.get('customerId');
-    if (!customerId) return;
+    const customerIdText = searchParams.get('customerId');
+    const customerId = customerIdText ? Number(customerIdText) : NaN;
+
+    // /payments/new هو إجراء سريع مستقل، وليس مجرد مسار فارغ. إذا وُجد
+    // customerId نملأ الزبون بعد التحقق من أن المعرّف صالح وموجود.
+    if (location.pathname === '/payments/new' && !cancelled) setShowForm(true);
+    if (!Number.isInteger(customerId) || customerId <= 0) return () => { cancelled = true; };
+
     void (async () => {
       try {
-        const customer = await db.customers.get(Number(customerId));
+        const customer = await db.customers.get(customerId);
         if (customer && !cancelled) {
           setSelectedCustomer(customer);
           setShowForm(true);
@@ -79,7 +86,7 @@ export function Payments() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [location.pathname, searchParams]);
 
   const filteredCustomers = (customers ?? [])
     .filter((customer) => {
@@ -120,12 +127,18 @@ export function Payments() {
       if (!confirmed) return;
     }
 
+    const dateISO = toISOStringOrNull(date);
+    if (!dateISO) {
+      toast.warning('تاريخ غير صالح', 'اختر تاريخ ووقت التسديد ثم أعد المحاولة');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const result = await savePayment({
         customerId: selectedCustomer.id,
         amount: value,
-        dateISO: new Date(date).toISOString(),
+        dateISO,
         method,
         notes
       });
@@ -140,9 +153,15 @@ export function Payments() {
         `رقم الوصل: ${result.receiptNumber} • المتبقي: ${formatCurrency(Math.max(0, result.debtAfter), currency)}`
       );
 
-      const s = await getSettingsOrDefault();
-      await generateReceiptPDF(result.payment, s, Math.max(0, result.debtAfter));
+      // الحفظ هو العملية الأساسية؛ فشل تجهيز PDF لا يعني أن التسديد
+      // فشل ولا ينبغي أن يترك النموذج يوحي بعكس ذلك.
       closeForm();
+      try {
+        const s = await getSettingsOrDefault();
+        await generateReceiptPDF(result.payment, s, Math.max(0, result.debtAfter));
+      } catch (pdfError) {
+        reportError('Payments.pdfAfterSave', pdfError, 'تم حفظ التسديد لكن تعذّر تجهيز الوصل');
+      }
     } catch (error) {
       reportError('Payments.save', error, 'حدث خطأ أثناء حفظ التسديد');
     } finally {

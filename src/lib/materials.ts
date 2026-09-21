@@ -79,6 +79,8 @@ export async function createMaterial(input: Partial<MaterialInput>): Promise<Mat
 
   const settings = await getSettingsOrDefault();
   const value = validation.value;
+  const duplicate = await findMaterialByName(value.name);
+  if (duplicate) return { ok: false, error: `المادة "${duplicate.name}" موجودة مسبقاً` };
   const now = new Date().toISOString();
 
   // الحد الافتراضي يُطبَّق فقط عند عدم إدخال قيمة — الصفر الصريح يعني "بلا تنبيه"
@@ -116,8 +118,13 @@ export async function updateMaterial(id: number, input: Partial<MaterialInput>):
   const existing = await db.materials.get(id);
   if (!existing) return { ok: false, error: 'المادة غير موجودة' };
 
-  const validation = validateMaterialInput(input);
+  // Partial input يعني "حدّث الحقول المرسلة"؛ لا نمسح الحقول الاختيارية
+  // القديمة لمجرد أن استدعاءً آخر لم يرسلها.
+  const validation = validateMaterialInput({ ...existing, ...input });
   if (!validation.ok) return validation;
+
+  const duplicate = await findMaterialByName(validation.value.name);
+  if (duplicate && duplicate.id !== id) return { ok: false, error: `المادة "${duplicate.name}" موجودة مسبقاً` };
 
   const now = new Date().toISOString();
   const record: Material = {
@@ -135,6 +142,36 @@ export async function updateMaterial(id: number, input: Partial<MaterialInput>):
   await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
 
   return { ok: true, material, id };
+}
+
+/** حذف مادة غير مرتبطة بفواتير أو وصول شراء. */
+export async function deleteMaterial(id: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, error: 'معرّف المادة غير صالح' };
+
+  const result = await db.transaction('rw', [db.materials, db.invoiceItems, db.purchaseItems], async () => {
+    const material = await db.materials.get(id);
+    if (!material) return { ok: false as const, error: 'المادة غير موجودة' };
+
+    const [invoiceUses, purchaseUses] = await Promise.all([
+      db.invoiceItems.where('materialId').equals(id).count(),
+      db.purchaseItems.where('materialId').equals(id).count()
+    ]);
+    if (invoiceUses > 0 || purchaseUses > 0) {
+      return {
+        ok: false as const,
+        error: `لا يمكن حذف المادة: مرتبطة بـ ${invoiceUses} فاتورة و${purchaseUses} وصل شراء`
+      };
+    }
+
+    await db.materials.delete(id);
+    return { ok: true as const, material };
+  });
+
+  if (!result.ok) return result;
+  await logActivity('حذف مادة', `تم حذف المادة: ${result.material.name}`, 'material', id).catch((error) =>
+    console.warn('تعذّر تسجيل النشاط:', error)
+  );
+  return { ok: true };
 }
 
 /** هل توجد مادة بنفس الاسم؟ (لمنع التكرار عند الإضافة السريعة) */

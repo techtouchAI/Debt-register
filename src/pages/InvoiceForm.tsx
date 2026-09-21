@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
 import { buildInvoicePrintHtml } from '@/lib/print';
-import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { Material, Customer, OfficeSettings, Invoice } from '@/types';
@@ -82,7 +82,15 @@ export function InvoiceForm() {
           setDiscount(toFiniteNumber(invoice.discount));
           setNotes(invoice.notes || '');
           setDate(formatLocalDateTimeInput(new Date(invoice.date)));
-          setPaidAmount(toFiniteNumber(invoice.paidAmount));
+
+          // paidAmount في الفاتورة هو مجموع كل التسديدات الموزعة، وليس
+          // بالضرورة الدفعة المقدمة التي يسمح هذا النموذج بتعديلها. عرض
+          // الدفعة المرتبطة فقط يمنع تحويل تسديد يدوي قديم إلى دفعة مقدمة.
+          const downPayment = invoice.downPaymentId
+            ? await db.payments.get(invoice.downPaymentId)
+            : undefined;
+          if (cancelled) return;
+          setPaidAmount(downPayment?.source === 'downpayment' ? toFiniteNumber(downPayment.amount) : 0);
 
           const linkedCustomer = invoice.customerId ? await db.customers.get(invoice.customerId) : undefined;
           if (cancelled) return;
@@ -231,6 +239,12 @@ export function InvoiceForm() {
       return;
     }
 
+    const dateISO = toISOStringOrNull(date);
+    if (!dateISO) {
+      toast.warning('تاريخ غير صالح', 'اختر تاريخ ووقت الفاتورة ثم أعد المحاولة');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const draft: InvoiceDraft = {
@@ -238,7 +252,7 @@ export function InvoiceForm() {
         type: invoiceType,
         customerId: selectedCustomer?.id,
         customerName,
-        dateISO: new Date(date).toISOString(),
+        dateISO,
         discount: safeDiscount,
         paidAmount: invoiceType === 'credit' ? safePaid : 0,
         notes,
@@ -278,6 +292,11 @@ export function InvoiceForm() {
       toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل قبل المعاينة');
       return;
     }
+    const previewDate = toISOStringOrNull(date);
+    if (!previewDate) {
+      toast.warning('تاريخ غير صالح', 'اختر تاريخ ووقت الفاتورة ثم أعد المعاينة');
+      return;
+    }
     try {
       const s = await getSettingsOrDefault();
       const previewInvoice: Invoice = {
@@ -291,7 +310,7 @@ export function InvoiceForm() {
         total,
         paidAmount: invoiceType === 'cash' ? total : safePaid,
         remaining,
-        date: new Date(date).toISOString(),
+        date: previewDate,
         createdAt: new Date().toISOString(),
         notes: notes.trim() ? notes.trim() : undefined,
         status: invoiceType === 'cash' ? 'paid' : remaining <= 0 ? 'paid' : safePaid > 0 ? 'partial' : 'unpaid'
@@ -378,7 +397,13 @@ export function InvoiceForm() {
                     <Input
                       placeholder={invoiceType === 'cash' ? 'اسم الزبون (عابر أو مسجل)' : 'اختر زبون مسجل للآجل...'}
                       value={searchCustomer || customerName}
-                      onChange={(e) => { setSearchCustomer(e.target.value); setCustomerName(e.target.value); setShowCustomerList(true); }}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setSearchCustomer(value);
+                        setCustomerName(value);
+                        if (selectedCustomer && value !== selectedCustomer.fullName) setSelectedCustomer(null);
+                        setShowCustomerList(true);
+                      }}
                       onFocus={() => setShowCustomerList(true)}
                       onBlur={() => window.setTimeout(() => setShowCustomerList(false), 150)}
                       className="pr-10"
@@ -598,6 +623,7 @@ export function InvoiceForm() {
         open={showQuickAdd}
         initialName={quickAddName}
         currency={settings?.currency}
+        defaultMinQuantity={settings?.lowStockThreshold}
         onClose={() => setShowQuickAdd(false)}
         onCreated={handleQuickAddCreated}
       />

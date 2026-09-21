@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   FileText, 
@@ -19,29 +19,19 @@ import { Badge } from '@/components/ui/badge';
 import { db, getSettings, checkLowStock } from '@/lib/db';
 import { getCustomerBalances } from '@/lib/debts';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatCurrency, formatLocalDateInput, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
-import { reportError } from '@/lib/errors';
-import { OfficeSettings } from '@/types';
-
+import { formatCurrency, formatLocalDateInput, getStockStatus, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
 export function Dashboard() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
-  const [stats, setStats] = useState({
-    totalMaterials: 0,
-    totalCustomers: 0,
-    totalInvoices: 0,
-    totalDebt: 0,
-    todayCash: 0,
-    todayInvoices: 0,
-    lowStock: 0,
-    totalPayments: 0
-  });
+  const settings = useLiveQuery(() => getSettings(), []);
+  const today = formatLocalDateInput();
 
   const recentInvoices = useLiveQuery(() => db.invoices.orderBy('createdAt').reverse().limit(5).toArray(), []);
 
   const lowStockMaterials = useLiveQuery(async () => {
-    const s = await getSettings();
-    const threshold = toFiniteNumber(s?.lowStockThreshold, 5);
-    return db.materials.where('quantity').belowOrEqual(threshold).limit(5).toArray();
+    const all = await db.materials.toArray();
+    return all
+      .filter((material) => getStockStatus(material.quantity, material.minQuantity) !== 'normal')
+      .sort((a, b) => a.quantity - b.quantity)
+      .slice(0, 5);
   }, []);
 
   const topDebtors = useLiveQuery(async () => {
@@ -53,63 +43,59 @@ export function Dashboard() {
       .slice(0, 5);
   }, []);
 
-  const today = formatLocalDateInput();
+  // الإحصاءات كانت تُحمّل مرة واحدة فقط عند دخول لوحة التحكم، فتظل قديمة
+  // بعد حفظ فاتورة أو تسديد. جعلها live query يربط العرض مباشرة بقاعدة
+  // البيانات ويمنع ترتيباً خاطئاً بين الحفظ والتحديث البصري.
+  const stats = useLiveQuery(async () => {
+    const [materials, customersCount, invoices, payments, balances] = await Promise.all([
+      db.materials.toArray(),
+      db.customers.count(),
+      db.invoices.toArray(),
+      db.payments.toArray(),
+      getCustomerBalances()
+    ]);
+    const totalDebt = roundMoney(
+      Array.from(balances.values()).reduce((sum, balance) => sum + (balance.debt > 0 ? balance.debt : 0), 0)
+    );
+    const todayInvoicesList = invoices.filter((invoice) => isSameLocalDay(invoice.date, today));
+    const todayCash = roundMoney(
+      todayInvoicesList
+        .filter((invoice) => invoice.type === 'cash')
+        .reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0) +
+        payments
+          .filter((payment) => isSameLocalDay(payment.date, today))
+          .reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0)
+    );
+    return {
+      totalMaterials: materials.length,
+      totalCustomers: customersCount,
+      totalInvoices: invoices.length,
+      totalDebt,
+      todayCash,
+      todayInvoices: todayInvoicesList.length,
+      lowStock: materials.filter((material) => getStockStatus(material.quantity, material.minQuantity) !== 'normal').length,
+      totalPayments: roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0))
+    };
+  }, [today]) ?? {
+    totalMaterials: 0,
+    totalCustomers: 0,
+    totalInvoices: 0,
+    totalDebt: 0,
+    todayCash: 0,
+    todayInvoices: 0,
+    lowStock: 0,
+    totalPayments: 0
+  };
 
   useEffect(() => {
     let cancelled = false;
-
-    const loadData = async () => {
-      try {
-        const s = await getSettings();
-        const [materials, customersCount, invoices, payments] = await Promise.all([
-          db.materials.toArray(),
-          db.customers.count(),
-          db.invoices.toArray(),
-          db.payments.toArray()
-        ]);
-        if (cancelled) return;
-
-        const threshold = toFiniteNumber(s?.lowStockThreshold, 5);
-        const balances = await getCustomerBalances();
-        if (cancelled) return;
-
-        const totalDebt = roundMoney(
-          Array.from(balances.values()).reduce((sum, balance) => sum + (balance.debt > 0 ? balance.debt : 0), 0)
-        );
-
-        const todayInvoicesList = invoices.filter((invoice) => isSameLocalDay(invoice.date, today));
-        const todayCash = roundMoney(
-          todayInvoicesList
-            .filter((invoice) => invoice.type === 'cash')
-            .reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0) +
-            payments
-              .filter((payment) => isSameLocalDay(payment.date, today))
-              .reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0)
-        );
-
-        setSettings(s || null);
-        setStats({
-          totalMaterials: materials.length,
-          totalCustomers: customersCount,
-          totalInvoices: invoices.length,
-          totalDebt,
-          todayCash,
-          todayInvoices: todayInvoicesList.length,
-          lowStock: materials.filter((material) => toFiniteNumber(material.quantity) <= threshold).length,
-          totalPayments: roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0))
-        });
-      } catch (error) {
-        if (!cancelled) reportError('Dashboard.loadData', error, 'تعذّر تحميل بيانات لوحة التحكم');
-      }
-    };
-
-    void loadData();
-    void checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
-
+    void checkLowStock().catch((error) => {
+      if (!cancelled) console.warn('تعذّر فحص المخزون:', error);
+    });
     return () => {
       cancelled = true;
     };
-  }, [today]);
+  }, [settings?.lowStockThreshold]);
 
   const quickActions = [
     { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null },

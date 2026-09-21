@@ -52,18 +52,23 @@ export function validateInvoiceDraft(draft: InvoiceDraft): { ok: true } | { ok: 
   if (!customerName) return { ok: false, error: 'يرجى إدخال اسم الزبون' };
   if (!Array.isArray(draft.items) || draft.items.length === 0) return { ok: false, error: 'يرجى إضافة مواد للفاتورة' };
   if (draft.type !== 'cash' && draft.type !== 'credit') return { ok: false, error: 'نوع الفاتورة غير صالح' };
-  if (draft.type === 'credit' && typeof draft.customerId !== 'number') {
+  if (draft.type === 'credit' && (!Number.isInteger(draft.customerId) || (draft.customerId as number) <= 0)) {
     return { ok: false, error: 'الفواتير الآجلة يجب أن ترتبط بزبون مسجل' };
   }
-  if (!Number.isFinite(new Date(draft.dateISO).getTime())) {
+  if (typeof draft.dateISO !== 'string' || !Number.isFinite(new Date(draft.dateISO).getTime())) {
     return { ok: false, error: 'تاريخ الفاتورة غير صالح' };
   }
-  if (!Number.isFinite(toFiniteNumber(draft.discount, NaN)) || toFiniteNumber(draft.discount) < 0) {
+  const discount = toFiniteNumber(draft.discount, NaN);
+  if (!Number.isFinite(discount) || discount < 0) {
     return { ok: false, error: 'قيمة الخصم غير صالحة' };
+  }
+  const paidAmount = toFiniteNumber(draft.paidAmount, NaN);
+  if (!Number.isFinite(paidAmount) || paidAmount < 0) {
+    return { ok: false, error: 'قيمة الدفعة المقدمة غير صالحة' };
   }
 
   for (const item of draft.items) {
-    if (typeof item.materialId !== 'number') return { ok: false, error: 'أحد المواد غير مرتبطة بالمخزن' };
+    if (!Number.isInteger(item.materialId) || item.materialId <= 0) return { ok: false, error: 'أحد المواد غير مرتبطة بالمخزن' };
     const quantity = toFiniteNumber(item.quantity, NaN);
     if (!Number.isFinite(quantity) || quantity <= 0) {
       return { ok: false, error: `الكمية غير صالحة للمادة "${item.materialName || item.materialId}"` };
@@ -154,7 +159,7 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
   const validation = validateInvoiceDraft(draft);
   if (!validation.ok) return validation;
 
-  const isEdit = typeof draft.id === 'number';
+  const isEdit = Number.isInteger(draft.id) && (draft.id as number) > 0;
   const customerName = draft.customerName.trim();
   const { subtotal, discount, total } = computeInvoiceTotals(draft.items, draft.discount);
   const dateISO = new Date(draft.dateISO).toISOString();
@@ -162,9 +167,17 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
   // db.meta ضمن النطاق لأن مولّد الأرقام التسلسلية يحفظ علامته فيه
   const result = await db.transaction(
     'rw',
-    [db.invoices, db.invoiceItems, db.materials, db.payments, db.meta],
+    [db.invoices, db.invoiceItems, db.materials, db.payments, db.customers, db.meta],
     async (): Promise<InvoiceSaveResult> => {
       const now = new Date().toISOString();
+
+      if (draft.customerId !== undefined) {
+        if (!Number.isInteger(draft.customerId) || draft.customerId <= 0) {
+          return { ok: false, error: 'معرّف الزبون غير صالح' };
+        }
+        const linkedCustomer = await db.customers.get(draft.customerId);
+        if (!linkedCustomer) return { ok: false, error: 'الزبون المرتبط بالفاتورة غير موجود' };
+      }
 
       const existing = isEdit ? await db.invoices.get(draft.id as number) : undefined;
       if (isEdit && !existing) return { ok: false, error: 'الفاتورة المطلوب تعديلها غير موجودة' };
@@ -301,12 +314,14 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
         type: draft.type
       });
 
-      /* --- 6) إعادة توزيع المسددات على فواتير الزبون --- */
-      if (draft.type === 'credit' && typeof draft.customerId === 'number') {
-        await reallocateCustomerInvoices(draft.customerId);
-      }
-      if (isEdit && existing?.customerId && existing.customerId !== draft.customerId) {
-        await reallocateCustomerInvoices(existing.customerId);
+      /* --- 6) إعادة توزيع المسددات على كل الزبائن المتأثرين --- */
+      // يلزم ذلك حتى عند تحويل فاتورة آجلة إلى نقدية، أو نقلها من زبون
+      // لآخر؛ وإلا يبقى رصيد الفاتورة القديمة مخزناً على الزبون السابق.
+      const affectedCustomerIds = new Set<number>();
+      if (typeof draft.customerId === 'number') affectedCustomerIds.add(draft.customerId);
+      if (isEdit && typeof existing?.customerId === 'number') affectedCustomerIds.add(existing.customerId);
+      for (const customerId of affectedCustomerIds) {
+        await reallocateCustomerInvoices(customerId);
       }
 
       const saved = (await db.invoices.get(invoiceId)) as Invoice;
@@ -370,11 +385,11 @@ async function syncDownPayment(args: {
   if (!shouldKeep) {
     if (existingDownPaymentId !== undefined) {
       const linked = await db.payments.get(existingDownPaymentId);
-      if (linked?.source === 'downpayment') {
-        await db.payments.delete(existingDownPaymentId);
-        await db.invoices.update(invoiceId, { downPaymentId: undefined });
-      }
+      if (linked?.source === 'downpayment') await db.payments.delete(existingDownPaymentId);
     }
+    // لا نترك مرجعاً ميتاً إذا كانت النسخة القديمة تشير إلى سجل قبض
+    // محذوف أو تغيّر نوع الفاتورة إلى نقدية.
+    await db.invoices.update(invoiceId, { downPaymentId: undefined });
     return;
   }
 
@@ -382,13 +397,16 @@ async function syncDownPayment(args: {
 
   if (existingDownPaymentId !== undefined) {
     const linked = await db.payments.get(existingDownPaymentId);
-    if (linked?.source === 'downpayment') {
+    if (linked?.source === 'downpayment' && linked.invoiceId === invoiceId) {
       await db.payments.update(existingDownPaymentId, {
+        customerId: customerId as number,
+        customerName,
         amount: downPayment,
         date: dateISO,
-        customerName,
         notes,
-        createdAt: linked.createdAt
+        createdAt: linked.createdAt,
+        source: 'downpayment',
+        invoiceId
       });
       return;
     }
@@ -470,6 +488,7 @@ export async function deleteInvoice(invoiceId: number): Promise<InvoiceDeleteRes
   await logActivity('حذف فاتورة', `تم حذف الفاتورة: ${invoiceNumber}`, 'invoice', invoiceId).catch((error) =>
     console.warn('تعذّر تسجيل النشاط:', error)
   );
+  await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
 
   return { ok: true };
 }

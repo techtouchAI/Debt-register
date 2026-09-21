@@ -366,6 +366,59 @@ function sanitizeActivityLogs(rows: unknown[], now: string): ActivityLog[] {
   return logs;
 }
 
+function reconcileBackupReferences(backup: BackupData, warnings: string[]): void {
+  const customerIds = new Set(backup.data.customers.map((customer) => customer.id).filter((id): id is number => id !== undefined));
+  const materialIds = new Set(backup.data.materials.map((material) => material.id).filter((id): id is number => id !== undefined));
+  const purchaseIds = new Set(backup.data.purchases?.map((purchase) => purchase.id).filter((id): id is number => id !== undefined));
+
+  backup.data.invoices = backup.data.invoices.filter((invoice) => {
+    if (invoice.type === 'credit' && invoice.customerId !== undefined && !customerIds.has(invoice.customerId)) {
+      warnings.push(`تم تجاهل فاتورة آجلة بلا زبون مرتبط: ${invoice.invoiceNumber}`);
+      return false;
+    }
+    if (invoice.customerId !== undefined && !customerIds.has(invoice.customerId)) {
+      warnings.push(`أزيل ربط زبون غير موجود من الفاتورة: ${invoice.invoiceNumber}`);
+      invoice.customerId = undefined;
+    }
+    return true;
+  });
+
+  const validInvoiceIds = new Set(backup.data.invoices.map((invoice) => invoice.id).filter((id): id is number => id !== undefined));
+  backup.data.invoiceItems = backup.data.invoiceItems.filter((item) => {
+    if (!validInvoiceIds.has(item.invoiceId) || !materialIds.has(item.materialId)) {
+      warnings.push('تم تجاهل بند فاتورة بمرجع غير موجود');
+      return false;
+    }
+    return true;
+  });
+
+  backup.data.payments = backup.data.payments.filter((payment) => {
+    if (!customerIds.has(payment.customerId)) {
+      warnings.push(`تم تجاهل تسديد لزبون غير موجود: ${payment.receiptNumber}`);
+      return false;
+    }
+    return true;
+  });
+
+  const paymentIds = new Set(backup.data.payments.map((payment) => payment.id).filter((id): id is number => id !== undefined));
+  for (const invoice of backup.data.invoices) {
+    if (invoice.downPaymentId !== undefined && !paymentIds.has(invoice.downPaymentId)) {
+      warnings.push(`أزيلت دفعة مقدمة غير موجودة من الفاتورة: ${invoice.invoiceNumber}`);
+      invoice.downPaymentId = undefined;
+    }
+  }
+
+  if (backup.data.purchases) {
+    backup.data.purchaseItems = (backup.data.purchaseItems ?? []).filter((item) => {
+      if (!purchaseIds.has(item.purchaseId) || !materialIds.has(item.materialId)) {
+        warnings.push('تم تجاهل بند شراء بمرجع غير موجود');
+        return false;
+      }
+      return true;
+    });
+  }
+}
+
 export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
   if (!isRecord(input)) {
     return { ok: false, error: 'الملف ليس نسخة احتياطية صالحة (بنية JSON غير متوقعة)' };
@@ -402,6 +455,8 @@ export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
       activityLogs: sanitizeActivityLogs(toArray(data.activityLogs), now)
     }
   };
+
+  reconcileBackupReferences(backup, warnings);
 
   const hasAnyData =
     backup.data.materials.length > 0 ||

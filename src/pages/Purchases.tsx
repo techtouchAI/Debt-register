@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ClipboardList, Download, Edit, Eye, FileText, Plus, Printer, Search, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -13,10 +13,9 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
-import type { OfficeSettings } from '@/types';
 
 export function Purchases() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
+  const settings = useLiveQuery(() => getSettingsOrDefault(), []);
   const [search, setSearch] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -26,10 +25,6 @@ export function Purchases() {
     if (!query) return all;
     return all.filter((purchase) => purchase.purchaseNumber.toLowerCase().includes(query) || purchase.supplierName.toLowerCase().includes(query));
   }, [search]);
-
-  useEffect(() => {
-    void getSettingsOrDefault().then(setSettings).catch((error) => reportError('Purchases.settings', error, 'تعذّر تحميل الإعدادات'));
-  }, []);
 
   const handlePrint = async (id: number) => {
     if (busyId !== null) return;

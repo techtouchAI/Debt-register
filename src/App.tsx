@@ -96,7 +96,11 @@ function App() {
           setNeedsSetup(true);
         }
       } catch (error) {
-        reportError('app.init', error, 'تعذّر تهيئة التطبيق');
+        if (!cancelled) {
+          reportError('app.init', error, 'تعذّر تهيئة التطبيق');
+          setBoot({ status: 'storage-error', error: 'تعذّرت تهيئة قاعدة البيانات. أعد تحميل التطبيق وحاول مرة أخرى.' });
+        }
+        return;
       }
 
       if (!cancelled) setBoot({ status: 'ready' });

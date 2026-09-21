@@ -32,6 +32,19 @@ export function toFiniteNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback
 }
 
+/**
+ * تحويل قيمة تاريخ إلى ISO بأمان.
+ * لا ينبغي استدعاء Date#toISOString مباشرة من حقول الإدخال، لأن الحقل
+ * يمكن أن يكون فارغاً أو غير مكتمل أثناء التحرير، وعندها يرمي المتصفح
+ * RangeError ويبدو للمستخدم أن زر الحفظ لا يعمل.
+ */
+export function toISOStringOrNull(value: string | Date | number | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' && !value.trim()) return null
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null
+}
+
 /** هل القيمة رقماً موجباً (> 0)؟ */
 export function isPositiveNumber(value: unknown): boolean {
   return Number.isFinite(Number(value)) && Number(value) > 0
@@ -71,8 +84,19 @@ export function formatLocalDateTimeInput(date: Date = new Date()): string {
 export function parseLocalDate(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value?.trim() ?? '')
   if (!match) return null
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-  return Number.isNaN(date.getTime()) ? null : date
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(year, month - 1, day)
+  // Date يحوّل 2026-02-31 إلى تاريخ آخر بدلاً من اعتباره غير صالح؛
+  // لا نسمح بهذا التحويل الصامت في التقارير أو البحث بالتاريخ.
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) return null
+  return date
 }
 
 /** بداية اليوم محلياً. */
@@ -162,6 +186,15 @@ export function getStockStatus(quantity: number, minQuantity: number): 'out' | '
   if (qty <= 0) return 'out'
   if (min > 0 && qty <= min) return 'low'
   return 'normal'
+}
+
+/**
+ * نفس قاعدة المخزون المستخدمة في الواجهة والتنبيهات والتقارير.
+ * توحيدها يمنع أن يظهر الصنف منخفضاً في صفحة ولا يظهر في الجرس بسبب
+ * استخدام حد المكتب في مسار وحدّ المادة في مسار آخر.
+ */
+export function isLowStock(quantity: number, minQuantity: number): boolean {
+  return getStockStatus(quantity, minQuantity) !== 'normal'
 }
 
 export function getStockStatusColor(status: 'out' | 'low' | 'normal'): string {

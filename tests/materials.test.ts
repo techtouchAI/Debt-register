@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { db } from '@/lib/db';
+import { db, checkLowStock } from '@/lib/db';
 import { createMaterial, updateMaterial, findMaterialByName, validateMaterialInput } from '@/lib/materials';
 
 describe('التحقق من مدخلات المواد', () => {
@@ -20,6 +20,17 @@ describe('التحقق من مدخلات المواد', () => {
 });
 
 describe('إنشاء وتحديث المواد', () => {
+  it('يستخدم الحد الخاص بالمادة عند فحص المخزون لا حد المكتب فقط', async () => {
+    const now = new Date().toISOString();
+    await db.materials.bulkAdd([
+      { name: 'حد خاص منخفض', quantity: 10, salePrice: 1, minQuantity: 12, createdAt: now, updatedAt: now },
+      { name: 'حد خاص طبيعي', quantity: 10, salePrice: 1, minQuantity: 2, createdAt: now, updatedAt: now }
+    ]);
+    const low = await checkLowStock();
+    expect(low.map((material) => material.name)).toEqual(['حد خاص منخفض']);
+    expect((await db.notifications.where('code').equals('low-stock').toArray()).map((n) => n.message)).toHaveLength(1);
+  });
+
   it('ينشئ مادة مع سجل نشاط وتنبيه عند انخفاض الكمية', async () => {
     const result = await createMaterial({ name: 'مبيد عناكب', quantity: 2, salePrice: 5000, minQuantity: 5 });
     expect(result.ok).toBe(true);

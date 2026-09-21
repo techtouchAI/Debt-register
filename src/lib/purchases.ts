@@ -1,6 +1,6 @@
 import { db, checkLowStock, getSettingsOrDefault, logActivity } from './db';
 import { nextPurchaseNumber } from './sequence';
-import { formatCurrency, roundMoney, toFiniteNumber } from './utils';
+import { formatCurrency, roundMoney, toFiniteNumber, toISOStringOrNull } from './utils';
 import type { Material, Purchase, PurchaseItem } from '@/types';
 
 /**
@@ -45,12 +45,18 @@ export function validatePurchaseDraft(draft: PurchaseDraft): { ok: true } | { ok
   if (draft.paymentMethod !== 'cash' && draft.paymentMethod !== 'credit') {
     return { ok: false, error: 'طريقة الدفع غير صالحة' };
   }
-  if (!Number.isFinite(new Date(draft.dateISO).getTime())) return { ok: false, error: 'تاريخ الوصل غير صالح' };
+  if (typeof draft.dateISO !== 'string' || !Number.isFinite(new Date(draft.dateISO).getTime())) return { ok: false, error: 'تاريخ الوصل غير صالح' };
   if (!Number.isFinite(toFiniteNumber(draft.discount, NaN)) || toFiniteNumber(draft.discount) < 0) {
     return { ok: false, error: 'قيمة الخصم غير صالحة' };
   }
+  if (!Number.isFinite(toFiniteNumber(draft.paidAmount, NaN)) || toFiniteNumber(draft.paidAmount) < 0) {
+    return { ok: false, error: 'قيمة المدفوع غير صالحة' };
+  }
 
   for (const item of draft.items) {
+    if (item.materialId !== undefined && (!Number.isInteger(item.materialId) || item.materialId <= 0)) {
+      return { ok: false, error: 'معرّف المادة غير صالح' };
+    }
     const name = (item.materialName ?? '').trim();
     if (!name) return { ok: false, error: 'اسم المادة مطلوب لكل بند' };
     const qty = toFiniteNumber(item.quantity, NaN);
@@ -84,9 +90,10 @@ function normalizedName(name: string): string {
  * خارج معاملة الشراء، وقد تجعل معاملة Dexie غير نشطة أثناء الإنشاء.
  */
 async function resolveMaterialInTransaction(item: PurchaseDraftItem, now: string, defaultMinQuantity: number): Promise<Material> {
-  if (typeof item.materialId === 'number') {
+  if (item.materialId !== undefined) {
     const existing = await db.materials.get(item.materialId);
     if (existing) return existing;
+    throw new Error(`المادة المرتبطة بالوصل غير موجودة (رقم ${item.materialId})`);
   }
 
   const wanted = normalizedName(item.materialName);
@@ -117,7 +124,8 @@ export async function savePurchase(draft: PurchaseDraft): Promise<PurchaseSaveRe
   const isEdit = typeof draft.id === 'number';
   const supplierName = draft.supplierName.trim();
   const { subtotal, discount, total } = computePurchaseTotals(draft.items, draft.discount);
-  const dateISO = new Date(draft.dateISO).toISOString();
+  const dateISO = toISOStringOrNull(draft.dateISO);
+  if (!dateISO) return { ok: false, error: 'تاريخ الوصل غير صالح' };
 
   const result = await db.transaction(
     'rw',
@@ -275,6 +283,7 @@ export async function deletePurchase(purchaseId: number): Promise<{ ok: true } |
 
   if (result.ok) {
     await logActivity('حذف وصل شراء', `تم حذف وصل الشراء رقم ${purchaseId}`, 'purchase', purchaseId).catch(() => undefined);
+    await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
   }
   return result;
 }

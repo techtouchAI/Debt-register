@@ -19,9 +19,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, countUnreadNotifications } from '@/lib/db';
-import { reportError } from '@/lib/errors';
+import { getStockStatus } from '@/lib/utils';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { OfficeSettings } from '@/types';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -41,44 +40,29 @@ const navigation = [
 
 export function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [isDark, setIsDark] = useState(false);
   const location = useLocation();
 
+  // useLiveQuery يضمن أن اسم المكتب والعملة والشعار يتغيرون في التخطيط
+  // والفواتير فور نجاح حفظ الإعدادات، بلا إعادة تشغيل التطبيق.
+  const liveSettings = useLiveQuery(() => getSettings(), []);
+  const settings = liveSettings ?? null;
+
   const unreadNotifications = useLiveQuery(() => countUnreadNotifications(), []) || 0;
   const lowStockCount = useLiveQuery(async () => {
-    const s = await getSettings();
-    const threshold = s?.lowStockThreshold || 5;
-    return await db.materials.where('quantity').belowOrEqual(threshold).count();
+    const materials = await db.materials.toArray();
+    return materials.filter((material) => getStockStatus(material.quantity, material.minQuantity) !== 'normal').length;
   }, []) || 0;
 
   useEffect(() => {
-    let cancelled = false;
-
-    const loadSettings = async () => {
-      try {
-        const s = await getSettings();
-        if (!cancelled && s) setSettings(s);
-      } catch (error) {
-        if (!cancelled) reportError('Layout.settings', error, 'تعذّر تحميل الإعدادات');
-      }
-    };
-
-    void loadSettings();
-
     try {
       const savedTheme = localStorage.getItem('theme');
-      if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        setIsDark(true);
-        document.documentElement.classList.add('dark');
-      }
+      const shouldUseDark = savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      setIsDark(shouldUseDark);
+      document.documentElement.classList.toggle('dark', shouldUseDark);
     } catch {
       /* التخزين المحلي غير متاح */
     }
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   const toggleTheme = () => {

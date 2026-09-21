@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Settings as SettingsIcon, Building, Image, Moon, Sun, Save, Upload, Trash2, User, Shield, Database } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,8 +20,14 @@ export function Settings() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [userForm, setUserForm] = useState({ name: '', pin: '', role: 'sales' as 'admin' | 'sales' });
+  const formEditedRef = useRef(false);
 
   const users = useLiveQuery(() => db.users.toArray(), []);
+
+  const patchFormData = (patch: Partial<OfficeSettings>) => {
+    formEditedRef.current = true;
+    setFormData((current) => ({ ...current, ...patch }));
+  };
 
   const closeUserForm = () => {
     setShowUserForm(false);
@@ -37,7 +43,9 @@ export function Settings() {
       try {
         const s = await getSettings();
         if (cancelled) return;
-        if (s) setFormData(s);
+        // لا تستبدل ما يكتبه المستخدم إذا اكتملت الاستجابة بعد بدء التحرير؛
+        // السباق القديم كان يعيد نسخة قديمة من الاسم فوق الحقل.
+        if (s && !formEditedRef.current) setFormData(s);
       } catch (error) {
         if (!cancelled) reportError('Settings.load', error, 'تعذّر تحميل الإعدادات');
       }
@@ -73,9 +81,12 @@ export function Settings() {
         lowStockThreshold: Math.max(0, toFiniteNumber(formData.lowStockThreshold, 5)),
         autoBackupInterval: Math.max(5, toFiniteNumber(formData.autoBackupInterval, 60))
       });
-      await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب');
+      await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب').catch((error) =>
+        console.warn('تعذّر تسجيل نشاط الإعدادات:', error)
+      );
       const s = await getSettings();
       if (s) setFormData(s);
+      formEditedRef.current = false;
       toast.success('تم حفظ الإعدادات');
     } catch (error) {
       reportError('Settings.save', error, 'تعذّر حفظ الإعدادات');
@@ -98,7 +109,7 @@ export function Settings() {
     }
     try {
       const base64 = await fileToBase64(file);
-      setFormData({ ...formData, logo: base64 });
+      patchFormData({ logo: base64 });
     } catch (error) {
       reportError('Settings.logo', error, 'تعذّر قراءة الصورة');
     }
@@ -110,11 +121,11 @@ export function Settings() {
     if (newTheme) {
       document.documentElement.classList.add('dark');
       localStorage.setItem('theme', 'dark');
-      setFormData({ ...formData, theme: 'dark' });
+      patchFormData({ theme: 'dark' });
     } else {
       document.documentElement.classList.remove('dark');
       localStorage.setItem('theme', 'light');
-      setFormData({ ...formData, theme: 'light' });
+      patchFormData({ theme: 'light' });
     }
   };
 
@@ -213,16 +224,16 @@ export function Settings() {
                 <div className="flex-1 space-y-4">
                   <div>
                     <label className="text-sm font-medium mb-1 block">اسم المكتب الزراعي *</label>
-                    <Input placeholder="مثلاً: مكتب الرافدين الزراعي" value={formData.officeName || ''} onChange={(e) => setFormData({ ...formData, officeName: e.target.value })} />
+                    <Input placeholder="مثلاً: مكتب الرافدين الزراعي" value={formData.officeName || ''} onChange={(e) => patchFormData({ officeName: e.target.value })} />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="text-sm font-medium mb-1 block">رقم الهاتف</label>
-                      <Input placeholder="07xxxxxxxx" value={formData.phone || ''} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} dir="ltr" />
+                      <Input placeholder="07xxxxxxxx" value={formData.phone || ''} onChange={(e) => patchFormData({ phone: e.target.value })} dir="ltr" />
                     </div>
                     <div>
                       <label className="text-sm font-medium mb-1 block">العملة</label>
-                      <select value={formData.currency || 'د.ع'} onChange={(e) => setFormData({ ...formData, currency: e.target.value })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                      <select value={formData.currency || 'د.ع'} onChange={(e) => patchFormData({ currency: e.target.value })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                         <option value="د.ع">دينار عراقي (د.ع)</option>
                         <option value="$">$ دولار أمريكي</option>
                         <option value="ر.س">ريال سعودي</option>
@@ -233,11 +244,11 @@ export function Settings() {
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">العنوان</label>
-                    <Input placeholder="المحافظة - المنطقة - الشارع" value={formData.address || ''} onChange={(e) => setFormData({ ...formData, address: e.target.value })} />
+                    <Input placeholder="المحافظة - المنطقة - الشارع" value={formData.address || ''} onChange={(e) => patchFormData({ address: e.target.value })} />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">تذييل الفاتورة</label>
-                    <Input placeholder="شكراً لتعاملكم معنا..." value={formData.invoiceFooter || ''} onChange={(e) => setFormData({ ...formData, invoiceFooter: e.target.value })} />
+                    <Input placeholder="شكراً لتعاملكم معنا..." value={formData.invoiceFooter || ''} onChange={(e) => patchFormData({ invoiceFooter: e.target.value })} />
                   </div>
                 </div>
 
@@ -247,7 +258,7 @@ export function Settings() {
                     {formData.logo ? (
                       <div className="space-y-3">
                         <img src={formData.logo} alt="Logo" className="w-24 h-24 mx-auto rounded-xl object-cover border" />
-                        <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => setFormData({ ...formData, logo: undefined })}><Trash2 className="w-3 h-3 ml-1" />حذف الشعار</Button>
+                        <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => patchFormData({ logo: undefined })}><Trash2 className="w-3 h-3 ml-1" />حذف الشعار</Button>
                       </div>
                     ) : (
                       <div className="py-6">
@@ -274,17 +285,17 @@ export function Settings() {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه (افتراضي)</label>
-                <Input type="number" min="1" value={formData.lowStockThreshold || 5} onChange={(e) => setFormData({ ...formData, lowStockThreshold: Number(e.target.value) })} />
+                <Input type="number" min="0" value={formData.lowStockThreshold ?? 5} onChange={(e) => patchFormData({ lowStockThreshold: Number(e.target.value) })} />
                 <p className="text-[11px] text-gray-500 mt-1">عند وصول الكمية لهذا الحد يظهر تنبيه نفاد</p>
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">النسخ الاحتياطي التلقائي</label>
                 <div className="flex gap-2">
-                  <select value={formData.autoBackupEnabled ? 'yes' : 'no'} onChange={(e) => setFormData({ ...formData, autoBackupEnabled: e.target.value === 'yes' })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                  <select value={formData.autoBackupEnabled ? 'yes' : 'no'} onChange={(e) => patchFormData({ autoBackupEnabled: e.target.value === 'yes' })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                     <option value="yes">مفعل</option>
                     <option value="no">معطل</option>
                   </select>
-                  <select value={formData.autoBackupInterval || 60} onChange={(e) => setFormData({ ...formData, autoBackupInterval: Number(e.target.value) })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                  <select value={formData.autoBackupInterval || 60} onChange={(e) => patchFormData({ autoBackupInterval: Number(e.target.value) })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                     <option value="30">كل 30 دقيقة</option>
                     <option value="60">كل ساعة</option>
                     <option value="120">كل ساعتين</option>

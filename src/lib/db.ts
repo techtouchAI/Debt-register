@@ -15,7 +15,7 @@ import {
   BackupSnapshot,
   AppMeta
 } from '@/types';
-import { toFiniteNumber } from './utils';
+import { getStockStatus, toFiniteNumber } from './utils';
 import { sendSystemNotification as dispatchSystemNotification } from './notify';
 
 export class AgriOfficeDB extends Dexie {
@@ -253,27 +253,31 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
  * ------------------------------------------------------------------ */
 
 export async function initializeDB() {
-  const settingsCount = await db.settings.count();
-  if (settingsCount === 0) {
-    await db.settings.add({ ...DEFAULT_SETTINGS });
-  } else {
-    // استكمال أي إعدادات ناقصة في قواعد البيانات القديمة حتى لا تنكسر الشاشات
-    const existing = await db.settings.toCollection().first();
-    if (existing) {
-      const merged: OfficeSettings = { ...DEFAULT_SETTINGS, ...existing };
-      await db.settings.put({ ...merged, id: existing.id });
+  // الإعدادات والمستخدم الافتراضي جزء من عملية الإقلاع نفسها؛ وضعهما في
+  // معاملة واحدة يمنع أن تبدأ الواجهة بقاعدة نصف مهيأة إذا انقطع التخزين.
+  await db.transaction('rw', [db.settings, db.users], async () => {
+    const settingsCount = await db.settings.count();
+    if (settingsCount === 0) {
+      await db.settings.add({ ...DEFAULT_SETTINGS });
+    } else {
+      // استكمال أي إعدادات ناقصة في قواعد البيانات القديمة حتى لا تنكسر الشاشات
+      const existing = await db.settings.toCollection().first();
+      if (existing) {
+        const merged: OfficeSettings = { ...DEFAULT_SETTINGS, ...existing };
+        await db.settings.put({ ...merged, id: existing.id });
+      }
     }
-  }
 
-  const usersCount = await db.users.count();
-  if (usersCount === 0) {
-    await db.users.add({
-      name: 'المدير',
-      role: 'admin',
-      pin: '1234',
-      createdAt: new Date().toISOString()
-    });
-  }
+    const usersCount = await db.users.count();
+    if (usersCount === 0) {
+      await db.users.add({
+        name: 'المدير',
+        role: 'admin',
+        pin: '1234',
+        createdAt: new Date().toISOString()
+      });
+    }
+  });
 }
 
 export async function getSettings(): Promise<OfficeSettings | undefined> {
@@ -290,13 +294,35 @@ export async function getSettingsOrDefault(): Promise<OfficeSettings> {
 }
 
 export async function updateSettings(updates: Partial<OfficeSettings>): Promise<void> {
-  const settings = await getSettings();
-  const { id: _ignoredId, ...changes } = updates;
-  if (settings?.id !== undefined) {
-    await db.settings.update(settings.id, changes);
-    return;
+  const changes: Partial<OfficeSettings> = { ...updates };
+  // لا نستخدم sanitizeFileName هنا: اسم المكتب قيمة عرض رسمية ويجب أن
+  // تُحفظ كاملة، بما فيها المسافات والأحرف العربية داخل الاسم. التنظيف
+  // المسموح به هنا هو إزالة الفراغات الخارجية فقط.
+  delete changes.id;
+  if (Object.prototype.hasOwnProperty.call(changes, 'officeName')) {
+    if (typeof changes.officeName !== 'string') {
+      throw new Error('اسم المكتب غير صالح');
+    }
+    changes.officeName = changes.officeName.trim();
   }
-  await db.settings.add({ ...DEFAULT_SETTINGS, ...changes });
+  if (Object.prototype.hasOwnProperty.call(changes, 'phone') && typeof changes.phone !== 'string') {
+    throw new Error('رقم الهاتف غير صالح');
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, 'address') && typeof changes.address !== 'string') {
+    throw new Error('عنوان المكتب غير صالح');
+  }
+
+  // القراءة والتحديث/الإنشاء في معاملة واحدة تمنع سباق الحفظ بين شاشة
+  // الإعدادات ومعالج التشغيل الأول، وهو سبب شائع لظهور اسم ناقص بعد
+  // إعادة فتح الصفحة.
+  await db.transaction('rw', db.settings, async () => {
+    const settings = await db.settings.toCollection().first();
+    if (settings?.id !== undefined) {
+      await db.settings.update(settings.id, changes);
+      return;
+    }
+    await db.settings.add({ ...DEFAULT_SETTINGS, ...changes });
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -402,7 +428,18 @@ export async function checkLowStock(transaction?: Transaction): Promise<Material
   const settings = await getSettingsOrDefault();
   const threshold = toFiniteNumber(settings.lowStockThreshold, 5);
   const scope = transaction ? transaction.table('materials') : db.materials;
-  const lowStockMaterials = (await scope.where('quantity').belowOrEqual(threshold).toArray()) as Material[];
+  // لا يمكن استخدام belowOrEqual هنا لأن لكل مادة حدّاً خاصاً بها. كان
+  // المسار القديم يستخدم حدّ المكتب فقط، فتختلف الشارة في المخزن عن الجرس.
+  const allMaterials = (await scope.toArray()) as Material[];
+  const lowStockMaterials = allMaterials.filter((material) => {
+    const minQuantity = toFiniteNumber(material.minQuantity, threshold);
+    return getStockStatus(toFiniteNumber(material.quantity), minQuantity) !== 'normal';
+  });
+
+  // لا ننفذ آثاراً جانبية خارج المعاملة عندما يُستدعى الفحص من داخلها.
+  // الاستدعاء الحالي يتم بعد نجاح معاملات الحفظ، لكن هذا الحارس يحمي أي
+  // مسار مستقبلي من TransactionInactiveError أو إشعار قبل commit.
+  if (transaction) return lowStockMaterials;
 
   for (const material of lowStockMaterials) {
     if (material.id === undefined) continue;
