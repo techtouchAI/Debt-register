@@ -12,6 +12,7 @@ import {
   escapeHtml,
   sanitizeFileName,
   getStockStatus,
+  toISOStringOrNull,
   calculateProfit,
   formatDate,
   isValidDate
@@ -51,6 +52,14 @@ describe('التواريخ المحلية', () => {
     expect(formatLocalDateTimeInput(date)).toBe('2026-05-03T01:05');
   });
 
+  it('يحمي تحويل تواريخ حقول الإدخال من RangeError', () => {
+    expect(toISOStringOrNull('')).toBeNull();
+    expect(toISOStringOrNull('ليس تاريخاً')).toBeNull();
+    expect(toISOStringOrNull(null)).toBeNull();
+    expect(toISOStringOrNull(undefined)).toBeNull();
+    expect(toISOStringOrNull('2026-05-03T09:00')).toBe(new Date('2026-05-03T09:00').toISOString());
+  });
+
   it('يقرأ YYYY-MM-DD كبداية يوم محلي', () => {
     const date = parseLocalDate('2026-05-03');
     expect(date).not.toBeNull();
@@ -58,6 +67,7 @@ describe('التواريخ المحلية', () => {
     expect(date?.getDate()).toBe(3);
     expect(parseLocalDate('')).toBeNull();
     expect(parseLocalDate('2026/05/03')).toBeNull();
+    expect(parseLocalDate('2026-02-31')).toBeNull();
   });
 
   it('يحسب نطاق اليوم محلياً ويرفض التاريخ الفارغ', () => {

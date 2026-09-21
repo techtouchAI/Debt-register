@@ -12,8 +12,8 @@ import { toast } from '@/lib/toast';
  * السلوك الجديد (المعتمد في تطبيقات أندرويد الاحترافية):
  *  1. إن كانت هناك نافذة مفتوحة (معاينة/نماذج) → تُغلق هي فقط.
  *  2. إن لم نكن في الرئيسية → رجوع للشاشة السابقة.
- *  3. في الرئيسية → الضغطة الأولى تنبيه "اضغط مرة أخرى للخروج"، والثانية
- *     خلال ثانيتين تخرج من التطبيق.
+ *  3. في الرئيسية → يُعترض الحدث وتبقى الواجهة مفتوحة، فلا يخرج التطبيق
+ *     بزر الرجوع عرضاً. الإغلاق يتم من نظام التشغيل/زر النافذة فقط.
  *
  * يعمل فقط على المنصة الأصلية؛ في المتصفح زر الرجوع يعمل طبيعياً عبر Router.
  */
@@ -26,8 +26,6 @@ export function NativeBackButton() {
   useEffect(() => {
     let handle: PluginListenerHandle | undefined;
     let disposed = false;
-    let lastExitPress = 0;
-
     const register = async () => {
       if (!isNative()) return;
       try {
@@ -44,14 +42,9 @@ export function NativeBackButton() {
             return;
           }
 
-          // 3) في الرئيسية: ضغطتان متتاليتان للخروج
-          const now = Date.now();
-          if (now - lastExitPress < 2000) {
-            void App.exitApp();
-          } else {
-            lastExitPress = now;
-            toast.info('اضغط مرة أخرى للخروج من التطبيق');
-          }
+          // 3) في الرئيسية لا نغلق العملية. اعتراض الحدث هنا مهم حتى
+          // لا يتولى WebView/Android الخروج من التطبيق تلقائياً بالخطأ.
+          toast.info('أنت في الصفحة الرئيسية');
         });
       } catch (error) {
         console.warn('تعذّر تسجيل معالج زر الرجوع:', error);

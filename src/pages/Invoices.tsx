@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,11 +12,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate, isSameLocalDay } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
-import { OfficeSettings } from '@/types';
 import { generateInvoicePDF } from '@/lib/pdf';
 
 export function Invoices() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
+  const settings = useLiveQuery(() => getSettings(), []);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'cash' | 'credit'>('all');
   const [dateFilter, setDateFilter] = useState('');
@@ -41,15 +40,6 @@ export function Invoices() {
     
     return all;
   }, [search, filterType, dateFilter]);
-
-  useEffect(() => {
-    loadSettings();
-  }, []);
-
-  const loadSettings = async () => {
-    const s = await getSettings();
-    setSettings(s || null);
-  };
 
   const [busyId, setBusyId] = useState<number | null>(null);
 

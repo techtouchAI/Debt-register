@@ -53,7 +53,7 @@ export function Customers() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.fullName?.trim()) {
-      alert('يرجى إدخال اسم الزبون');
+      toast.warning('اسم الزبون مطلوب', 'أدخل الاسم الكامل قبل الحفظ');
       return;
     }
 
@@ -70,11 +70,15 @@ export function Customers() {
     try {
       if (editing?.id) {
         await db.customers.update(editing.id, customerData);
-        await logActivity('تعديل زبون', `تم تعديل بيانات الزبون: ${customerData.fullName}`, 'customer', editing.id);
+        await logActivity('تعديل زبون', `تم تعديل بيانات الزبون: ${customerData.fullName}`, 'customer', editing.id).catch((error) =>
+          console.warn('تعذّر تسجيل نشاط الزبون:', error)
+        );
         toast.success('تم تحديث بيانات الزبون', customerData.fullName);
       } else {
         const id = (await db.customers.add(customerData)) as number;
-        await logActivity('إضافة زبون', `تمت إضافة زبون جديد: ${customerData.fullName}`, 'customer', id);
+        await logActivity('إضافة زبون', `تمت إضافة زبون جديد: ${customerData.fullName}`, 'customer', id).catch((error) =>
+          console.warn('تعذّر تسجيل نشاط الزبون:', error)
+        );
         toast.success('تمت إضافة الزبون', customerData.fullName);
       }
       closeForm();
@@ -102,13 +106,18 @@ export function Customers() {
       const invoicesCount = await db.invoices.where('customerId').equals(customer.id).count();
       const paymentsCount = await db.payments.where('customerId').equals(customer.id).count();
       if (invoicesCount > 0 || paymentsCount > 0) {
-        if (!confirm(`الزبون "${customer.fullName}" لديه ${invoicesCount} فاتورة و${paymentsCount} تسديد.\nهل أنت متأكد من الحذف؟ ستبقى السجلات لكن بدون ربط بالزبون.`)) return;
-      } else if (!confirm(`هل أنت متأكد من حذف الزبون "${customer.fullName}" نهائياً؟`)) {
+        toast.warning(
+          'لا يمكن حذف الزبون',
+          `لديه ${invoicesCount} فاتورة و${paymentsCount} تسديد. إبقاء السجل يحافظ على سلامة كشف الحساب.`
+        );
         return;
       }
+      if (!confirm(`هل أنت متأكد من حذف الزبون "${customer.fullName}" نهائياً؟`)) return;
 
       await db.customers.delete(customer.id);
-      await logActivity('حذف زبون', `تم حذف الزبون: ${customer.fullName}`, 'customer', customer.id);
+      await logActivity('حذف زبون', `تم حذف الزبون: ${customer.fullName}`, 'customer', customer.id).catch((error) =>
+        console.warn('تعذّر تسجيل نشاط الزبون:', error)
+      );
       toast.success('تم حذف الزبون', customer.fullName);
     } catch (error) {
       reportError('Customers.delete', error, 'حدث خطأ أثناء الحذف');

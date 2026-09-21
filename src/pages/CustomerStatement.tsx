@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, FileText, CreditCard, Printer, Download, Calendar, Phone, MapPin, Eye } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,53 +10,34 @@ import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/ut
 import { reportError } from '@/lib/errors';
 import { buildCustomerStatementPrintHtml, printCustomerStatement } from '@/lib/print';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
-import { Customer, Invoice, Payment, OfficeSettings } from '@/types';
+import { Invoice, Payment } from '@/types';
 import { generateCustomerStatementPDF } from '@/lib/pdf';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 export function CustomerStatement() {
   const { id } = useParams();
-  const [customer, setCustomer] = useState<Customer | null>(null);
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
-  const [debt, setDebt] = useState(0);
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
   const [showPreview, setShowPreview] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadData = async () => {
-      if (!id) return;
-      const customerId = Number(id);
-      if (!Number.isFinite(customerId)) {
-        setCustomer(null);
-        return;
-      }
-      try {
-        const [c, s, invs, pays, balance] = await Promise.all([
-          db.customers.get(customerId),
-          getSettings(),
-          db.invoices.where('customerId').equals(customerId).sortBy('date'),
-          db.payments.where('customerId').equals(customerId).sortBy('date'),
-          getCustomerBalance(customerId)
-        ]);
-        if (cancelled) return;
-        setCustomer(c || null);
-        setSettings(s || null);
-        setInvoices(invs.reverse());
-        setPayments(pays.reverse());
-        setDebt(balance.debt);
-      } catch (error) {
-        if (!cancelled) reportError('CustomerStatement.load', error, 'تعذّر تحميل كشف الحساب');
-      }
-    };
-
-    void loadData();
-    return () => {
-      cancelled = true;
-    };
+  const statement = useLiveQuery(async () => {
+    const customerId = Number(id);
+    if (!Number.isInteger(customerId) || customerId <= 0) return null;
+    const [customer, settings, invoices, payments, balance] = await Promise.all([
+      db.customers.get(customerId),
+      getSettings(),
+      db.invoices.where('customerId').equals(customerId).sortBy('date'),
+      db.payments.where('customerId').equals(customerId).sortBy('date'),
+      getCustomerBalance(customerId)
+    ]);
+    if (!customer) return null;
+    return { customer, settings: settings ?? null, invoices: invoices.reverse(), payments: payments.reverse(), debt: balance.debt };
   }, [id]);
+
+  const customer = statement?.customer ?? null;
+  const settings = statement?.settings ?? null;
+  const invoices = statement?.invoices ?? [];
+  const payments = statement?.payments ?? [];
+  const debt = statement?.debt ?? 0;
 
   const handlePrint = async () => {
     if (!customer || !settings) return;

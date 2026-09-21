@@ -2,7 +2,7 @@ import { db, logActivity, createNotification, getSettingsOrDefault } from './db'
 import { nextReceiptNumber } from './sequence';
 import { reallocateCustomerInvoices } from './invoices';
 import { getCustomerBalance } from './debts';
-import { formatCurrency, roundMoney, toFiniteNumber } from './utils';
+import { formatCurrency, roundMoney, toFiniteNumber, toISOStringOrNull } from './utils';
 import type { Payment } from '@/types';
 
 export interface PaymentDraft {
@@ -19,11 +19,15 @@ export type PaymentSaveResult =
   | { ok: false; error: string };
 
 export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResult> {
-  if (typeof draft.customerId !== 'number') return { ok: false, error: 'يرجى اختيار زبون' };
+  if (!Number.isInteger(draft.customerId) || draft.customerId <= 0) return { ok: false, error: 'يرجى اختيار زبون' };
+  if (draft.method !== 'cash' && draft.method !== 'transfer' && draft.method !== 'other') {
+    return { ok: false, error: 'طريقة الدفع غير صالحة' };
+  }
 
   const amount = roundMoney(toFiniteNumber(draft.amount, NaN));
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: 'يرجى إدخال مبلغ صحيح' };
-  if (!Number.isFinite(new Date(draft.dateISO).getTime())) return { ok: false, error: 'تاريخ التسديد غير صالح' };
+  const dateISO = toISOStringOrNull(draft.dateISO);
+  if (!dateISO) return { ok: false, error: 'تاريخ التسديد غير صالح' };
 
   const saved = await db.transaction('rw', [db.payments, db.invoices, db.customers, db.meta], async () => {
     const customer = await db.customers.get(draft.customerId);
@@ -31,8 +35,7 @@ export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResul
 
     // الرصيد يُقرأ داخل المعاملة حتى لا يُحسب من بيانات قديمة
     const before = await getCustomerBalance(draft.customerId);
-    const receiptNumber = await nextReceiptNumber(new Date(draft.dateISO));
-    const dateISO = new Date(draft.dateISO).toISOString();
+    const receiptNumber = await nextReceiptNumber(new Date(dateISO));
     const debtAfter = roundMoney(before.debt - amount);
 
     const paymentId = (await db.payments.add({

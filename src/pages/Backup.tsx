@@ -161,7 +161,7 @@ export function Backup() {
   };
 
   const handleClearAllData = async () => {
-    if (!confirm('⚠️ تحذير خطير: هل أنت متأكد من حذف جميع البيانات نهائياً؟\n\nسيتم حذف:\n• جميع المواد\n• جميع العملاء\n• جميع الفواتير\n• جميع وصول الشراء\n• جميع التسديدات\n\nلا يمكن التراجع عن هذا الإجراء!')) return;
+    if (!confirm('⚠️ تحذير خطير: هل أنت متأكد من حذف جميع بيانات التطبيق نهائياً؟\n\nسيتم حذف:\n• الإعدادات والمستخدمون\n• جميع المواد والعملاء\n• جميع الفواتير ووصول الشراء والتسديدات\n• الإشعارات وسجل النشاط\n• سجل النسخ والنسخ الداخلية\n\nسيبدأ التطبيق من جديد بمعالج إعداد المكتب، ولا يمكن التراجع عن هذا الإجراء!')) return;
 
     const confirmText = prompt('للتأكيد، اكتب "حذف نهائي" بالضبط:');
     if (confirmText !== 'حذف نهائي') {
@@ -172,8 +172,25 @@ export function Backup() {
     try {
       await db.transaction(
         'rw',
-        [db.materials, db.customers, db.invoices, db.invoiceItems, db.payments, db.purchases, db.purchaseItems, db.notifications, db.activityLogs],
+        [
+          db.settings,
+          db.users,
+          db.materials,
+          db.customers,
+          db.invoices,
+          db.invoiceItems,
+          db.payments,
+          db.purchases,
+          db.purchaseItems,
+          db.notifications,
+          db.activityLogs,
+          db.backups,
+          db.snapshots,
+          db.meta
+        ],
         async () => {
+          await db.settings.clear();
+          await db.users.clear();
           await db.materials.clear();
           await db.customers.clear();
           await db.invoices.clear();
@@ -183,10 +200,13 @@ export function Backup() {
           await db.purchaseItems.clear();
           await db.notifications.clear();
           await db.activityLogs.clear();
+          await db.backups.clear();
+          await db.snapshots.clear();
+          await db.meta.clear();
         }
       );
-      toast.success('تم حذف جميع البيانات');
-      void loadStats();
+      toast.success('تم حذف جميع بيانات التطبيق', 'سيُعاد تشغيل معالج إعداد المكتب');
+      window.setTimeout(() => window.location.reload(), 600);
     } catch (error) {
       reportError('Backup.clear', error, 'تعذّر حذف البيانات');
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { BarChart3, DollarSign, Users, Package, TrendingUp, Download, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
 import { saveFile } from '@/lib/files';
 import { getCustomerBalances } from '@/lib/debts';
-import { formatCurrency, formatDate, formatLocalDateInput, localDayRangeISO, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { formatCurrency, formatDate, formatLocalDateInput, getStockStatus, localDayRangeISO, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { OfficeSettings, Material, Customer } from '@/types';
@@ -42,6 +42,7 @@ export function Reports() {
   const [searchMaterial, setSearchMaterial] = useState('');
   const [activeReport, setActiveReport] = useState<ReportKey>('cash');
   const [isExporting, setIsExporting] = useState(false);
+  const reportRequestRef = useRef(0);
 
   const materials = useLiveQuery(() => db.materials.toArray(), []);
 
@@ -53,27 +54,32 @@ export function Reports() {
 
   useEffect(() => {
     let cancelled = false;
+    const requestId = ++reportRequestRef.current;
 
     const loadSettings = async () => {
       try {
         const s = await getSettings();
-        if (!cancelled) setSettings(s || null);
+        if (!cancelled && requestId === reportRequestRef.current) setSettings(s || null);
       } catch (error) {
-        if (!cancelled) reportError('Reports.settings', error, 'تعذّر تحميل الإعدادات');
+        if (!cancelled && requestId === reportRequestRef.current) reportError('Reports.settings', error, 'تعذّر تحميل الإعدادات');
       }
     };
+
+    const range = localDayRangeISO(dateFrom, dateTo);
+    setRangeError(range ? null : 'يرجى اختيار تاريخ "من" و"إلى" صالحين');
+    if (!selectedMaterial) setMaterialMovement(null);
 
     const loadReports = async () => {
       try {
         await Promise.all([
-          loadCashReport(),
-          loadDebtsReport(),
-          loadProfitReport(),
-          loadInventoryReport(),
-          selectedMaterial ? loadMaterialMovement() : Promise.resolve()
+          loadCashReport(requestId),
+          loadDebtsReport(requestId),
+          loadProfitReport(requestId),
+          loadInventoryReport(requestId),
+          selectedMaterial ? loadMaterialMovement(requestId) : Promise.resolve()
         ]);
       } catch (error) {
-        if (!cancelled) reportError('Reports.load', error, 'تعذّر تحميل التقارير');
+        if (!cancelled && requestId === reportRequestRef.current) reportError('Reports.load', error, 'تعذّر تحميل التقارير');
       }
     };
 
@@ -90,20 +96,12 @@ export function Reports() {
    * نطاق التاريخ يُحسب محلياً. الحقل الفارغ كان يُنتج Invalid Date ثم
    * RangeError: Invalid time value فيُعطّل تحميل كل التقارير بصمت.
    */
-  const resolveRange = () => {
-    const range = localDayRangeISO(dateFrom, dateTo);
-    if (!range) {
-      setRangeError('يرجى اختيار تاريخ "من" و"إلى" صالحين');
-      return null;
-    }
-    setRangeError(null);
-    return range;
-  };
+  const resolveRange = () => localDayRangeISO(dateFrom, dateTo);
 
-  const loadCashReport = async () => {
+  const loadCashReport = async (requestId: number) => {
     const range = resolveRange();
     if (!range) {
-      setCashReport({ cashInvoices: 0, payments: 0, total: 0, count: 0 });
+      if (requestId === reportRequestRef.current) setCashReport({ cashInvoices: 0, payments: 0, total: 0, count: 0 });
       return;
     }
 
@@ -111,6 +109,7 @@ export function Reports() {
       db.invoices.where('date').between(range.from, range.to, true, true).toArray(),
       db.payments.where('date').between(range.from, range.to, true, true).toArray()
     ]);
+    if (requestId !== reportRequestRef.current) return;
 
     const cashInvoices = invoices.filter((invoice) => invoice.type === 'cash');
     const cashTotal = roundMoney(cashInvoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
@@ -124,8 +123,9 @@ export function Reports() {
     });
   };
 
-  const loadDebtsReport = async () => {
+  const loadDebtsReport = async (requestId: number) => {
     const [customers, balances] = await Promise.all([db.customers.toArray(), getCustomerBalances()]);
+    if (requestId !== reportRequestRef.current) return;
     const combined = customers
       .map((customer) => ({ customer, debt: balances.get(customer.id as number)?.debt ?? 0 }))
       .filter((entry) => entry.debt > 0)
@@ -133,13 +133,26 @@ export function Reports() {
     setDebtsReport(combined);
   };
 
-  const loadMaterialMovement = async () => {
+  const loadMaterialMovement = async (requestId: number) => {
     if (!selectedMaterial?.id) return;
-    
-    const items = await db.invoiceItems.where('materialId').equals(selectedMaterial.id).toArray();
+
+    const range = resolveRange();
+    if (!range) {
+      if (requestId === reportRequestRef.current) setMaterialMovement(null);
+      return;
+    }
+    const [items, latestMaterial] = await Promise.all([
+      db.invoiceItems.where('materialId').equals(selectedMaterial.id).toArray(),
+      db.materials.get(selectedMaterial.id)
+    ]);
     const invoices = await db.invoices.bulkGet(items.map(i => i.invoiceId));
-    
-    const sales = items.map(item => {
+    if (requestId !== reportRequestRef.current) return;
+
+    const validRows = items.filter((item) => {
+      const invoice = invoices.find((entry) => entry?.id === item.invoiceId);
+      return Boolean(invoice && invoice.date >= range.from && invoice.date <= range.to);
+    });
+    const sales = validRows.map(item => {
       const inv = invoices.find(i => i?.id === item.invoiceId);
       return {
         invoiceId: item.invoiceId,
@@ -151,34 +164,38 @@ export function Reports() {
       };
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    const totalSold = items.reduce((sum, i) => sum + toFiniteNumber(i.quantity), 0);
-    const totalRevenue = items.reduce((sum, i) => sum + toFiniteNumber(i.total), 0);
+    const totalSold = validRows.reduce((sum, i) => sum + toFiniteNumber(i.quantity), 0);
+    const totalRevenue = validRows.reduce((sum, i) => sum + toFiniteNumber(i.total), 0);
     const totalProfit = selectedMaterial.purchasePrice
-      ? items.reduce((sum, i) => sum + (toFiniteNumber(i.unitPrice) - toFiniteNumber(selectedMaterial.purchasePrice)) * toFiniteNumber(i.quantity), 0)
+      ? validRows.reduce((sum, i) => sum + (toFiniteNumber(i.unitPrice) - toFiniteNumber(selectedMaterial.purchasePrice)) * toFiniteNumber(i.quantity), 0)
       : 0;
 
+    if (requestId !== reportRequestRef.current) return;
     setMaterialMovement({
-      material: selectedMaterial,
+      material: latestMaterial ?? selectedMaterial,
       totalSold: roundMoney(totalSold),
       totalRevenue: roundMoney(totalRevenue),
       totalProfit: roundMoney(totalProfit),
       sales,
-      currentStock: toFiniteNumber(selectedMaterial.quantity)
+      currentStock: toFiniteNumber((latestMaterial ?? selectedMaterial).quantity)
     });
   };
 
-  const loadProfitReport = async () => {
+  const loadProfitReport = async (requestId: number) => {
     const range = resolveRange();
     if (!range) {
-      setProfitReport({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
+      if (requestId === reportRequestRef.current) setProfitReport({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
       return;
     }
 
     const invoices = await db.invoices.where('date').between(range.from, range.to, true, true).toArray();
     const invoiceIds = invoices.map((invoice) => invoice.id as number).filter((id) => typeof id === 'number');
     const items = invoiceIds.length ? await db.invoiceItems.where('invoiceId').anyOf(invoiceIds).toArray() : [];
+    if (requestId !== reportRequestRef.current) return;
 
-    const totalSales = roundMoney(items.reduce((sum, item) => sum + toFiniteNumber(item.total), 0));
+    // الإيراد المحاسبي هو إجمالي الفاتورة بعد الخصم، لا مجموع البنود
+    // الخام؛ وإلا يظهر الربح أكبر من الواقع عند وجود خصومات.
+    const totalSales = roundMoney(invoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
     const totalCost = roundMoney(
       items.reduce((sum, item) => sum + roundMoney(toFiniteNumber(item.purchasePrice) * toFiniteNumber(item.quantity)), 0)
     );
@@ -192,11 +209,12 @@ export function Reports() {
     });
   };
 
-  const loadInventoryReport = async () => {
+  const loadInventoryReport = async (requestId: number) => {
     const mats = await db.materials.toArray();
+    if (requestId !== reportRequestRef.current) return;
     const totalValue = roundMoney(mats.reduce((sum, m) => sum + roundMoney(toFiniteNumber(m.quantity) * toFiniteNumber(m.salePrice)), 0));
-    const lowStock = mats.filter((m) => toFiniteNumber(m.quantity) > 0 && toFiniteNumber(m.quantity) <= toFiniteNumber(m.minQuantity)).length;
-    const outOfStock = mats.filter((m) => toFiniteNumber(m.quantity) <= 0).length;
+    const lowStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'low').length;
+    const outOfStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'out').length;
 
     setInventoryReport({
       totalValue,

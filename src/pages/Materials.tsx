@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, logActivity } from '@/lib/db';
-import { createMaterial, updateMaterial } from '@/lib/materials';
+import { db, getSettings } from '@/lib/db';
+import { createMaterial, deleteMaterial, updateMaterial } from '@/lib/materials';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
@@ -100,7 +100,7 @@ export function Materials() {
       }
 
       closeForm();
-      setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: 5, category: '', unit: 'قطعة', description: '' });
+      setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: toFiniteNumber(settings?.lowStockThreshold, 5), category: '', unit: 'قطعة', description: '' });
     } catch (error) {
       reportError('Materials.save', error, 'حدث خطأ أثناء الحفظ');
     }
@@ -117,14 +117,11 @@ export function Materials() {
     if (!confirm(`هل أنت متأكد من حذف المادة "${material.name}"؟\nسيتم حذفها نهائياً ولا يمكن التراجع.`)) return;
 
     try {
-      const used = await db.invoiceItems.where('materialId').equals(material.id).count();
-      if (used > 0) {
-        toast.warning('لا يمكن الحذف', `المادة مستخدمة في ${used} فاتورة. يمكن تعديل الكمية إلى صفر بدلاً من الحذف.`);
+      const result = await deleteMaterial(material.id);
+      if (!result.ok) {
+        toast.warning('لا يمكن الحذف', result.error);
         return;
       }
-
-      await db.materials.delete(material.id);
-      await logActivity('حذف مادة', `تم حذف المادة: ${material.name}`, 'material', material.id);
       toast.success('تم حذف المادة', material.name);
     } catch (error) {
       reportError('Materials.delete', error, 'حدث خطأ أثناء الحذف');
@@ -151,7 +148,7 @@ export function Materials() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدارة المواد الزراعية والأسمدة والمبيدات</p>
         </div>
-        <Button onClick={() => { setEditing(null); setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: 5, category: '', unit: 'قطعة', description: '' }); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
+        <Button onClick={() => { setEditing(null); setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: toFiniteNumber(settings?.lowStockThreshold, 5), category: '', unit: 'قطعة', description: '' }); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
           <Plus className="w-4 h-4 ml-2" />
           إضافة مادة جديدة
         </Button>

@@ -1,6 +1,6 @@
 import Dexie from 'dexie';
 import { describe, it, expect } from 'vitest';
-import { db, getSettings } from '@/lib/db';
+import { db, getSettings, updateSettings } from '@/lib/db';
 import { createBackup, restoreBackupData, saveSnapshot, restoreSnapshot, listSnapshots, importBackup, backupFileName } from '@/lib/backup';
 import { normalizeBackup, readBackupFile } from '@/lib/validate';
 import { saveInvoice } from '@/lib/invoices';
@@ -33,6 +33,15 @@ async function seed() {
 }
 
 describe('النسخ الاحتياطي', () => {
+  it('يحفظ اسم المكتب كاملاً بعد التحديث وإعادة القراءة', async () => {
+    const officeName = 'مكتب الرافدين الزراعي لخدمات المحاصيل والأسمدة';
+    await updateSettings({ officeName });
+    expect((await getSettings())?.officeName).toBe(officeName);
+    const backup = await createBackup();
+    expect(backup.officeName).toBe(officeName);
+    expect(backup.data.settings[0].officeName).toBe(officeName);
+  });
+
   it('يصدر ويعيد استيراد البيانات كاملة', async () => {
     const seeded = await seed();
     const backup = await createBackup();

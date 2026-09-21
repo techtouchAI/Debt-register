@@ -24,13 +24,21 @@ interface QuickAddMaterialDialogProps {
   /** اسم مبدئي (نص البحث الذي لم يُعثر عليه) */
   initialName?: string;
   currency?: string;
+  defaultMinQuantity?: number;
   onClose: () => void;
   onCreated: (material: Material) => void;
 }
 
 const UNITS = ['قطعة', 'كيس', 'علبة', 'لتر', 'كغم', 'متر', 'عبوة'];
 
-export function QuickAddMaterialDialog({ open, initialName = '', currency = 'د.ع', onClose, onCreated }: QuickAddMaterialDialogProps) {
+export function QuickAddMaterialDialog({
+  open,
+  initialName = '',
+  currency = 'د.ع',
+  defaultMinQuantity = 5,
+  onClose,
+  onCreated,
+}: QuickAddMaterialDialogProps) {
   const [name, setName] = useState(initialName);
   const [category, setCategory] = useState('');
   const [unit, setUnit] = useState('قطعة');
@@ -48,10 +56,10 @@ export function QuickAddMaterialDialog({ open, initialName = '', currency = 'د.
       setQuantity('1');
       setSalePrice('');
       setPurchasePrice('');
-      setMinQuantity('5');
+      setMinQuantity(String(defaultMinQuantity));
       setIsSaving(false);
     }
-  }, [open, initialName]);
+  }, [open, initialName, defaultMinQuantity]);
 
   useEffect(() => {
     if (!open) return;
@@ -97,7 +105,7 @@ export function QuickAddMaterialDialog({ open, initialName = '', currency = 'د.
         quantity: toFiniteNumber(quantity, 0),
         salePrice: toFiniteNumber(salePrice, NaN),
         purchasePrice: purchasePrice.trim() ? toFiniteNumber(purchasePrice, NaN) : undefined,
-        minQuantity: toFiniteNumber(minQuantity, 5)
+        minQuantity: toFiniteNumber(minQuantity, defaultMinQuantity)
       });
 
       if (!result.ok) {

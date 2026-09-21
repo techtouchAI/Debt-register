@@ -112,12 +112,34 @@ async function computeDataSignature(): Promise<string> {
     db.activityLogs.count(),
     db.settings.count()
   ]);
-  const lastInvoice = await db.invoices.orderBy('id').last();
-  const lastPayment = await db.payments.orderBy('id').last();
-  const lastPurchase = await db.purchases.orderBy('id').last();
-  const lastActivity = await db.activityLogs.orderBy('id').last();
+  const [settings, lastInvoice, lastPayment, lastPurchase, lastActivity] = await Promise.all([
+    db.settings.toCollection().first(),
+    db.invoices.orderBy('id').last(),
+    db.payments.orderBy('id').last(),
+    db.purchases.orderBy('id').last(),
+    db.activityLogs.orderBy('id').last()
+  ]);
+  // نُضمّن القيم المهمة للإعدادات حتى لا تعتبر النسخة التلقائية تغيير
+  // اسم المكتب أو العملة "بلا تغيير". نستثني lastBackup لأنه يتغير نتيجة
+  // إنشاء النسخة نفسها وإلا سينتج التطبيق نسخاً متطابقة كل دقيقة.
+  const settingsSignature = settings
+    ? [
+        settings.officeName,
+        settings.phone,
+        settings.address,
+        settings.currency,
+        settings.lowStockThreshold,
+        settings.theme,
+        settings.autoBackupEnabled,
+        settings.autoBackupInterval,
+        settings.language,
+        settings.invoiceFooter,
+        settings.taxNumber
+      ].join('~')
+    : '';
   return [
     ...counts,
+    settingsSignature,
     lastInvoice?.updatedAt ?? lastInvoice?.createdAt ?? '',
     lastPayment?.createdAt ?? '',
     lastPurchase?.createdAt ?? '',
