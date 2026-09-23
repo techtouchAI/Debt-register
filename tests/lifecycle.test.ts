@@ -189,6 +189,10 @@ describe('فخّ سجل الرجوع', () => {
       back: () => {
         backCalls += 1;
       },
+      /** محاكاة وصول الرجوع إلى مدخل معيّن (كما يفعل المتصفح قبل إطلاق popstate). */
+      landOn(state: unknown) {
+        currentState = state;
+      },
       get state() {
         return currentState;
       },
@@ -217,6 +221,45 @@ describe('فخّ سجل الرجوع', () => {
     resetHistoryTrapForTests();
   });
 
+  it('لا يستهلك تنقّل المستخدم عند إزالة الفخ إن لم يعد المدخل الحالي', () => {
+    const history = fakeHistory();
+    setHistoryAdapterForTests(history.adapter);
+
+    syncHistoryTrap(1);
+    expect(history.pushed.length).toBe(1);
+
+    // تنقّل جديد وقع فوق مدخل الفخ (نقرة رابط أثناء فتح الطبقة)
+    history.adapter.pushState({ usr: 'new-route' });
+
+    // إغلاق الطبقة بعد التنقل: لا رجوع برمجي هنا — الرجوع كان سيُلغي
+    // تنقّل المستخدم الجديد (الخلل السابق في القائمة الجانبية)
+    syncHistoryTrap(0);
+    expect(isTrapArmed()).toBe(false);
+    expect(history.backCalls).toBe(0);
+
+    resetHistoryTrapForTests();
+  });
+
+  it('يتجاوز مدخل الفخّ القديم بصمت: كل ضغطة رجوع = شاشة واحدة', () => {
+    const history = fakeHistory();
+    setHistoryAdapterForTests(history.adapter);
+
+    // لا طبقات مفتوحة في هذا السيناريو — إغلاق الطبقة العليا يعيد false
+    const uninstall = installHistoryTrap(() => false, () => 0);
+
+    // محاكاة: الرجوع وصل إلى مدخل فخّ قديم تُرك في مكانه بعد تنقّل جديد
+    history.adapter.landOn({ usr: 'old-route', __agriOfficeOverlayTrap: true });
+    window.dispatchEvent(new PopStateEvent('popstate'));
+
+    // لا إغلاق (لا طبقات) ولا تجاهل — تجاوز برمجي واحد فقط يحافظ على
+    // قاعدة "ضغطة رجوع واحدة = شاشة واحدة"
+    expect(history.backCalls).toBe(1);
+    expect(isTrapArmed()).toBe(false);
+
+    uninstall();
+    resetHistoryTrapForTests();
+  });
+
   it('يستهلك الرجوع الحقيقي لغلق الطبقة، ويُعيد التسليح فقط إن بقيت طبقات', () => {
     const history = fakeHistory();
     setHistoryAdapterForTests(history.adapter);
@@ -234,6 +277,8 @@ describe('فخّ سجل الرجوع', () => {
     syncHistoryTrap(1);
     expect(history.pushed.length).toBe(1);
 
+    // الرجوع الحقيقي يصل إلى المدخل الذي تحت الفخ (ليس مدخل فخّ)
+    history.adapter.landOn({ usr: 'route-under-trap' });
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(closed).toBe(1);
     // طبقة أخرى ما زالت مفتوحة ⇒ أُعيد تسليح الفخ بمدخل جديد
@@ -264,9 +309,11 @@ describe('فخّ سجل الرجوع', () => {
       () => 0
     );
 
+    // رجوع عادي إلى مدخل مسار حقيقي (لا علامة فخّ عليه)
+    history.adapter.landOn({ usr: 'real-route' });
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(closed).toBe(1);
-    expect(history.pushed.length).toBe(0);
+    expect(history.backCalls).toBe(0);
     expect(isTrapArmed()).toBe(false);
 
     uninstall();
@@ -275,10 +322,11 @@ describe('فخّ سجل الرجوع', () => {
 });
 
 describe('قرار زر الرجوع', () => {
-  it('يغلق الطبقة أولاً، ثم يرجع في السجل، ثم يبقى في الرئيسية', () => {
+  it('يغلق الطبقة أولاً، ثم يرجع في السجل، ثم يطلب تأكيد الخروج في الرئيسية', () => {
     expect(resolveBackIntent({ hasOpenOverlay: true, pathname: '/materials' })).toEqual({ action: 'close-overlay' });
     expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/materials' })).toEqual({ action: 'navigate-back' });
-    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'stay-home' });
+    // في الرئيسية بلا سجل: لا خروج صامتاً — حوار تأكيد صريح
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'confirm-exit' });
     // من الرئيسية مع وجود سجل سابق: رجوع بدل خروج من التطبيق
     expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/', canGoBackInHistory: true })).toEqual({
       action: 'navigate-back'

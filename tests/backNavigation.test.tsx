@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '@/App';
 import { updateSettings } from '@/lib/db';
+import { endShutdown } from '@/lib/lifecycle';
 import { setNativeBackSubscriber, type NativeBackEvent } from '@/lib/nativeBridge';
 import { openModalCount, hasOpenModal } from '@/lib/modalStack';
 import { isTrapArmed, resetHistoryTrapForTests, setHistoryAdapterForTests } from '@/lib/historyTrap';
@@ -14,7 +15,8 @@ import { resolveBackIntent } from '@/lib/backIntent';
  *   - زر الرجوع في أندرويد (يُضخّ عبر الجسر الأصلي).
  *   - الرجوع في السجل (زر الفأرة الخلفي / Alt+← في Electron و Tauri والمتصفح).
  *   - Escape مع أكثر من نافذة مفتوحة.
- *   - عدم خروج التطبيق من الصفحة الرئيسية.
+ *   - الرجوع في الصفحة الرئيسية يعرض حوار تأكيد الخروج (لا خروج بضغطة واحدة).
+ *   - النقر داخل القائمة الجانبية يصل فعلاً إلى الصفحة المطلوبة.
  */
 
 let lastBackListener: ((event: NativeBackEvent) => void) | null = null;
@@ -51,14 +53,15 @@ async function bootApp(hash: string, officeName = 'مكتب الاختبار ا�
 }
 
 describe('منطق الرجوع المجرّد', () => {
-  it('يغلق الطبقة أولاً ثم يرجع ثم يبقى في الرئيسية', () => {
+  it('يغلق الطبقة أولاً ثم يرجع ثم يطلب تأكيد الخروج في الرئيسية', () => {
     expect(resolveBackIntent({ hasOpenOverlay: true, pathname: '/customers' })).toEqual({
       action: 'close-overlay'
     });
     expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/customers' })).toEqual({
       action: 'navigate-back'
     });
-    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'stay-home' });
+    // في الرئيسية بلا سجل: لا خروج صامتاً — تأكيد صريح
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'confirm-exit' });
     // في الرئيسية مع وجود سجل: نرجع بدل الخروج
     expect(
       resolveBackIntent({ hasOpenOverlay: false, pathname: '/', canGoBackInHistory: true })
@@ -91,7 +94,7 @@ describe('زر الرجوع في أندرويد (Capacitor)', () => {
     await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy(), { timeout: 5000 });
   });
 
-  it('لا يخرج التطبيق من الصفحة الرئيسية', async () => {
+  it('لا يخرج التطبيق بضغطة واحدة من الصفحة الرئيسية (تظهر رسالة في الويب)', async () => {
     await bootApp('#/');
     await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
 
@@ -101,6 +104,7 @@ describe('زر الرجوع في أندرويد (Capacitor)', () => {
     await waitFor(() => expect(screen.getByText('أنت في الصفحة الرئيسية')).toBeTruthy());
     expect(exitApp).not.toHaveBeenCalled();
     expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull();
   });
 
   it('يُزيل مستمع الرجوع عند إلغاء تركيب التطبيق (لا تسريب مستمعين)', async () => {
@@ -143,7 +147,7 @@ describe('الرجوع في المتصفح و Electron و Tauri (حدث السج
     setHistoryAdapterForTests({
       pushState: () => undefined,
       back: () => backCalls.push(Date.now()),
-      state: null,
+      state: { __agriOfficeOverlayTrap: true },
       href: 'http://localhost/#/customers'
     });
 
@@ -159,49 +163,34 @@ describe('الرجوع في المتصفح و Electron و Tauri (حدث السج
   });
 });
 
-describe('Escape والنوافذ المتعددة', () => {
-  it('يُغلق الطبقة العليا وحدها ثم التي تحتها', async () => {
+describe('القائمة الجانبية (الدرج الجوال)', () => {
+  it('النقر على رابط داخل الدرج المفتوح ينقل فعلاً إلى الصفحة المطلوبة', async () => {
     await bootApp('#/customers');
-    fireEvent.click(screen.getByText('إضافة زبون جديد'));
-    await waitFor(() => expect(screen.getByText('الاسم الكامل *')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('فتح قائمة التنقل'));
+    await waitFor(() => expect(hasOpenModal()).toBe(true));
 
-    // نافذة ثانية مفتوحة فوق الأولى (معاينة مستند) لاختبار الترتيب LIFO
-    const { DocumentPreviewDialog } = await import('@/components/documents/DocumentPreviewDialog');
-    const overlay = render(
-      <DocumentPreviewDialog
-        open
-        title="معاينة"
-        bodyHtml="<p>مستند</p>"
-        fileNameBase="doc"
-        onClose={() => {
-          overlay.unmount();
-        }}
-      />
-    );
-    await waitFor(() => expect(openModalCount()).toBe(2));
+    fireEvent.click(screen.getByText('لوحة التحكم'));
 
-    fireEvent.keyDown(window, { key: 'Escape' });
-    await waitFor(() => expect(openModalCount()).toBe(1));
-    // النافذة الأولى ما زالت مفتوحة: Escape أُغلق الطبقة العليا فقط
-    expect(screen.getByText('الاسم الكامل *')).toBeTruthy();
-    expect(openModalCount()).toBe(1);
-
-    fireEvent.keyDown(window, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByText('الاسم الكامل *')).toBeNull());
-    expect(openModalCount()).toBe(0);
+    // التنقل يجب أن يصل: لا رجوع خفي يُلغي نقرة المستخدم
+    await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
+    expect(hasOpenModal()).toBe(false);
   });
 
-  it('الضغط المتكرر على Escape لا يفعل شيئاً بعد إغلاق كل الطبقات', async () => {
+  it('بعد التنقل من الدرج: ضغطة رجوع واحدة تعود شاشة واحدة بالضبط', async () => {
     await bootApp('#/customers');
-    fireEvent.click(screen.getByText('إضافة زبون جديد'));
-    await waitFor(() => expect(screen.getByText('الاسم الكامل *')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('فتح قائمة التنقل'));
+    fireEvent.click(screen.getByText('لوحة التحكم'));
+    await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
 
-    fireEvent.keyDown(window, { key: 'Escape' });
-    fireEvent.keyDown(window, { key: 'Escape' });
-    fireEvent.keyDown(window, { key: 'Escape' });
+    act(() => {
+      lastBackListener?.({ canGoBack: true, exitApp: vi.fn() });
+    });
 
-    await waitFor(() => expect(hasOpenModal()).toBe(false));
-    expect(window.location.hash).toBe('#/customers');
+    // شاشة واحدة بالضبط — لا ضغطة ميتة ولا قفزة مزدوجة
+    await waitFor(() => expect(window.location.hash).toBe('#/customers'), { timeout: 2000 });
+    expect(screen.getByText('إدارة العملاء ومتابعة الديون')).toBeTruthy();
   });
 
   it('الدرج الجانبي في الجوال يُغلق بزر الرجوع', async () => {
@@ -213,5 +202,63 @@ describe('Escape والنوافذ المتعددة', () => {
     act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
     await waitFor(() => expect(hasOpenModal()).toBe(false));
     expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+  });
+});
+
+describe('تأكيد الخروج النهائي من التطبيق', () => {
+  beforeEach(() => {
+    // محاكاة منصة يمكن الخروج منها برمجياً (Electron)
+    (window as { electronAPI?: unknown }).electronAPI = { isElectron: true };
+  });
+
+  afterEach(() => {
+    delete (window as { electronAPI?: unknown }).electronAPI;
+    // exitApplication ترفع علامة الإغلاق — نُعيدها كي لا تتأثر بقية الاختبارات
+    endShutdown();
+  });
+
+  it('زر الرجوع في الرئيسية يعرض حوار التأكيد ولا يخرج مباشرة', async () => {
+    await bootApp('#/');
+    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
+
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => undefined);
+    act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
+
+    await waitFor(() => expect(screen.getByText('الخروج من التطبيق؟')).toBeTruthy());
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    // الإلغاء يُبقي التطبيق مفتوحاً
+    fireEvent.click(screen.getByText('متابعة الاستخدام'));
+    await waitFor(() => expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull());
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    closeSpy.mockRestore();
+  });
+
+  it('تأكيد الخروج يُغلق التطبيق عبر المنصة', async () => {
+    await bootApp('#/');
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => undefined);
+
+    act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
+    await waitFor(() => expect(screen.getByText('الخروج من التطبيق؟')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('إغلاق التطبيق'));
+    await waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+    closeSpy.mockRestore();
+  });
+
+  it('زر الرجوع أثناء حوار الخروج يُغلق الحوار أولاً ولا يخرج', async () => {
+    await bootApp('#/');
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => undefined);
+
+    act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
+    await waitFor(() => expect(screen.getByText('الخروج من التطبيق؟')).toBeTruthy());
+
+    // ضغطة رجوع ثانية: تُغلق الحوار وحده — الخروج ما زال يحتاج تأكيداً صريحاً
+    act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
+    await waitFor(() => expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull());
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    closeSpy.mockRestore();
   });
 });

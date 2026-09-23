@@ -362,7 +362,7 @@ export function Payments() {
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto">
+          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain">
             <CardContent className="p-6">
               <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5 text-green-600" />نافذة القبض - تسديد دين</h2>
               <form onSubmit={handleSubmit} className="space-y-4">

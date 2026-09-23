@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Printer, Download, X, Loader2, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { buildPrintDocument, printHtmlDocument } from '@/lib/print';
@@ -42,16 +42,11 @@ export function DocumentPreviewDialog({
 
   const documentHtml = useMemo(() => (open ? buildPrintDocument(title, bodyHtml) : ''), [open, title, bodyHtml]);
 
-  // زر الرجوع (أندرويد/سطح المكتب) و Escape يُغلقان المعاينة وحدها
+  // زر الرجوع (أندرويد/سطح المكتب) و Escape يُغلقان المعاينة وحدها، وقفل
+  // تمرير الخلفية يتم مركزياً في `useModalCloser` (عدّاد مراجع مشترك بين
+  // كل الطبقات — كان الضبط اليدوي هنا يعيد التمرير للخلفية بمجرد إغلاق
+  // أي طبقة أخرى قبلها).
   useModalCloser(open, onClose, { label: 'معاينة المستند' });
-
-  useEffect(() => {
-    if (!open) return;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [open]);
 
   const handlePrint = useCallback(async () => {
     if (isPrinting) return;

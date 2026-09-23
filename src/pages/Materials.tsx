@@ -335,7 +335,7 @@ export function Materials() {
       {/* Form Modal */}
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto overscroll-contain">
             <CardHeader>
               <CardTitle>{editing ? 'تعديل مادة' : 'إضافة مادة جديدة'}</CardTitle>
               <p className="text-sm text-gray-500 dark:text-gray-400">جميع الحقول المميزة بـ * مطلوبة</p>

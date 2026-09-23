@@ -105,7 +105,7 @@ function QuickAddMaterialForm({
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="إضافة مادة جديدة">
-      <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto animate-slide-up">
+      <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain animate-slide-up">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Package className="w-5 h-5 text-primary-600" />
