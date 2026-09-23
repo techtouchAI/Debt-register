@@ -357,7 +357,8 @@ jobs:
           ls -la desktop/src-tauri/target/release/bundle
           # نسخة الواجهة المبنية التي غلّفها Tauri (تُدمج داخل الملف التنفيذي عند البناء)
           test -f desktop/src-tauri/dist/index.html
-          ls -la desktop/src-tauri/dist | head -5
+          grep -q 'id="root"' desktop/src-tauri/dist/index.html
+          ls -la desktop/src-tauri/dist/assets
 
           DEB="$(find desktop/src-tauri/target/release/bundle -name '*.deb' -print -quit)"
           APPIMAGE="$(find desktop/src-tauri/target/release/bundle -name '*.AppImage' -print -quit)"
@@ -375,13 +376,33 @@ jobs:
           fi
           grep -E 'usr/(bin|lib)/' <<< "$DEB_LIST" | sed -n '1,5p'
 
-          # الملف التنفيذي داخل الحزمة يجب أن يحتوي واجهة التطبيق المدمجة فعلاً
+          # الملف التنفيذي داخل الحزمة يجب أن يحتوي واجهة التطبيق المدمجة فعلاً.
+          #
+          # Tauri يضغط محتوى الأصول المدمجة بـ Brotli داخل الثنائي، فلا يُجدى البحث
+          # عن نص الصفحة (`id="root"`) في الثنائي — الدليل القاطع هو وجود **أسماء**
+          # الأصول المُنتَجة بتجزئة محتواها (index-<hash>.js/css و index.html) داخل
+          # الثنائي، فهي مفاتيح خريطة الأصول المدمجة وقت البناء.
+          ASSETS_DIR=desktop/src-tauri/dist/assets
+          ASSET_JS="$(basename "$(find "$ASSETS_DIR" -name 'index-*.js' -print -quit)")"
+          ASSET_CSS="$(basename "$(find "$ASSETS_DIR" -name 'index-*.css' -print -quit)")"
+          test -n "$ASSET_JS"
+          test -n "$ASSET_CSS"
+          ls "$ASSETS_DIR" | tr '\n' ' '
+          echo
+
           TMP="$(mktemp -d)"
           dpkg-deb -x "$DEB" "$TMP"
           BIN="$(find "$TMP" -type f -perm -u+x -name 'agro-office*' -print -quit)"
           test -n "$BIN"
           echo "binary=$BIN size=$(stat -c%s "$BIN")"
-          grep -qa 'id="root"' "$BIN"
+          for ASSET in "$ASSET_JS" "$ASSET_CSS" index.html; do
+            if grep -qaF "$ASSET" "$BIN"; then
+              echo "✔ الأصل المدمج: $ASSET"
+            else
+              echo "::error::الأصل $ASSET غير موجود داخل الثنائي — الواجهة لم تُدمج في البناء"
+              exit 1
+            fi
+          done
 
           # والـ AppImage ملف تنفيذي صالح بحجم معقول
           test -s "$APPIMAGE"
