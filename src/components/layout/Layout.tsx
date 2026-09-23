@@ -20,7 +20,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, countUnreadNotifications } from '@/lib/db';
 import { getStockStatus } from '@/lib/utils';
+import { officeNameLengthClass } from '@/lib/officeName';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useModalCloser } from '@/hooks/useModalCloser';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -53,6 +55,9 @@ export function Layout({ children }: LayoutProps) {
     const materials = await db.materials.toArray();
     return materials.filter((material) => getStockStatus(material.quantity, material.minQuantity) !== 'normal').length;
   }, []) || 0;
+
+  // الدرج الجانبي في الجوال يُغلق بزر الرجوع و Escape مثل أي نافذة
+  useModalCloser(sidebarOpen, () => setSidebarOpen(false), { label: 'قائمة التنقل' });
 
   useEffect(() => {
     try {
@@ -96,12 +101,25 @@ export function Layout({ children }: LayoutProps) {
                   م
                 </div>
               )}
-              <div>
-                <h1 className="font-bold text-gray-900 dark:text-white text-sm leading-tight">{settings?.officeName || 'إعداد المكتب مطلوب'}</h1>
+              <div className="min-w-0">
+                {/* الاسم الكامل يظهر دائماً: يلتف على سطرين بدل أن يُقتطع،
+                    ويُعرض كاملاً في التلميح عند تجاوز الطول المتاح */}
+                <h1
+                  className={`font-bold text-gray-900 dark:text-white text-sm leading-tight office-name ${officeNameLengthClass(settings?.officeName)}`}
+                  title={settings?.officeName || undefined}
+                >
+                  {settings?.officeName || 'إعداد المكتب مطلوب'}
+                </h1>
                 <p className="text-xs text-gray-500 dark:text-gray-400">إدارة متكاملة</p>
               </div>
             </div>
-            <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(false)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              onClick={() => setSidebarOpen(false)}
+              aria-label="إغلاق قائمة التنقل"
+            >
               <X className="w-5 h-5" />
             </Button>
           </div>
@@ -149,7 +167,13 @@ export function Layout({ children }: LayoutProps) {
         <div className="sticky top-0 z-30 bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center justify-between h-16 px-4 lg:px-8">
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(true)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="lg:hidden"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="فتح قائمة التنقل"
+              >
                 <Menu className="w-5 h-5" />
               </Button>
               <div className="hidden lg:block">

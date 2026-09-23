@@ -1,7 +1,7 @@
 import { db, getSettings, getSettingsOrDefault, updateSettings } from './db';
 import { normalizeBackup, readBackupFile } from './validate';
 import { reallocateCustomerInvoices } from './invoices';
-import { sanitizeFileName } from './utils';
+import { MAX_FILE_NAME_BYTES, sanitizeFileName, utf8ByteLength } from './utils';
 import { saveFile } from './files';
 import type { BackupData, BackupSnapshot } from '@/types';
 
@@ -47,6 +47,14 @@ export async function createBackup(): Promise<BackupData> {
   };
 }
 
+/**
+ * اسم ملف النسخة الاحتياطية: `اسم المكتب_Backup_التاريخ_الوقت.json`
+ *
+ * اسم المكتب يُكتب كاملاً ما أمكن، لكن مع حدّ **بايتات** إجمالي لاسم الملف
+ * حتى لا يتجاوز حدود أنظمة الملفات (Windows/Android/ext4) خصوصاً مع الأسماء
+ * العربية الطويلة (كل حرف عربي بايتان). الطوابع الزمنية لا تُقتطع أبداً،
+ * ولا يُقتطع الاسم المحفوظ داخل الملف نفسه — القصّ يخص اسم الملف فقط.
+ */
 export function backupFileName(officeName?: string, date: Date = new Date()): string {
   const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
     date.getDate()
@@ -54,8 +62,19 @@ export function backupFileName(officeName?: string, date: Date = new Date()): st
   const timeStr = `${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(
     date.getSeconds()
   ).padStart(2, '0')}`;
-  const name = sanitizeFileName(officeName || 'AgriOffice', 'AgriOffice');
-  return `${name}_Backup_${dateStr}_${timeStr}.json`;
+  const suffix = `_Backup_${dateStr}_${timeStr}.json`;
+  const availableForName = Math.max(24, MAX_FILE_NAME_BYTES - utf8ByteLength(suffix));
+  const name = sanitizeFileName(officeName || 'AgriOffice', 'AgriOffice', availableForName);
+  return `${name}${suffix}`;
+}
+
+/** اسم ملف عند الاستيراد: يوضح أن الملف مستورد مع لقطة من اسمه الأصلي. */
+export function importedBackupFileName(originalFileName: string, date: Date = new Date()): string {
+  const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+  const suffix = `_Imported_${stamp}.json`;
+  const availableForName = Math.max(24, MAX_FILE_NAME_BYTES - utf8ByteLength(suffix));
+  const base = originalFileName.replace(/\.json$/i, '');
+  return `${sanitizeFileName(base, 'backup', availableForName)}${suffix}`;
 }
 
 async function recordBackupMeta(fileName: string, size: number, type: 'auto' | 'manual' | 'import') {
@@ -286,7 +305,7 @@ export async function importBackup(file: File): Promise<RestoreResult> {
   const result = await restoreBackupData(normalized.value, normalized.warnings);
 
   await db.backups.add({
-    fileName: `Imported_${sanitizeFileName(file.name, 'backup')}`,
+    fileName: importedBackupFileName(file.name),
     date: new Date().toISOString(),
     size: file.size,
     type: 'import'

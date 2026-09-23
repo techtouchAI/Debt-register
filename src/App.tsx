@@ -6,7 +6,7 @@ import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/Toaster';
 import { Button } from '@/components/ui/button';
 import { FirstRunSetup } from '@/components/setup/FirstRunSetup';
-import { NativeBackButton } from '@/components/NativeBackButton';
+import { BackNavigationHandler } from '@/components/BackNavigationHandler';
 import { Dashboard } from '@/pages/Dashboard';
 import { Materials } from '@/pages/Materials';
 import { Customers } from '@/pages/Customers';
@@ -139,7 +139,7 @@ function App() {
 
   return (
     <Router>
-      <NativeBackButton />
+      <BackNavigationHandler />
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />

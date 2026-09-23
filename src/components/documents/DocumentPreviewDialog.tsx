@@ -3,7 +3,7 @@ import { Printer, Download, X, Loader2, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { buildPrintDocument, printHtmlDocument } from '@/lib/print';
 import { generatePdfFromBodyHtml } from '@/lib/pdf';
-import { pushModalCloser } from '@/lib/modalStack';
+import { useModalCloser } from '@/hooks/useModalCloser';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 
@@ -42,24 +42,16 @@ export function DocumentPreviewDialog({
 
   const documentHtml = useMemo(() => (open ? buildPrintDocument(title, bodyHtml) : ''), [open, title, bodyHtml]);
 
-  // زر الرجوع في أندرويد يُغلق المعاينة بدل الخروج من التطبيق
-  useEffect(() => {
-    if (!open) return;
-    return pushModalCloser(onClose);
-  }, [open, onClose]);
+  // زر الرجوع (أندرويد/سطح المكتب) و Escape يُغلقان المعاينة وحدها
+  useModalCloser(open, onClose, { label: 'معاينة المستند' });
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
     document.body.style.overflow = 'hidden';
     return () => {
-      window.removeEventListener('keydown', onKey);
       document.body.style.overflow = '';
     };
-  }, [open, onClose]);
+  }, [open]);
 
   const handlePrint = useCallback(async () => {
     if (isPrinting) return;

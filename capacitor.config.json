@@ -7,9 +7,8 @@
   },
   "plugins": {
     "LocalNotifications": {
-      "smallIcon": "ic_stat_icon_config_sample",
-      "iconColor": "#16a34a",
-      "sound": "beep.wav"
+      "smallIcon": "ic_stat_agri",
+      "iconColor": "#16a34a"
     },
     "Filesystem": {
       "androidRequestPermissions": true

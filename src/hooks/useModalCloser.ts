@@ -1,26 +1,25 @@
 import { useEffect, useRef } from 'react';
-import { pushModalCloser } from '@/lib/modalStack';
+import { pushModalCloser, type ModalCloserOptions } from '@/lib/modalStack';
 
 /**
- * ربط نافذة منبثقة بزر الرجوع وزر Escape.
- * يُسجّل دالة الإغلاق في مكدس النوافذ عند فتحها ويُزيلها عند إغلاقها،
- * فيُغلق زر الرجوع في أندرويد النافذة بدل الخروج من التطبيق.
+ * ربط طبقة معروضة (نافذة/درج جانبي/معاينة) بأزرار الرجوع.
+ *
+ * يُسجّل دالة الإغلاق في مكدس الطبقات عند الفتح ويُزيلها عند الإغلاق، فيعمل
+ * زر الرجوع (أندرويد) وزر الفأرة الخلفي ( Electron/Tauri/المتصفح) و Escape
+ * على إغلاق الطبقة العليا وحدها.
+ *
+ * ملاحظة: مستمع Escape مركزي في `lib/modalStack.ts` — لا تُضِف مستمعاً
+ * محلياً في كل نافذة، فذلك كان يجعل Escape يُغلق كل النوافذ المفتوحة معاً.
  */
-export function useModalCloser(open: boolean, onClose: () => void): void {
+export function useModalCloser(open: boolean, onClose: () => void, options?: ModalCloserOptions): void {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
+  const escape = options?.escape !== false;
+  const label = options?.label ?? 'طبقة';
+
   useEffect(() => {
     if (!open) return;
-    const stableClose = () => closeRef.current();
-    const release = pushModalCloser(stableClose);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      release();
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open ]);
+    return pushModalCloser(() => closeRef.current(), { escape, label });
+  }, [open, escape, label]);
 }

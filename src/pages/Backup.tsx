@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Database, Download, Upload, HardDrive, Clock, FileJson, AlertTriangle, CheckCircle, Trash2, Folder, Smartphone, Monitor, RotateCcw, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
+import { useAsyncScope } from '@/hooks/useAsyncScope';
 import type { BackupSnapshot, OfficeSettings } from '@/types';
 
 export function Backup() {
@@ -24,6 +25,33 @@ export function Backup() {
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState<number | null>(null);
   const [stats, setStats] = useState({ materials: 0, customers: 0, invoices: 0, payments: 0, purchases: 0, totalSize: 0 });
+  /* نطاق يُلغى عند مغادرة الشاشة: يمنع متابعة عمليات النسخ/الاستعادة على
+     قاعدة بيانات أُغلقت، ويوقف مؤقت إعادة التحميل المعلّق. */
+  const scope = useAsyncScope();
+  const reloadTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
+    };
+  }, []);
+
+  /**
+   * إعادة تحميل مؤجلة بعد عمليات الاستيراد/الاستعادة/الحذف الكامل.
+   * تُلغى إذا غادر المستخدم الشاشة قبل انتهاء المهلة بدل أن تُعيد تحميل
+   * الصفحة أثناء عمل شيء آخر.
+   */
+  const scheduleReload = useCallback(
+    (delay: number) => {
+      if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
+      reloadTimer.current = window.setTimeout(() => {
+        reloadTimer.current = null;
+        if (scope.aborted) return;
+        window.location.reload();
+      }, delay);
+    },
+    [scope]
+  );
 
   const backups = useLiveQuery(() => db.backups.orderBy('date').reverse().toArray(), []);
   const snapshots = useLiveQuery(() => listSnapshots(), []);
@@ -72,7 +100,8 @@ export function Backup() {
     if (isExporting) return;
     setIsExporting(true);
     try {
-      const fileName = await exportBackupToFile('manual');
+      const fileName = await scope.run(() => exportBackupToFile('manual'));
+      if (scope.aborted) return; // غادر المستخدم الشاشة: لا رسائل ولا تحديث حجم
       toast.success('تم إنشاء النسخة الاحتياطية', `${fileName} — حُفظت في مجلد التنزيلات`);
       void loadStats();
     } catch (error) {
@@ -110,13 +139,14 @@ export function Backup() {
 
     setIsImporting(true);
     try {
-      const result = await importBackup(file);
+      const result = await scope.run(() => importBackup(file));
+      if (scope.aborted) return;
       toast.success(
         'تم الاستيراد بنجاح',
         `${result.counts.invoices} فاتورة • ${result.counts.purchases} وصل شراء • ${result.counts.customers} زبون • ${result.counts.payments} تسديد`
       );
       if (result.warnings.length) toast.warning('تنبيهات أثناء الاستيراد', result.warnings.slice(0, 3).join(' | '));
-      window.setTimeout(() => window.location.reload(), 1200);
+      scheduleReload(1200);
     } catch (error) {
       reportError('Backup.import', error, 'فشل الاستيراد');
     } finally {
@@ -126,14 +156,16 @@ export function Backup() {
   };
 
   const handleRestoreSnapshot = async (snapshot: Omit<BackupSnapshot, 'payload'>) => {
-    if (!snapshot.id) return;
+    const snapshotId = snapshot.id;
+    if (!snapshotId) return;
     if (!confirm(`سيتم استبدال البيانات الحالية بنسخة ${formatDate(snapshot.date, true)}.\nهل تريد المتابعة؟`)) return;
 
-    setIsRestoring(snapshot.id);
+    setIsRestoring(snapshotId);
     try {
-      const result = await restoreSnapshot(snapshot.id);
+      const result = await scope.run(() => restoreSnapshot(snapshotId));
+      if (scope.aborted) return;
       toast.success('تمت الاستعادة', `${result.counts.invoices} فاتورة • ${result.counts.payments} تسديد`);
-      window.setTimeout(() => window.location.reload(), 1200);
+      scheduleReload(1200);
     } catch (error) {
       reportError('Backup.restore', error, 'فشلت الاستعادة');
     } finally {
@@ -206,7 +238,7 @@ export function Backup() {
         }
       );
       toast.success('تم حذف جميع بيانات التطبيق', 'سيُعاد تشغيل معالج إعداد المكتب');
-      window.setTimeout(() => window.location.reload(), 600);
+      scheduleReload(600);
     } catch (error) {
       reportError('Backup.clear', error, 'تعذّر حذف البيانات');
     }
@@ -352,7 +384,12 @@ export function Backup() {
                         <FileJson className="w-5 h-5" />
                       </div>
                       <div>
-                        <p className="font-medium text-sm truncate max-w-[200px] md:max-w-xs">{backup.fileName}</p>
+                        <p
+                          className="font-medium text-sm break-all max-w-[220px] md:max-w-xs leading-snug"
+                          title={backup.fileName}
+                        >
+                          {backup.fileName}
+                        </p>
                         <p className="text-xs text-gray-500 flex items-center gap-2">
                           {new Date(backup.date).toLocaleString('ar-EG')} 
                           <Badge variant={backup.type === 'auto' ? 'secondary' : backup.type === 'import' ? 'warning' : 'success'} className="text-[9px]">

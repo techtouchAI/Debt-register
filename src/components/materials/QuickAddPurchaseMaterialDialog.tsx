@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { createMaterial, findMaterialByName } from '@/lib/materials';
-import { pushModalCloser } from '@/lib/modalStack';
+import { useModalCloser } from '@/hooks/useModalCloser';
 import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { toFiniteNumber } from '@/lib/utils';
@@ -47,19 +47,8 @@ export function QuickAddPurchaseMaterialDialog({
     setIsSaving(false);
   }, [open, initialName]);
 
-  useEffect(() => {
-    if (!open) return;
-    return pushModalCloser(onClose);
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  // الرجوع و Escape يُغلقان النافذة وحدها (المستمع مركزي في modalStack)
+  useModalCloser(open, onClose, { label: 'إضافة مادة للشراء' });
 
   if (!open) return null;
 

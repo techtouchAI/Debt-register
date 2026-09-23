@@ -13,11 +13,11 @@
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "npm run build && electron-builder --win --x64",
     "electron:build:win": "npm run build && electron-builder --win --x64 --publish=never",
-    "cap:add:android": "cap add android",
-    "cap:sync": "cap sync",
-    "cap:android": "npm run build && npx cap sync android && npx cap open android",
-    "cap:build:android": "npm run build && npx cap sync android && cd android && ./gradlew assembleDebug",
-    "build:android": "npm run build && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "cap:add:android": "npx cap add android && npm run cap:prepare",
+    "cap:sync": "npx cap sync && npm run cap:prepare",
+    "cap:android": "npm run build && npm run cap:add:android && npx cap sync && npm run cap:prepare && npx cap open android",
+    "cap:build:android": "npm run build:android",
+    "build:android": "npm run build && (npx cap add android || true) && npm run cap:sync && cd android && ./gradlew assembleDebug",
     "build:windows": "npm run build && electron-builder --win --x64 --publish=never",
     "build:all": "npm run build",
     "workflow:android": "npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app @capacitor/filesystem @capacitor/local-notifications @capacitor/share --save && npm run build && npx cap add android || true && npx cap sync android && cd android && ./gradlew assembleDebug",
@@ -27,7 +27,9 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "verify": "npm run audit:shells && npm run lint && npm run typecheck && npm run test && npm run build",
+    "cap:prepare": "node scripts/prepare-android.mjs",
+    "audit:shells": "node scripts/audit-shells.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

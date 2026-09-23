@@ -16,7 +16,9 @@ import {
   AppMeta
 } from '@/types';
 import { getStockStatus, toFiniteNumber } from './utils';
+import { validateOfficeName } from './officeName';
 import { sendSystemNotification as dispatchSystemNotification } from './notify';
+import { assertNotShuttingDown, beginShutdown, endShutdown } from './lifecycle';
 
 export class AgriOfficeDB extends Dexie {
   settings!: Table<OfficeSettings>;
@@ -182,6 +184,52 @@ export class AgriOfficeDB extends Dexie {
 
 export const db = new AgriOfficeDB();
 
+/**
+ * حارس دورة الحياة على مستوى قاعدة البيانات.
+ *
+ * وسيط (middleware) في طبقة DBCore يمرّ منه **كل** استعلام (قراءة أو كتابة)
+ * على أي جدول. بمجرد رفع علامة الإغلاق (إغلاق نافذة/إعادة تحميل/انتهاء عمر
+ * المكوّن في الاختبارات) يُرفض أي استعلام جديد بخطأ إلغاء مقصود، بدل أن يصل
+ * إلى قاعدة مغلقة فيُنتج `DatabaseClosedError` غير مفهوم ولا يمكن السيطرة
+ * على توقيته.
+ */
+db.use({
+  stack: 'dbcore',
+  name: 'lifecycle-shutdown-guard',
+  create: (downlevel) => ({
+    ...downlevel,
+    table: (name: string) => {
+      const table = downlevel.table(name);
+      // نغلّف كل دوال الجدول (get/query/mutate/count/openCursor...) بفحص واحد
+      return new Proxy(table, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver);
+          if (typeof value !== 'function') return value;
+          return (...args: unknown[]) => {
+            assertNotShuttingDown();
+            return (value as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+      });
+    }
+  })
+});
+
+/**
+ * إغلاق قاعدة البيانات بطريقة آمنة: تُرفع علامة الإغلاق أولاً فتمتنع كل
+ * العمليات الجديدة، ثم تُغلق القاعدة ولا تبقى عمليات متأخرة تكتب بعد الإغلاق.
+ */
+export async function closeDatabase(): Promise<void> {
+  beginShutdown('database-close');
+  db.close();
+}
+
+/** إعادة فتح قاعدة البيانات (بدء تشغيل جديد أو إعداد بيئة اختبار). */
+export async function openDatabase(): Promise<void> {
+  endShutdown();
+  await db.open();
+}
+
 export const DEFAULT_SETTINGS: OfficeSettings = {
   // فارغ عمداً: اسم المكتب يُدخله المستخدم في شاشة الإعداد الأولى (معالج
   // التشغيل الأول) ولا يُكتب أي اسم تلقائياً — يظهر الاسم في ترويسة كل
@@ -300,10 +348,11 @@ export async function updateSettings(updates: Partial<OfficeSettings>): Promise<
   // المسموح به هنا هو إزالة الفراغات الخارجية فقط.
   delete changes.id;
   if (Object.prototype.hasOwnProperty.call(changes, 'officeName')) {
-    if (typeof changes.officeName !== 'string') {
-      throw new Error('اسم المكتب غير صالح');
-    }
-    changes.officeName = changes.officeName.trim();
+    // التحقق من الاسم قبل الكتابة: لا نقبل نصاً غير نصي ولا اسماً أطول من
+    // الحد المسموح، ويُطبَّع (فراغ خارجي + أسطر متعددة) دون اقتطاع أي حرف.
+    const validation = validateOfficeName(changes.officeName);
+    if (!validation.ok) throw new Error(validation.error ?? 'اسم المكتب غير صالح');
+    changes.officeName = validation.value;
   }
   if (Object.prototype.hasOwnProperty.call(changes, 'phone') && typeof changes.phone !== 'string') {
     throw new Error('رقم الهاتف غير صالح');

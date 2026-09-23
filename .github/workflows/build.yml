@@ -1,7 +1,7 @@
 name: Build all platforms
 
-# موحّد: يستبدل build-all/build-android/build-windows و سير عمل PR#1 السابق.
-# يتضمّن منطقَي "التفريغ" المستخرَجين من PR #1: توقيع الإنتاج لأندرويد + النشر على Releases.
+# موحّد: يبني ويتحقق من كل الأغلفة فعلياً (ويب PWA + أندرويد + ويندوز + Tauri).
+# كل خطوة تحقق آلية على الناتج نفسه (APK/Hashs/ASAR) لا على المصدر فقط.
 
 on:
   push:
@@ -20,13 +20,13 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, Typecheck & Tests
+    name: Lint, Typecheck, Tests & Shell audit
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - name: ESLint
@@ -35,6 +35,14 @@ jobs:
         run: npm run typecheck
       - name: Unit & integration tests
         run: npm test
+      - name: تدقيق أغلفة التشغيل (Android/Windows/Tauri)
+        run: npm run audit:shells
+      - name: فحص صياغة ملفات Electron
+        run: |
+          node --check electron/main.cjs
+          node --check electron/preload.cjs
+      - name: تدقيق أمني للاعتماديات (فشل عند high/critical)
+        run: npm audit --audit-level=high
 
   web:
     name: Build Web PWA
@@ -44,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -61,9 +69,9 @@ jobs:
             echo "::error title=Bundle regression::$MAIN_BUNDLE is $SIZE bytes (> 400 KB)"
             exit 1
           fi
-          # منع انحدار الشاشة السوداء: الأصول يجب أن تكون بمسارات نسبية (تعمل تحت file:// والمسارات الفرعية)
+          # منع انحدار الشاشة السوداء: الأصول يجب أن تكون بمسارات نسبية
           if grep -Eq '(src|href)="/assets' dist/index.html; then
-            echo '::error title=Build regression::dist/index.html contains absolute /assets paths — file:// and sub-path hosting will break'
+            echo '::error title=Build regression::dist/index.html contains absolute /assets paths'
             exit 1
           fi
       - name: Package web artifact
@@ -74,6 +82,26 @@ jobs:
           path: AgriOffice-Web-PWA.zip
           if-no-files-found: error
           retention-days: 30
+
+  electron-smoke:
+    name: Electron smoke test (واجهة حقيقية)
+    runs-on: ubuntu-24.04
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: تشغيل التطبيق الحقيقي والتحقق من تحميل الواجهة والجسر
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64 >/dev/null
+          NODE_ENV=production xvfb-run -a npx electron . --smoke-test --no-sandbox | tee smoke.log
+          grep -q "SMOKE_OK" smoke.log
 
   android:
     name: Android APK (signed)
@@ -88,12 +116,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - run: npm ci
       - run: npm run build
       - name: Add and sync Capacitor Android
@@ -101,6 +129,22 @@ jobs:
           set -euo pipefail
           npx cap add android
           npx cap sync android
+      - name: تجهيز الصلاحيات والأيقونات (سكربت idempotent)
+        run: |
+          set -euo pipefail
+          node scripts/prepare-android.mjs
+          # إعادة التشغيل للتأكد من أن السكربت قابل للتكرار دون تكرار الوسوم
+          cp android/app/src/main/AndroidManifest.xml /tmp/manifest.first.xml
+          node scripts/prepare-android.mjs
+          diff -q /tmp/manifest.first.xml android/app/src/main/AndroidManifest.xml
+      - name: التحقق من صلاحيات المصدر قبل البناء
+        run: |
+          set -euo pipefail
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          grep -q "android.permission.POST_NOTIFICATIONS" "$MANIFEST"
+          grep -q "android.permission.WRITE_EXTERNAL_STORAGE" "$MANIFEST"
+          grep -q 'android:usesCleartextTraffic="false"' "$MANIFEST"
+          grep -q 'name="app_name"' android/app/src/main/res/values/strings.xml
       - name: Gradle release build
         working-directory: android
         run: |
@@ -120,7 +164,6 @@ jobs:
             KEYPASS="${KEY_PASSWORD:-$STOREPASS}"
             KEYMODE="production"
           else
-            # بدون أسرار: مفتاح CI مؤقت يبقى الـ APK قابلاً للتثبيت للاختبار فقط
             ALIAS=ci-release
             STOREPASS=ci-password
             KEYPASS=ci-password
@@ -136,6 +179,22 @@ jobs:
             --out artifacts/android/AgriOffice-Android.apk artifacts/android/aligned.apk
           "$APKSIGNER" verify --verbose artifacts/android/AgriOffice-Android.apk
           echo "signed with: $KEYMODE" >> "$GITHUB_STEP_SUMMARY"
+      - name: التحقق من الصلاحيات والأيقونة داخل APK المبني
+        run: |
+          set -euo pipefail
+          APK=artifacts/android/AgriOffice-Android.apk
+          AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)"
+          "$AAPT2" dump permissions "$APK" > apk-permissions.txt
+          cat apk-permissions.txt
+          grep -q "android.permission.POST_NOTIFICATIONS" apk-permissions.txt
+          grep -q "android.permission.READ_EXTERNAL_STORAGE" apk-permissions.txt
+          "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > apk-manifest.txt
+          grep -q "usesCleartextTraffic" apk-manifest.txt
+          # مزوّد مشاركة الملفات من @capacitor/share (لازم لحفظ/مشاركة PDF والنسخ)
+          grep -qi "fileprovider" apk-manifest.txt
+          # أيقونة الإشعارات التي يشير إليها capacitor.config.json
+          unzip -l "$APK" | grep -q "ic_stat_agri"
+          unzip -l "$APK" | grep -q "assets/public/index.html"
       - uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Android
@@ -144,26 +203,37 @@ jobs:
           retention-days: 30
 
   windows:
-    name: Windows 10/11 EXE
+    name: Windows 10/11 EXE (installer + portable)
     needs: web
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build portable EXE with electron-builder
-        run: npx electron-builder --win portable --x64 --publish=never --config electron-builder.json
-      - name: Collect installers
+      - name: Build installer + portable EXE with electron-builder
+        run: npx electron-builder --win nsis portable --x64 --publish=never --config electron-builder.json
+      - name: التحقق من المنتجات (مثبّت + محمول + asar يحتوي الواجهة)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
-          $exes = Get-ChildItem release -Recurse -Filter *.exe -ErrorAction SilentlyContinue
-          if (-not $exes) { Write-Error "electron-builder produced no EXE"; exit 1 }
-          $exes | Copy-Item -Destination artifacts/windows
+          $setup = Get-ChildItem release -Recurse -Filter 'AgriOffice-Setup-*.exe' -ErrorAction SilentlyContinue
+          $portable = Get-ChildItem release -Recurse -Filter 'AgriOffice-Portable-*.exe' -ErrorAction SilentlyContinue
+          if (-not $setup) { Write-Error 'لم يُنتج electron-builder مثبّت nsis' }
+          if (-not $portable) { Write-Error 'لم يُنتج electron-builder نسخة محمولة' }
+          $asar = 'release/win-unpacked/resources/app.asar'
+          if (-not (Test-Path $asar)) { Write-Error 'ملف app.asar غير موجود' }
+          npx --yes @electron/asar list $asar | Out-File asar-list.txt
+          $entries = Get-Content asar-list.txt
+          foreach ($required in @('/dist/index.html', '/electron/main.cjs', '/electron/preload.cjs')) {
+            if ($entries -notcontains $required) { Write-Error "محتوى asar ينقصه: $required" }
+          }
+          Copy-Item $setup -Destination artifacts/windows
+          Copy-Item $portable -Destination artifacts/windows
           Get-ChildItem artifacts/windows
       - uses: actions/upload-artifact@v4
         with:
@@ -172,10 +242,82 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  tauri-linux:
+    name: Tauri (Linux bundles — التحقق من الإعداد والبناء الفعلي)
+    needs: quality
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: اعتماديات نظام Tauri
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev
+      - run: npm ci
+      - run: npm --prefix desktop ci
+      - name: بناء حزم Tauri (deb + AppImage)
+        run: npm --prefix desktop run build -- --bundles deb,appimage
+      - name: التحقق من وجود الحزم
+        run: |
+          set -euo pipefail
+          ls -la desktop/src-tauri/target/release/bundle
+          find desktop/src-tauri/target/release/bundle -name '*.deb' -o -name '*.AppImage' | head
+          test -n "$(find desktop/src-tauri/target/release/bundle -name '*.deb' | head -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Tauri-Linux
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: warn
+          retention-days: 30
+
+  tauri-windows:
+    name: Tauri (Windows bundles)
+    needs: quality
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: npm ci
+      - run: npm --prefix desktop ci
+      - name: بناء حزم Tauri (msi + nsis)
+        run: npm --prefix desktop run build -- --bundles msi,nsis
+      - name: التحقق من وجود الحزم
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundles = Get-ChildItem desktop/src-tauri/target/release/bundle -Recurse -Include *.msi,*.exe -ErrorAction SilentlyContinue
+          $bundles | Format-Table FullName, Length
+          if (-not ($bundles | Where-Object { $_.Extension -eq '.msi' })) { Write-Error 'لم يُنتج Tauri حزمة msi' }
+          if (-not ($bundles | Where-Object { $_.Extension -eq '.exe' })) { Write-Error 'لم يُنتج Tauri حزمة nsis' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgriOffice-Tauri-Windows
+          path: |
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
   release:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [web, android, windows]
+    needs: [web, android, windows, tauri-linux, tauri-windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
