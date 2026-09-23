@@ -66,6 +66,7 @@ async function main() {
   const preloadCjs = await readText('electron/preload.cjs');
   const prepareAndroid = await readText('scripts/prepare-android.mjs');
   const appTsx = await readText('src/App.tsx');
+  const prepareAndroidTests = await readText('tests/prepareAndroid.test.ts');
   const workflow = await readText('.github/workflows/build.yml');
 
   /* ---------------------------- عام ---------------------------- */
@@ -143,7 +144,36 @@ async function main() {
     'سكربت التجهيز ينسخ أيقونة الإشعارات من أصل المستودع',
     /NOTIFICATION_ICON_SOURCE = 'resources\/android\/ic_stat_agri\.xml'/.test(prepareAndroid)
   );
+  const providerPaths = (await fileText(join(repoRoot, 'resources/android/file_paths.xml'))) ?? '';
+  check(
+    'مزوّد الملفات معلن بسلطة .fileprovider التي يبحث عنها @capacitor/share',
+    /androidx\.core\.content\.FileProvider/.test(prepareAndroid) &&
+      /FILE_PROVIDER_AUTHORITY = '\$\{applicationId\}\.fileprovider'/.test(prepareAndroid)
+  );
+  check(
+    'سكربت التجهيز ينسخ مسارات المزوّد من أصل المستودع',
+    /FILE_PROVIDER_PATHS_SOURCE = 'resources\/android\/file_paths\.xml'/.test(prepareAndroid)
+  );
+  check(
+    'مسارات المزوّد تغطي المستندات والكاش والملفات',
+    /<external-path/.test(providerPaths) &&
+      /<external-cache-path/.test(providerPaths) &&
+      /<cache-path/.test(providerPaths) &&
+      /<files-path/.test(providerPaths)
+  );
+  check(
+    'اختبارات سكربت أندرويد تشمل app_name ومزوّد الملفات',
+    /ensureFileProvider/.test(prepareAndroidTests) &&
+      /syncAppName/.test(prepareAndroidTests) &&
+      /prepareAndroid\(\{ root \}\)/.test(prepareAndroidTests)
+  );
   check('سكربت التجهيز متاح من package.json', /prepare-android\.mjs/.test(pkg.scripts?.['cap:prepare'] ?? ''));
+  check(
+    'CI يتحقق من مزوّد الملفات وapp_name داخل الناتج الفعلي',
+    /fileprovider|FileProvider/.test(workflow) &&
+      /grep -c 'name="app_name"'/.test(workflow) &&
+      /resources\/android\/file_paths\.xml/.test(workflow)
+  );
 
   /* ---------------------------- Tauri ---------------------------- */
   section('Tauri (سطح المكتب البديل)');

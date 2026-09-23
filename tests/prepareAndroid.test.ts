@@ -3,9 +3,13 @@ import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  FILE_PROVIDER_AUTHORITY,
+  FILE_PROVIDER_CLASS,
+  FILE_PROVIDER_PATHS_SOURCE,
   NOTIFICATION_ICON_SOURCE,
   PERMISSIONS,
   ensureApplicationAttribute,
+  ensureFileProvider,
   ensurePermission,
   prepareAndroid,
   syncAppName,
@@ -19,6 +23,9 @@ import {
  * `Found item String/app_name more than one time` لأن السكربت كان يُضيف وسم
  * `app_name` بدل مزامنة الموجود. الاختبارات هنا تشغّل السكربت فعلياً على مشروع
  * مؤقت وتتحقق من عدم تكرار أي وسم ومن أن التشغيل مرتين لا يغيّر بايتاً واحداً.
+ *
+ * كذلك تغطي مزوّد الملفات (FileProvider): بدونه يفشل `Share.share({ url: 'file://…' })`
+ * وقت التشغيل لأن @capacitor/share يبحث عن سلطة `${applicationId}.fileprovider`.
  */
 
 const CAPACITOR_CONFIG = {
@@ -59,8 +66,9 @@ async function createFakeAndroidProject(strings = CAPACITOR_STRINGS, manifest = 
   await writeFile(join(root, 'android/app/src/main/AndroidManifest.xml'), manifest, 'utf8');
   await writeFile(join(root, 'android/app/src/main/res/values/strings.xml'), strings, 'utf8');
   await writeFile(join(root, 'capacitor.config.json'), JSON.stringify(CAPACITOR_CONFIG, null, 2), 'utf8');
-  // مثل المستودع: أصل أيقونة الإشعارات مصدره resources/android
+  // مثل المستودع: أصول أندرويد (الأيقونة ومسارات المزوّد) مصدرها resources/android
   await cp(join(process.cwd(), NOTIFICATION_ICON_SOURCE), join(root, NOTIFICATION_ICON_SOURCE));
+  await cp(join(process.cwd(), FILE_PROVIDER_PATHS_SOURCE), join(root, FILE_PROVIDER_PATHS_SOURCE));
   return root;
 }
 
@@ -154,6 +162,74 @@ describe('الصلاحيات وسمات التطبيق', () => {
   });
 });
 
+describe('مزوّد الملفات لمشاركة الملفات (يحتاجه @capacitor/share)', () => {
+  it('يضيف المزوّد مرة واحدة بالسلطة والصيغة التي يبحث عنها Share', () => {
+    const first = ensureFileProvider(CAPACITOR_MANIFEST);
+    expect(first.added).toBe(true);
+    expect(first.repaired).toBe(false);
+    expect(first.xml).toContain(`android:name="${FILE_PROVIDER_CLASS}"`);
+    expect(first.xml).toContain(`android:authorities="${FILE_PROVIDER_AUTHORITY}"`);
+    expect(first.xml).toContain('android:exported="false"');
+    expect(first.xml).toContain('android:grantUriPermissions="true"');
+    expect(first.xml).toContain('android:resource="@xml/file_paths"');
+    expect(first.xml.indexOf('<provider')).toBeLessThan(first.xml.indexOf('</application>'));
+
+    // تشغيل ثانٍ: لا نسخة ثانية ولا تغيير في البايتات
+    const second = ensureFileProvider(first.xml);
+    expect(second.added).toBe(false);
+    expect(second.repaired).toBe(false);
+    expect(second.xml).toBe(first.xml);
+    expect(second.xml.match(/<provider/g)).toHaveLength(1);
+  });
+
+  it('يصحّح إعلاناً ذاتي الإغلاق أو بسلطة مخالفة بدل تركه ناقصاً', () => {
+    const broken = CAPACITOR_MANIFEST.replace(
+      '</application>',
+      '    <provider android:name="androidx.core.content.FileProvider" android:authorities="com.old.fileprovider" />\n    </application>'
+    );
+    const fixed = ensureFileProvider(broken);
+    expect(fixed.added).toBe(false);
+    expect(fixed.repaired).toBe(true);
+    expect(fixed.xml).not.toContain('com.old.fileprovider');
+    expect(fixed.xml).toContain('android:resource="@xml/file_paths"');
+    expect(fixed.xml.match(/<provider/g)).toHaveLength(1);
+    expect(ensureFileProvider(fixed.xml).repaired).toBe(false);
+  });
+
+  it('يوجّه مسار المزوّد إلى @xml/file_paths حتى لو أشار إلى ملف آخر', () => {
+    const otherResource = CAPACITOR_MANIFEST.replace(
+      '</application>',
+      [
+        '    <provider android:name="androidx.core.content.FileProvider"',
+        '        android:authorities="x.fileprovider" android:exported="true">',
+        '        <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/other_paths" />',
+        '    </provider>',
+        '    </application>'
+      ].join('\n')
+    );
+    const fixed = ensureFileProvider(otherResource);
+    expect(fixed.repaired).toBe(true);
+    expect(fixed.xml).toContain('android:resource="@xml/file_paths"');
+    expect(fixed.xml).not.toContain('@xml/other_paths');
+    expect(fixed.xml.match(/android\.support\.FILE_PROVIDER_PATHS/g)).toHaveLength(1);
+    expect(fixed.xml).toContain('android:exported="false"');
+  });
+
+  it('يحفظ السمات الإضافية الموضوعة يدوياً ولا يحذفها', () => {
+    const withExtra = CAPACITOR_MANIFEST.replace(
+      '</application>',
+      '    <provider android:name="androidx.core.content.FileProvider" android:label="مزوّد الملفات" />\n    </application>'
+    );
+    const fixed = ensureFileProvider(withExtra);
+    expect(fixed.xml).toContain('android:label="مزوّد الملفات"');
+    expect(fixed.xml).toContain(`android:authorities="${FILE_PROVIDER_AUTHORITY}"`);
+  });
+
+  it('يفشل برسالة واضحة إذا كان المانيفست مبتوراً', () => {
+    expect(() => ensureFileProvider('<manifest><application>')).toThrow(/\/application/);
+  });
+});
+
 describe('التشغيل الفعلي على مشروع مؤقت', () => {
   it('يجهّز المشروع، ويكون التشغيل الثاني بلا أي تغيير في الملفات', async () => {
     const root = await createFakeAndroidProject();
@@ -162,7 +238,15 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
       expect(first.addedPermissions).toHaveLength(PERMISSIONS.length);
       expect(first.duplicatesRemoved).toBe(0);
       expect(first.iconWritten).toBe(true);
+      expect(first.pathsWritten).toBe(true);
+      expect(first.fileProviderAdded).toBe(true);
+      expect(first.fileProviderRepaired).toBe(false);
       expect(first.appName).toBe('إدارة المكتب الزراعي');
+
+      const manifestText = await readFile(join(root, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
+      expect(manifestText).toContain(`android:authorities="${FILE_PROVIDER_AUTHORITY}"`);
+      const pathsText = await readFile(join(root, 'android/app/src/main/res/xml/file_paths.xml'), 'utf8');
+      expect(pathsText).toBe(await readFile(join(process.cwd(), FILE_PROVIDER_PATHS_SOURCE), 'utf8'));
 
       const manifestPath = join(root, 'android/app/src/main/AndroidManifest.xml');
       const stringsPath = join(root, 'android/app/src/main/res/values/strings.xml');
@@ -173,6 +257,9 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
       expect(second.addedPermissions).toHaveLength(0);
       expect(second.existingPermissions).toHaveLength(PERMISSIONS.length);
       expect(second.iconWritten).toBe(false);
+      expect(second.pathsWritten).toBe(false);
+      expect(second.fileProviderAdded).toBe(false);
+      expect(second.fileProviderRepaired).toBe(false);
       expect(second.duplicatesRemoved).toBe(0);
 
       expect(await readFile(manifestPath, 'utf8')).toBe(manifestAfterFirst);
@@ -203,6 +290,16 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
     const root = await mkdtemp(join(tmpdir(), 'agri-android-empty-'));
     try {
       await expect(prepareAndroid({ root })).rejects.toThrow(/مجلد android غير موجود/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('يفشل برسالة واضحة إذا غاب أصل مسارات المزوّد', async () => {
+    const root = await createFakeAndroidProject();
+    try {
+      await rm(join(root, FILE_PROVIDER_PATHS_SOURCE));
+      await expect(prepareAndroid({ root })).rejects.toThrow(/مسارات مزوّد الملفات/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

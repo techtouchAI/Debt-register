@@ -12,6 +12,9 @@
  *   - مزامنة اسم التطبيق في strings.xml مع capacitor.config.json **دون تكرار
  *     الوسم** (تكرار `app_name` يُفشل `MergeResources` في Gradle: Found item
  *     String/app_name more than one time).
+ *   - مزوّد الملفات (FileProvider) الذي يتطلبه @capacitor/share: بلا إعلانه في
+ *     المانيفست بسلطة `${applicationId}.fileprovider` تفشل مشاركة ملف محلي
+ *     (`file://`) كلياً — أي أن حفظ/مشاركة PDF والنسخ الاحتياطية يفشل على الجهاز.
  *
  * التشغيل المتكرر آمن: لا يُكرر أي وسم ولا يستبدل شيئاً موجوداً إلا القيم
  * المقصودة. الدوال مُصدَّرة لتُختبر مباشرة على مشروع مؤقت في `tests/`.
@@ -55,6 +58,25 @@ export const PERMISSIONS = [
 
 /** مصدر الحقيقة الوحيد لأيقونة الإشعارات (يُستنسخ إلى مشروع أندرويد). */
 export const NOTIFICATION_ICON_SOURCE = 'resources/android/ic_stat_agri.xml';
+
+/** صنف مزوّد الملفات الذي يستخدمه @capacitor/share. */
+export const FILE_PROVIDER_CLASS = 'androidx.core.content.FileProvider';
+
+/** سلطة المزوّد التي يبحث عنها Share: packageName + ".fileprovider". */
+export const FILE_PROVIDER_AUTHORITY = '${applicationId}.fileprovider';
+
+/** مصدر الحقيقة الوحيد لمسارات المزوّد (يُستنسخ إلى مشروع أندرويد). */
+export const FILE_PROVIDER_PATHS_SOURCE = 'resources/android/file_paths.xml';
+
+/** مورد المسارات الذي يشير إليه المزوّد. */
+export const FILE_PROVIDER_PATHS_RESOURCE = '@xml/file_paths';
+
+/**
+ * أي وسم <provider>: ذاتي الإغلاق أو مقترن حتى نهايته.
+ * (المطابقة الكسولة `[\s\S]*?` تقف عند أول `/>` داخل الوسم — أي عند `meta-data`
+ * فتقطعه من منتصفه؛ لذلك الفرعان صريحان.)
+ */
+const PROVIDER_BLOCK = /<provider\b[^>]*\/>|<provider\b[^>]*>[\s\S]*?<\/provider>/g;
 
 /** تهريب محارف XML في القيم التي نكتبها (اسم التطبيق من الإعداد). */
 function escapeXml(value) {
@@ -132,19 +154,114 @@ export function ensurePermission(manifestXml, permission) {
   return { xml: manifestXml.replace('</manifest>', `${tag}\n</manifest>`), added: true };
 }
 
+/** يفرض قيمة سمة داخل وسم واحد (يحدّث القيمة أو يضيف السمة). */
+function setTagAttribute(tag, name, attribute, value) {
+  const pattern = new RegExp(`${attribute}="[^"]*"`);
+  if (pattern.test(tag)) return tag.replace(pattern, `${attribute}="${value}"`);
+  return tag.replace(new RegExp(`<${name}`), `<${name}\n        ${attribute}="${value}"`);
+}
+
 /** يفرض قيمة سمة على وسم <application> (يضيفها إن لم تكن موجودة). */
 export function ensureApplicationAttribute(manifestXml, attribute, value) {
   const applicationMatch = manifestXml.match(/<application[\s\S]*?>/);
   if (!applicationMatch) throw new Error('لم يُعثر على وسم <application> في المانيفست');
+  return manifestXml.replace(applicationMatch[0], setTagAttribute(applicationMatch[0], 'application', attribute, value));
+}
 
-  const pattern = new RegExp(`${attribute}="[^"]*"`);
-  let tag = applicationMatch[0];
-  if (pattern.test(tag)) {
-    tag = tag.replace(pattern, `${attribute}="${value}"`);
-  } else {
-    tag = tag.replace(/<application/, `<application\n        ${attribute}="${value}"`);
+/** السمات التي يتولاها هذا السكربت في مزوّد الملفات (تُكتب دائماً بالقيم القياسية). */
+const MANAGED_PROVIDER_ATTRIBUTES = ['android:authorities', 'android:exported', 'android:grantUriPermissions'];
+
+/** تعبير مسار المزوّد داخل المزوّد (يُصحَّح إن أشار إلى ملف آخر). */
+const PROVIDER_METADATA = /<meta-data[^>]*android:name="android\.support\.FILE_PROVIDER_PATHS"[\s\S]*?\/>/;
+
+/** سمات وسم واحد في خريطة (الترتيب غير مهم لأن البناء قياسي). */
+function attributeMap(tag) {
+  return new Map([...tag.matchAll(/([\w:.-]+)="([^"]*)"/g)].map((match) => [match[1], match[2]]));
+}
+
+/** سطر meta-data الذي يربط المزوّد بملف المسارات (بإزاحة الأب + 4). */
+function providerMetaDataLine(indent) {
+  const inner = `${indent}    `;
+  return [
+    `${inner}<meta-data`,
+    `${inner}    android:name="android.support.FILE_PROVIDER_PATHS"`,
+    `${inner}    android:resource="${FILE_PROVIDER_PATHS_RESOURCE}" />`
+  ].join('\n');
+}
+
+/**
+ * وسم فتح المزوّد بصيغة قياسية واحدة: الاسم ثم أي سمات أخرى موجودة (مرتبة)
+ * ثم السمات المُدارة — فالنتيجة حتمية ويتوقف التغيير بعد أول تشغيل.
+ * إزاحة السطر الأول لا تُضاف هنا (يأتي موضع الإدراج بها)، والباقي بإزاحة + 4.
+ */
+function providerOpenTag(indent, authority, existingTag = '') {
+  const attributes = attributeMap(existingTag);
+  const extras = [...attributes.keys()]
+    .filter((key) => key !== 'android:name' && !MANAGED_PROVIDER_ATTRIBUTES.includes(key))
+    .sort();
+  const inner = `${indent}    `;
+  return [
+    '<provider',
+    `${inner}android:name="${FILE_PROVIDER_CLASS}"`,
+    ...extras.map((key) => `${inner}${key}="${attributes.get(key)}"`),
+    `${inner}android:authorities="${authority}"`,
+    `${inner}android:exported="false"`,
+    `${inner}android:grantUriPermissions="true">`
+  ].join('\n');
+}
+
+/** جسم مزوّد الملفات كاملاً (يُكتب داخل <application> على مستوى الوسوم الشقيقة). */
+function fileProviderBlock(indent, authority = FILE_PROVIDER_AUTHORITY) {
+  return `${indent}${providerOpenTag(indent, authority)}\n${providerMetaDataLine(indent)}\n${indent}</provider>`;
+}
+
+/**
+ * يضمن مزوّد ملفات صالحاً لمشاركة الملفات المحلية (@capacitor/share).
+ *  - غائب ⇒ يُضاف مرة واحدة داخل <application>.
+ *  - موجود لكن ناقصاً أو مخالفاً (سمة مخالفة، مورد مسارات آخر، وسم ذاتي الإغلاق
+ *    بلا meta-data) ⇒ يُعاد بناؤه بالصيغة القياسية نفسها، فالمزوّد الناقص يفشل
+ *    وقت التشغيل عند مشاركة أي ملف.
+ */
+export function ensureFileProvider(manifestXml, authority = FILE_PROVIDER_AUTHORITY) {
+  const matches = [...manifestXml.matchAll(PROVIDER_BLOCK)];
+  const existing = matches.find((match) => match[0].includes(`android:name="${FILE_PROVIDER_CLASS}"`));
+
+  if (!existing) {
+    if (!manifestXml.includes('</application>')) {
+      throw new Error('ملف المانيفست غير مكتمل (لا يوجد وسم </application>)');
+    }
+    const lastClose = manifestXml.lastIndexOf('</application>');
+    const closeIndent = manifestXml.slice(0, lastClose).match(/([ \t]*)$/)?.[1] ?? '';
+    const before = manifestXml.slice(0, lastClose).replace(/[ \t]*$/, '');
+    const providerIndent = `${closeIndent}    `;
+    const xml = `${before}${fileProviderBlock(providerIndent, authority)}\n${closeIndent}${manifestXml.slice(lastClose)}`;
+    return { xml, added: true, repaired: false };
   }
-  return manifestXml.replace(applicationMatch[0], tag);
+
+  const element = existing[0];
+  const openTag = element.match(/^<provider\b[^>]*\/?>/)?.[0];
+  if (!openTag) throw new Error('تعذّر قراءة وسم مزوّد الملفات في المانيفست');
+
+  const indent = manifestXml.slice(0, existing.index).match(/([ \t]*)$/)?.[1] ?? '';
+  const header = providerOpenTag(indent, authority, openTag);
+  const body = openTag.endsWith('/>') ? '' : element.slice(openTag.length, element.length - '</provider>'.length);
+
+  let normalized;
+  if (PROVIDER_METADATA.test(body)) {
+    // مسار المزوّد موجود: يُصحَّح إن أشار إلى ملف آخر، ويُحفظ ما عداه كما هو
+    const fixedBody = body.replace(PROVIDER_METADATA, (block) =>
+      block.includes('android:resource=')
+        ? block.replace(/android:resource="[^"]*"/, `android:resource="${FILE_PROVIDER_PATHS_RESOURCE}"`)
+        : block.replace(/\/>$/, `android:resource="${FILE_PROVIDER_PATHS_RESOURCE}" />`)
+    );
+    normalized = `${header}${fixedBody}</provider>`;
+  } else {
+    const keptBody = body.replace(/\s+$/, '');
+    normalized = `${header}\n${keptBody ? `${keptBody}\n` : ''}${providerMetaDataLine(indent)}\n${indent}</provider>`;
+  }
+
+  const xml = manifestXml.replace(element, normalized);
+  return { xml, added: false, repaired: xml !== manifestXml };
 }
 
 /**
@@ -175,11 +292,15 @@ export async function prepareAndroid({ root = repoRoot, log = () => undefined } 
   }
   manifest = ensureApplicationAttribute(manifest, 'android:usesCleartextTraffic', 'false');
   manifest = ensureApplicationAttribute(manifest, 'android:allowBackup', 'true');
+  const provider = ensureFileProvider(manifest);
+  manifest = provider.xml;
   await writeFile(manifestPath, manifest, 'utf8');
   for (const name of addedPermissions) log(`أُضيفت صلاحية: ${name}`);
   log(
     `المانيفست جاهز: أُضيفت ${addedPermissions.length} صلاحية، موجودة مسبقاً ${existingPermissions.length}، ومنع النص الصريح مفروض`
   );
+  if (provider.added) log(`أُضيف مزوّد الملفات (${FILE_PROVIDER_AUTHORITY}) لمشاركة PDF والنسخ`);
+  else if (provider.repaired) log('صُحّح إعلان مزوّد الملفات ليطابق ما يتوقعه @capacitor/share');
 
   /* 2) أيقونة الإشعارات: تُنسخ من أصل المستودع (مصدر واحد للحقيقة) */
   const iconSourcePath = join(root, NOTIFICATION_ICON_SOURCE);
@@ -198,6 +319,20 @@ export async function prepareAndroid({ root = repoRoot, log = () => undefined } 
       : `أيقونة الإشعارات موجودة ومطابقة: drawable/${NOTIFICATION_ICON}.xml`
   );
 
+  /* 2ب) مسارات مزوّد الملفات: تُنسخ من أصل المستودع (مصدر واحد للحقيقة) */
+  const pathsSourcePath = join(root, FILE_PROVIDER_PATHS_SOURCE);
+  if (!existsSync(pathsSourcePath)) {
+    throw new Error(`لم يُعثر على أصل مسارات مزوّد الملفات: ${FILE_PROVIDER_PATHS_SOURCE}`);
+  }
+  const pathsSource = await readFile(pathsSourcePath, 'utf8');
+  const xmlDir = join(androidDir, 'app/src/main/res/xml');
+  await mkdir(xmlDir, { recursive: true });
+  const pathsPath = join(xmlDir, 'file_paths.xml');
+  const previousPaths = existsSync(pathsPath) ? await readFile(pathsPath, 'utf8') : null;
+  const pathsWritten = previousPaths !== pathsSource;
+  if (pathsWritten) await writeFile(pathsPath, pathsSource, 'utf8');
+  log(pathsWritten ? 'كُتب res/xml/file_paths.xml' : 'res/xml/file_paths.xml موجود ومطابق');
+
   /* 3) اسم التطبيق في strings.xml + التحقق من إعداد Capacitor */
   const config = JSON.parse(await readFile(join(root, 'capacitor.config.json'), 'utf8'));
   const { appName } = validateCapacitorConfig(config);
@@ -214,7 +349,10 @@ export async function prepareAndroid({ root = repoRoot, log = () => undefined } 
     addedPermissions,
     existingPermissions,
     duplicatesRemoved: synced.duplicates,
-    iconWritten
+    iconWritten,
+    pathsWritten,
+    fileProviderAdded: provider.added,
+    fileProviderRepaired: provider.repaired
   };
 }
 

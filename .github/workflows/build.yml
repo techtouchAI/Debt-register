@@ -63,7 +63,7 @@ jobs:
           test -f dist/sw.js
           test -f dist/manifest.webmanifest
           # منع انحدار تقسيم الحزم: يجب ألا يعود الملف الرئيسي ضخماً
-          MAIN_BUNDLE=$(ls -S dist/assets/index-*.js | head -1)
+          MAIN_BUNDLE=$(ls -S dist/assets/index-*.js | sed -n 1p)
           SIZE=$(wc -c < "$MAIN_BUNDLE")
           if [ "$SIZE" -gt 400000 ]; then
             echo "::error title=Bundle regression::$MAIN_BUNDLE is $SIZE bytes (> 400 KB)"
@@ -148,8 +148,13 @@ jobs:
           test "$(grep -c 'name="app_name"' android/app/src/main/res/values/strings.xml)" = "1"
           grep -q '<string name="app_name">' android/app/src/main/res/values/strings.xml
           grep -q 'android:name="android.permission.POST_NOTIFICATIONS"' "$MANIFEST"
-          # أيقونة الإشعارات منسوخة من أصل المستودع بلا تعديل
+          # أيقونة الإشعارات ومسارات المزوّد منسوخة من أصل المستودع بلا تعديل
           diff -q resources/android/ic_stat_agri.xml android/app/src/main/res/drawable/ic_stat_agri.xml
+          diff -q resources/android/file_paths.xml android/app/src/main/res/xml/file_paths.xml
+          # مزوّد الملفات الذي يتطلبه @capacitor/share (بدونه تفشل مشاركة PDF/النسخ)
+          grep -q 'androidx.core.content.FileProvider' "$MANIFEST"
+          grep -qF 'android:authorities="${applicationId}.fileprovider"' "$MANIFEST"
+          grep -qF 'android:resource="@xml/file_paths"' "$MANIFEST"
       - name: التحقق من إعدادات SDK (الإشعارات تحتاج targetSdk 33+)
         run: |
           set -euo pipefail
@@ -168,7 +173,7 @@ jobs:
       - name: Sign APK (production key or CI fallback)
         run: |
           set -euo pipefail
-          UNSIGNED="$(find android/app/build/outputs/apk/release -name '*-release-unsigned.apk' | head -1)"
+          UNSIGNED="$(find android/app/build/outputs/apk/release -name '*-release-unsigned.apk' -print -quit)"
           test -n "$UNSIGNED" || { echo 'No unsigned release APK produced'; exit 1; }
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)"
           ZIPALIGN="$(ls -d "$ANDROID_HOME"/build-tools/*/zipalign | tail -1)"
@@ -194,24 +199,43 @@ jobs:
             --out artifacts/android/AgriOffice-Android.apk artifacts/android/aligned.apk
           "$APKSIGNER" verify --verbose artifacts/android/AgriOffice-Android.apk
           echo "signed with: $KEYMODE" >> "$GITHUB_STEP_SUMMARY"
-      - name: التحقق من الصلاحيات والأيقونة داخل APK المبني
+      - name: التحقق من الصلاحيات والأيقونة والمزوّد داخل APK المبني
         run: |
           set -euo pipefail
           APK=artifacts/android/AgriOffice-Android.apk
           AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)"
+
+          # تحقق صريح يطبع ما يبحث عنه عند الفشل، بدل grep صامت يفشل بلا سبب واضح
+          require() { # require <ملف> <نمط> <وصف>
+            if grep -qE "$2" "$1"; then
+              echo "✔ $3"
+            else
+              echo "::error::$3 — لم يُعثر على النمط «$2» في $1"
+              grep -m 10 -E "$2" "$1" || sed -n '1,25p' "$1"
+              exit 1
+            fi
+          }
+
           "$AAPT2" dump permissions "$APK" > apk-permissions.txt
           cat apk-permissions.txt
-          grep -q "android.permission.POST_NOTIFICATIONS" apk-permissions.txt
-          grep -q "android.permission.READ_EXTERNAL_STORAGE" apk-permissions.txt
+          require apk-permissions.txt 'android\.permission\.POST_NOTIFICATIONS' 'صلاحية الإشعارات'
+          require apk-permissions.txt 'android\.permission\.READ_EXTERNAL_STORAGE' 'صلاحية قراءة التخزين (أندرويد ≤12)'
+
           "$AAPT2" dump resources "$APK" > apk-resources.txt
-          grep -q "ic_stat_agri" apk-resources.txt
+          require apk-resources.txt 'ic_stat_agri' 'أيقونة الإشعارات ضمن الموارد'
+          require apk-resources.txt 'xml/file_paths' 'مورد مسارات المزوّد ضمن الموارد'
+
           "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > apk-manifest.txt
-          grep -q "usesCleartextTraffic" apk-manifest.txt
+          require apk-manifest.txt 'usesCleartextTraffic' 'منع النص الصريح'
           # مزوّد مشاركة الملفات من @capacitor/share (لازم لحفظ/مشاركة PDF والنسخ)
-          grep -qi "fileprovider" apk-manifest.txt
-          # أيقونة الإشعارات التي يشير إليها capacitor.config.json
-          unzip -l "$APK" | grep -q "ic_stat_agri"
-          unzip -l "$APK" | grep -q "assets/public/index.html"
+          require apk-manifest.txt 'androidx\.core\.content\.FileProvider' 'مزوّد الملفات داخل المانيفست المدمج'
+          require apk-manifest.txt '\.fileprovider' 'سلطة مزوّد الملفات'
+
+          # قائمة محتوى الحزمة تُكتب في ملف: الأنابيب مع `grep -q` تُسبّب SIGPIPE
+          # فيفشل الأمر بسبب pipefail حتى عند نجاح التحقق
+          unzip -l "$APK" > apk-entries.txt
+          head -5 apk-entries.txt
+          require apk-entries.txt 'assets/public/index\.html' 'واجهة الويب داخل الحزمة'
       - uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Android
@@ -335,19 +359,26 @@ jobs:
           test -f desktop/src-tauri/dist/index.html
           ls -la desktop/src-tauri/dist | head -5
 
-          DEB="$(find desktop/src-tauri/target/release/bundle -name '*.deb' | head -1)"
-          APPIMAGE="$(find desktop/src-tauri/target/release/bundle -name '*.AppImage' | head -1)"
+          DEB="$(find desktop/src-tauri/target/release/bundle -name '*.deb' -print -quit)"
+          APPIMAGE="$(find desktop/src-tauri/target/release/bundle -name '*.AppImage' -print -quit)"
           test -n "$DEB"
           test -n "$APPIMAGE"
 
-          # بيانات الحزمة ومحتواها
+          # بيانات الحزمة ومحتواها (القائمة في متغير: grep -q يغلق الأنبوب فيُسبّب
+          # SIGPIPE ويفشل الأمر بسبب pipefail رغم صحة الملف)
           dpkg-deb -f "$DEB" Package Version Architecture
-          dpkg-deb -c "$DEB" | grep -qE 'usr/bin/|usr/lib/'
+          DEB_LIST="$(dpkg-deb -c "$DEB")"
+          if ! grep -Eq 'usr/(bin|lib)/' <<< "$DEB_LIST"; then
+            echo "::error::حزمة deb لا تحتوي ملفات التنفيذ المتوقعة"
+            sed -n '1,20p' <<< "$DEB_LIST"
+            exit 1
+          fi
+          grep -E 'usr/(bin|lib)/' <<< "$DEB_LIST" | sed -n '1,5p'
 
           # الملف التنفيذي داخل الحزمة يجب أن يحتوي واجهة التطبيق المدمجة فعلاً
           TMP="$(mktemp -d)"
           dpkg-deb -x "$DEB" "$TMP"
-          BIN="$(find "$TMP" -type f -perm -u+x -name 'agro-office*' | head -1)"
+          BIN="$(find "$TMP" -type f -perm -u+x -name 'agro-office*' -print -quit)"
           test -n "$BIN"
           echo "binary=$BIN size=$(stat -c%s "$BIN")"
           grep -qa 'id="root"' "$BIN"
@@ -355,7 +386,12 @@ jobs:
           # والـ AppImage ملف تنفيذي صالح بحجم معقول
           test -s "$APPIMAGE"
           file "$APPIMAGE"
-          head -c 4 "$APPIMAGE" | grep -qa 'ELF'
+          head -c 4 "$APPIMAGE" > appimage-magic.txt
+          if ! grep -qa 'ELF' appimage-magic.txt; then
+            echo "::error::ملف AppImage لا يبدأ بترويسة ELF"
+            od -An -tx1 appimage-magic.txt
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Tauri-Linux
