@@ -1,3 +1,4 @@
+import { logBackgroundFailure } from './lifecycle';
 import { db, checkLowStock, getSettingsOrDefault, logActivity } from './db';
 import { nextPurchaseNumber } from './sequence';
 import { formatCurrency, roundMoney, toFiniteNumber, toISOStringOrNull } from './utils';
@@ -234,8 +235,8 @@ export async function savePurchase(draft: PurchaseDraft): Promise<PurchaseSaveRe
       `تم ${isEdit ? 'تعديل' : 'إنشاء'} وصل شراء ${result.purchaseNumber} من ${supplierName} بمبلغ ${formatCurrency(total, settings.currency)}`,
       'purchase',
       result.purchaseId
-    ).catch((error) => console.warn('تعذّر تسجيل النشاط:', error));
-    await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+    ).catch((error) => logBackgroundFailure('تعذّر تسجيل النشاط:', error));
+    await checkLowStock().catch((error) => logBackgroundFailure('تعذّر فحص المخزون:', error));
   }
 
   return result;
@@ -283,7 +284,7 @@ export async function deletePurchase(purchaseId: number): Promise<{ ok: true } |
 
   if (result.ok) {
     await logActivity('حذف وصل شراء', `تم حذف وصل الشراء رقم ${purchaseId}`, 'purchase', purchaseId).catch(() => undefined);
-    await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+    await checkLowStock().catch((error) => logBackgroundFailure('تعذّر فحص المخزون:', error));
   }
   return result;
 }

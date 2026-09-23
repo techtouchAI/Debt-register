@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { getSettings, logActivity, setMeta, updateSettings } from '@/lib/db';
 import { fileToBase64 } from '@/lib/utils';
+import { MAX_OFFICE_NAME_LENGTH, validateOfficeName } from '@/lib/officeName';
+import { useAsyncScope } from '@/hooks/useAsyncScope';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import type { OfficeSettings } from '@/types';
@@ -32,6 +34,10 @@ export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
   const [invoiceFooter, setInvoiceFooter] = useState(initial?.invoiceFooter || 'شكراً لتعاملكم معنا');
   const [logo, setLogo] = useState<string | undefined>(initial?.logo);
   const [isSaving, setIsSaving] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  /* النطاق يُلغى عند مغادرة الشاشة فيتوقف الحفظ في منتصفه بدل أن يكتب في
+     قاعدة بيانات أُغلقت (سبب أخطاء DatabaseClosedError المتأخرة سابقاً). */
+  const scope = useAsyncScope();
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -56,26 +62,40 @@ export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
     event.preventDefault();
     if (isSaving) return;
 
-    const trimmedName = officeName.trim();
-    if (!trimmedName) {
-      toast.warning('اسم المكتب مطلوب', 'أدخل اسم مكتبك الحقيقي — سيظهر في ترويسة الفواتير');
+    // التحقق نفسه المستخدم في الإعدادات: الاسم الكامل يُقبل (حتى الطويل)،
+    // ويرفض فقط الفراغ أو تجاوز الحد الأقصى مع رسالة واضحة.
+    const validation = validateOfficeName(officeName);
+    if (!validation.ok) {
+      setNameError(validation.error ?? 'اسم المكتب مطلوب');
+      toast.warning('اسم المكتب غير صالح', validation.error ?? 'أدخل اسم مكتبك الحقيقي');
       return;
     }
+    const trimmedName = validation.value;
+    setNameError(null);
 
     setIsSaving(true);
     try {
-      await updateSettings({
-        officeName: trimmedName,
-        phone: phone.trim(),
-        address: address.trim(),
-        currency,
-        invoiceFooter: invoiceFooter.trim(),
-        logo
+      // runQuiet: عند مغادرة الشاشة يتوقف التسلسل هنا بدل المتابعة على قاعدة مغلقة
+      await scope.run(async () => {
+        await updateSettings({
+          officeName: trimmedName,
+          phone: phone.trim(),
+          address: address.trim(),
+          currency,
+          invoiceFooter: invoiceFooter.trim(),
+          logo
+        });
+        scope.throwIfAborted();
+        await setMeta(SETUP_COMPLETED_KEY, new Date().toISOString());
+        scope.throwIfAborted();
+        await logActivity('إعداد المكتب', `تم إعداد بيانات المكتب لأول مرة: ${trimmedName}`).catch(
+          () => undefined
+        );
+        scope.throwIfAborted();
       });
-      await setMeta(SETUP_COMPLETED_KEY, new Date().toISOString());
-      await logActivity('إعداد المكتب', `تم إعداد بيانات المكتب لأول مرة: ${trimmedName}`).catch(() => undefined);
 
-      const saved = await getSettings();
+      const saved = await scope.runQuiet(() => getSettings());
+      if (scope.aborted) return;
       toast.success('تم إعداد المكتب بنجاح', `أهلاً بك في ${trimmedName}`);
       onDone(
         saved || {
@@ -93,9 +113,10 @@ export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
         }
       );
     } catch (error) {
+      if (scope.aborted) return; // الشاشة غادرت: لا رسائل ولا تحديث حالة
       reportError('FirstRunSetup.save', error, 'تعذّر حفظ بيانات المكتب');
     } finally {
-      setIsSaving(false);
+      if (!scope.aborted) setIsSaving(false);
     }
   };
 
@@ -127,12 +148,30 @@ export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
                   </label>
                   <Input
                     value={officeName}
-                    onChange={(e) => setOfficeName(e.target.value)}
+                    onChange={(e) => {
+                      setOfficeName(e.target.value);
+                      if (nameError) setNameError(null);
+                    }}
                     placeholder="اكتب اسم مكتبك هنا — مثلاً: مكتب الرافدين الزراعي"
-                    className="h-12 text-base"
+                    className={`h-12 text-base ${nameError ? 'border-red-400 focus:ring-red-400' : ''}`}
                     autoFocus
                     required
+                    aria-invalid={nameError ? true : undefined}
+                    aria-describedby="office-name-help"
+                    maxLength={MAX_OFFICE_NAME_LENGTH}
                   />
+                  <div id="office-name-help" className="mt-1.5 flex items-center justify-between gap-2 text-[11px]">
+                    {nameError ? (
+                      <span className="text-red-600 dark:text-red-400 font-medium">{nameError}</span>
+                    ) : (
+                      <span className="text-gray-500 dark:text-gray-400">
+                        يُحفظ الاسم كاملاً ويظهر في كل فاتورة ووصل وفي اسم ملف النسخة الاحتياطية
+                      </span>
+                    )}
+                    <span className="text-gray-400 dark:text-gray-500 tabular-nums">
+                      {officeName.length}/{MAX_OFFICE_NAME_LENGTH}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

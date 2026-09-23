@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { CreditCard, Plus, Search, Printer, Download, Trash2, DollarSign, User, FileText, Eye } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -21,9 +21,13 @@ import { Customer, Payment } from '@/types';
 export function Payments() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
-  const [currency, setCurrency] = useState('د.ع');
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+  // `/payments/new` مسار إجراء سريع: النموذج يفتح لأننا على هذا المسار،
+  // وحالته مشتقّة من المسار لا مكتوبة داخل تأثير.
+  const isNewPaymentRoute = location.pathname === '/payments/new';
+  const isFormOpen = showForm || isNewPaymentRoute;
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [searchCustomer, setSearchCustomer] = useState('');
   const [showCustomerList, setShowCustomerList] = useState(false);
@@ -37,9 +41,8 @@ export function Payments() {
   const [previewDebt, setPreviewDebt] = useState(0);
 
   const settings = useLiveQuery(() => getSettings(), []);
-  useEffect(() => {
-    if (settings?.currency) setCurrency(settings.currency);
-  }, [settings?.currency]);
+  // العملة مشتقّة من الإعدادات مباشرة بدل نسخها في حالة محلية داخل تأثير
+  const currency = settings?.currency || 'د.ع';
 
   const payments = useLiveQuery(async () => {
     const all = await db.payments.orderBy('date').reverse().toArray();
@@ -67,17 +70,16 @@ export function Payments() {
     const customerIdText = searchParams.get('customerId');
     const customerId = customerIdText ? Number(customerIdText) : NaN;
 
-    // /payments/new هو إجراء سريع مستقل، وليس مجرد مسار فارغ. إذا وُجد
-    // customerId نملأ الزبون بعد التحقق من أن المعرّف صالح وموجود.
-    if (location.pathname === '/payments/new' && !cancelled) setShowForm(true);
+    // إذا وُجد customerId نملأ الزبون بعد التحقق من أن المعرّف صالح وموجود.
+    // فتح النموذج نفسه مشتقّ من المسار (`isFormOpen`) — لا كتابة حالة هنا.
     if (!Number.isInteger(customerId) || customerId <= 0) return () => { cancelled = true; };
 
     void (async () => {
       try {
         const customer = await db.customers.get(customerId);
         if (customer && !cancelled) {
+          // الاختيار فقط: النموذج مفتوح أصلاً لأننا على مسار /payments/new
           setSelectedCustomer(customer);
-          setShowForm(true);
         }
       } catch (error) {
         if (!cancelled) reportError('Payments.preselect', error, 'تعذّر تحميل الزبون');
@@ -104,9 +106,12 @@ export function Payments() {
     setNotes('');
     setMethod('cash');
     setDate(formatLocalDateTimeInput());
+    // عند الإغلاق من مسار الإجراء السريع نعود لصفحة التسديدات، وإلا بقي
+    // النموذج مفتوحاً لأن فتحه مشتقّ من المسار.
+    if (isNewPaymentRoute) navigate('/payments', { replace: true });
   };
 
-  useModalCloser(showForm, closeForm);
+  useModalCloser(isFormOpen, closeForm);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -355,7 +360,7 @@ export function Payments() {
         </Card>
       )}
 
-      {showForm && (
+      {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto">
             <CardContent className="p-6">

@@ -1,4 +1,5 @@
 import { toast } from './toast'
+import { isBenignLifecycleError } from './lifecycle'
 
 /**
  * معالجة مركزية للأخطاء.
@@ -38,8 +39,25 @@ export function logError(scope: string, error: unknown): string {
   return message
 }
 
+/**
+ * الأخطاء التي لا تُعرض للمستخدم:
+ *   - إلغاء مقصود (انتهى عمر الشاشة، أُغلق التطبيق) — ليس عطلاً.
+ *   - خطأ قاعدة بيانات وقع **بعد** بدء الإغلاق — أثر متأخر لعملية كانت جارية
+ *     أثناء إغلاق النافذة أو إعادة التحميل، ولا معنى لإظهاره.
+ * تُسجَّل في الطرفية للتشخيص، ويُمنع منها التنبيه الأحمر فقط.
+ */
+function isSuppressedError(error: unknown): boolean {
+  return isBenignLifecycleError(error)
+}
+
 /** تسجيل الخطأ وإظهاره للمستخدم، وإرجاع رسالة عربية جاهزة. */
 export function reportError(scope: string, error: unknown, title = 'تعذّر إتمام العملية'): string {
+  if (isSuppressedError(error)) {
+    // لا تنبيه ولا أثر في الطرفية: هذا حدث متوقع (إغلاق التطبيق أو مغادرة
+    // الشاشة) وليس عطلاً. طباعته كانت تملأ مخرجات الاختبارات وتشوّش تشخيص
+    // الأعطال الحقيقية. (المهام الخلفية تستخدم `logBackgroundFailure`.)
+    return ''
+  }
   const message = logError(scope, error)
   toast.error(title, message)
   return message
@@ -78,6 +96,11 @@ export function installGlobalErrorHandlers(): void {
     const text = reason instanceof Error ? `${reason.name} ${reason.message}` : String(reason ?? '')
     if (/ServiceWorker|service.worker|registerSW|sw\.js/i.test(text)) {
       console.warn('عامل الخدمة غير متوفر — سيكمل التطبيق العمل بشكل طبيعي.', reason)
+      return
+    }
+    // العمليات الجارية أثناء إغلاق التطبيق/الشاشة ليست أخطاء تُعرض للمستخدم
+    if (isSuppressedError(reason)) {
+      console.warn('أُلغيت عملية غير متزامنة أثناء الإغلاق', reason)
       return
     }
     reportError('unhandledrejection', event.reason, 'تعذّر إتمام عملية في الخلفية')

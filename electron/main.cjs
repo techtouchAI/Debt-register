@@ -17,7 +17,44 @@ const fsp = require('fs/promises');
 const APP_ICON = path.join(__dirname, '../public/pwa-192x192.png');
 let mainWindow = null;
 
+/**
+ * وضع اختبار الدخان (Smoke test) للتشغيل في CI:
+ *   xvfb-run -a npx electron . --smoke-test
+ * يفتح النافذة فعلياً، يتأكد من تحميل الواجهة ومن أن جسر preload (electronAPI)
+ * متاح، ثم يخرج بالرمز 0. أي فشل (واجهة فارغة، خطأ تحميل، جسر مفقود) = رمز 1.
+ * هذا يمنع أن يُسلَّم مُثبِّت لا يفتح أصلاً.
+ */
+const SMOKE_TEST = process.argv.includes('--smoke-test');
+
 const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
+
+/* ------------------- بيانات المستخدم في النسخة المحمولة ------------------- */
+/**
+ * في نسخة `portable` يكون مجلد userData الافتراضي داخل مجلد مؤقت يُمسح عند
+ * الخروج، فتُفقد قاعدة البيانات المحلية (IndexedDB) مع كل تشغيل. لذلك نوجّه
+ * بيانات المستخدم إلى مجلد ثابت بجانب الملف التنفيذي، فتبقى الفواتير والديون
+ * بعد إغلاق البرنامج. يترك electron-builder هذا المتغيّر في النسخة المحمولة.
+ */
+function configureUserDataDir() {
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  if (!portableDir) return;
+  try {
+    const dataDir = path.join(portableDir, 'AgriOfficeData');
+    fs.mkdirSync(dataDir, { recursive: true });
+    app.setPath('userData', dataDir);
+    app.setPath('sessionData', dataDir);
+  } catch (error) {
+    console.error('تعذّر تجهيز مجلد بيانات النسخة المحمولة:', error);
+  }
+}
+
+configureUserDataDir();
+
+// معرّف التطبيق على ويندوز: يلزم لظهور الإشعارات باسم التطبيق الصحيح
+// ولتثبيت التطبيق في قائمة ابدأ بشكل متسق.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.agrioffice.debtregister');
+}
 
 /** هل الرابط جزء من التطبيق نفسه؟ */
 function isInternalUrl(target) {
@@ -42,7 +79,10 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
       spellcheck: false,
+      // التطبيق يعمل دون إنترنت: لا حاجة لأي إذن من الويب (كاميرا/موقع/ميكروفون)
       preload: path.join(__dirname, 'preload.cjs')
     },
     titleBarStyle: 'default',
@@ -56,6 +96,19 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  /* ------------------------- أذونات الويب -------------------------
+   * تطبيق محلي بالكامل: لا يحتاج الموقع/الكاميرا/الميكروفون/القرص.
+   * نسمح فقط بالإشعارات (وإن كنا نُظهرها من العملية الرئيسية) والكتابة في
+   * الحافظة؛ وكل ما عداها يُرفض صريحاً بدل سلوك Chromium الافتراضي.
+   */
+  const ALLOWED_PERMISSIONS = new Set(['notifications', 'clipboard-sanitized-write']);
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(ALLOWED_PERMISSIONS.has(permission));
+  });
+  mainWindow.webContents.session.setPermissionCheckHandler((_wc, permission) =>
+    ALLOWED_PERMISSIONS.has(permission)
+  );
 
   // منع فتح نوافذ فرعية داخل التطبيق وتحويل الروابط الخارجية للمتصفح
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -110,10 +163,103 @@ function createWindow() {
     mainWindow.maximize();
   });
 
+  if (SMOKE_TEST) {
+    const fail = (message) => {
+      console.error(`SMOKE_FAILED: ${message}`);
+      app.exit(1);
+    };
+    const timeout = setTimeout(() => fail('انتهت المهلة دون تحميل الواجهة'), 45000);
+
+    /**
+     * انتظار جاهزية التطبيق فعلياً: انتهاء الإقلاع (data-app-boot) **وإنشاء
+     * قاعدة البيانات المحلية** — والإقلاع لا يُعتبر ناجحاً إن فشل فتح IndexedDB
+     * (`storage-error`). هذا ما يمنع تسليم مُثبِّت يفتح واجهة لكن لا يستطيع
+     * القراءة/الكتابة.
+     */
+    const waitForAppReady = async () => {
+      const deadline = Date.now() + 30000;
+      let last = {};
+      while (Date.now() < deadline) {
+        try {
+          last = await mainWindow.webContents.executeJavaScript(
+            `(async () => {
+               let dbCount = 0;
+               try { dbCount = (await indexedDB.databases()).length; } catch { dbCount = 0; }
+               return {
+                 boot: document.documentElement.dataset.appBoot || 'loading',
+                 rootChildren: document.getElementById('root')?.childElementCount ?? 0,
+                 dbCount
+               };
+             })()`
+          );
+        } catch (error) {
+          last = { boot: 'error', error: String(error) };
+        }
+        if (last.boot === 'storage-error') return last;
+        if ((last.boot === 'ready' || last.boot === 'setup') && last.rootChildren > 0 && last.dbCount > 0) {
+          return last;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return last;
+    };
+
+    mainWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const readiness = await waitForAppReady();
+        if (readiness.boot === 'storage-error') return fail('فشل فتح قاعدة البيانات المحلية على هذا الجهاز');
+        if (readiness.boot !== 'ready' && readiness.boot !== 'setup') {
+          return fail(`لم يكتمل إقلاع التطبيق (الحالة: ${readiness.boot})`);
+        }
+        if (!readiness.dbCount) return fail('قاعدة البيانات المحلية لم تُنشأ');
+
+        const result = await mainWindow.webContents.executeJavaScript(
+          `({
+             title: document.title,
+             hasRoot: Boolean(document.getElementById('root')),
+             rootChildren: document.getElementById('root')?.childElementCount ?? 0,
+             hasBridge: typeof window.electronAPI === 'object' && window.electronAPI !== null,
+             bridgeMethods: Object.keys(window.electronAPI || {}).sort()
+           })`
+        );
+        if (!result.hasRoot || result.rootChildren === 0) return fail('الواجهة لم تُرسم (root فارغ)');
+        if (!result.hasBridge) return fail('جسر preload غير متاح (electronAPI)');
+        for (const method of ['appInfo', 'isElectron', 'saveFile', 'saveBackup', 'showNotification']) {
+          if (!result.bridgeMethods.includes(method)) return fail(`دالة الجسر مفقودة: ${method}`);
+        }
+        const info = await mainWindow.webContents.executeJavaScript('window.electronAPI.appInfo()');
+        if (!info?.isElectron) return fail('appInfo لم تُرجع معلومات Electron');
+        clearTimeout(timeout);
+        console.log(
+          `SMOKE_OK ${JSON.stringify({
+            title: result.title,
+            boot: readiness.boot,
+            databases: readiness.dbCount,
+            bridge: result.bridgeMethods
+          })}`
+        );
+        app.exit(0);
+      } catch (error) {
+        clearTimeout(timeout);
+        fail(error.message);
+      }
+    });
+  }
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+/* ---------------------- تحصين كل صفحات الويب ---------------------- */
+app.on('web-contents-created', (_event, contents) => {
+  // لا إضافات <webview> ولا نوافذ فرعية: التطبيق صفحة واحدة محلية
+  contents.on('will-attach-webview', (event) => event.preventDefault());
+  contents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+});
 
 /* ------------------------- نسخة وحيدة من التطبيق ------------------------- */
 const gotTheLock = app.requestSingleInstanceLock();

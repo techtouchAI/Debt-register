@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  مسارات مزوّد الملفات (androidx.core.content.FileProvider) التي يتطلبها
+  @capacitor/share عند مشاركة ملف محلي.
+
+  Capacitor يحوّل رابط `file://` إلى `content://` عبر:
+      FileProvider.getUriForFile(context, packageName + ".fileprovider", file)
+  وهذا يتطلب مزوّداً مُعلناً في المانيفست بسلطة `${applicationId}.fileprovider`
+  وإلا يفشل فتح نافذة المشاركة كلياً (حفظ/مشاركة PDF والنسخ الاحتياطية).
+
+  المصدر الوحيد للحقيقة: ينسخه `scripts/prepare-android.mjs` إلى
+  `android/app/src/main/res/xml/file_paths.xml` بلا تعديل، ويتحقق تدقيق CI من
+  تطابقه بايتاً ببايت.
+
+  المسارات المغطاة هي التي يحتاجها التطبيق فعلياً:
+    - Documents (التخزين الخارجي) حيث تُحفظ ملفات PDF والنسخ الاحتياطية.
+    - Cache حيث يُكتب الملف المؤقت قبل مشاركته على أندرويد 10+.
+    - files / external-files / external-cache: بدائل Capacitor Filesystem.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path
+        name="app_files"
+        path="." />
+    <cache-path
+        name="app_cache"
+        path="." />
+    <external-files-path
+        name="app_external_files"
+        path="." />
+    <external-cache-path
+        name="app_external_cache"
+        path="." />
+    <external-path
+        name="external_storage"
+        path="." />
+</paths>

@@ -235,18 +235,61 @@ export function escapeHtml(input: unknown): string {
 }
 
 /**
- * تنظيف اسم الملف: يُبقي الحروف (بما فيها العربية) والأرقام والمسافة و . _ -
- * فقط، فلا يمكن تمرير مسارات (../../) أو أحرف تحكم عبر اسم المكتب أو اسم الملف.
+ * عدد البايتات الفعلي للنص بترميز UTF-8.
+ * مهم لأسماء الملفات: الحرف العربي بايتان، فحدّ "120 حرفاً" قد يصبح 240
+ * بايت ويتجاوز حدود بعض الأنظمة (خاصة Windows في المسارات الطويلة).
  */
-export function sanitizeFileName(name: string, fallback = 'file'): string {
+export function utf8ByteLength(text: string): number {
+  let bytes = 0
+  for (const char of String(text ?? '')) {
+    const code = char.codePointAt(0) ?? 0
+    bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4
+  }
+  return bytes
+}
+
+/**
+ * اقتطاع نص عند حدّ بايتات دون كسر محرف (code point) ودون ترك فواصل معلّقة
+ * في النهاية — يُستخدم لأسماء الملفات فقط، ولا يُطبَّق أبداً على اسم المكتب
+ * المحفوظ أو المعروض.
+ */
+export function truncateToUtf8Bytes(text: string, maxBytes: number): string {
+  const source = String(text ?? '')
+  if (maxBytes <= 0) return ''
+  if (utf8ByteLength(source) <= maxBytes) return source
+
+  let result = ''
+  let bytes = 0
+  for (const char of source) {
+    const size = utf8ByteLength(char)
+    if (bytes + size > maxBytes) break
+    result += char
+    bytes += size
+  }
+  // لا نترك مسافة أو نقطة أو شرطة أو تشكيلاً عربياً معلقاً في نهاية الاسم
+  // ‏ لا نترك مسافة/نقطة/شرطة أو علامات تشكيل عربية معلّقة في النهاية
+  return result.replace(/[\s._\-\p{M}\u0640]+$/u, '')
+}
+
+/** الحد الافتراضي لطول اسم الملف بالبايت (آمن على Windows و Android و ext4). */
+export const MAX_FILE_NAME_BYTES = 120
+
+/**
+ * تنظيف اسم الملف: يُبقي الحروف (بما فيها العربية) والأرقام والمسافة و . _ -
+ * فقط، فلا يمكن تمرير مسارات (../../) أو أحرف تحكم عبر اسم المكتب أو اسم
+ * الملف، ثم يقصّه عند حدّ البايتات بلا كسر للمحارف.
+ */
+export function sanitizeFileName(name: string, fallback = 'file', maxBytes = MAX_FILE_NAME_BYTES): string {
   const cleaned = String(name ?? '')
+    // أحرف التحكم (قد تصل من نص ملصوق أو ملف مستورد) تُحوَّل لمسافة
+    .replace(/\p{Cc}+/gu, ' ')
     .replace(/[^0-9A-Za-z\u0600-\u06FF\s._-]+/g, '_')
     .replace(/\.+/g, '.')
     .replace(/_{2,}/g, '_')
     .replace(/\s+/g, ' ')
     .replace(/^[\s._-]+|[\s._-]+$/g, '')
-    .slice(0, 120)
-  return cleaned || fallback
+  const limited = truncateToUtf8Bytes(cleaned, maxBytes)
+  return limited || fallback
 }
 
 export async function fileToBase64(file: File): Promise<string> {

@@ -6,7 +6,7 @@ import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/Toaster';
 import { Button } from '@/components/ui/button';
 import { FirstRunSetup } from '@/components/setup/FirstRunSetup';
-import { NativeBackButton } from '@/components/NativeBackButton';
+import { BackNavigationHandler } from '@/components/BackNavigationHandler';
 import { Dashboard } from '@/pages/Dashboard';
 import { Materials } from '@/pages/Materials';
 import { Customers } from '@/pages/Customers';
@@ -114,6 +114,15 @@ function App() {
     };
   }, []);
 
+  /**
+   * حالة الإقلاع مرئية من خارج الصفحة (`data-app-boot`) — يستخدمها اختبار
+   * الدخان في أغلفة Electron/Windows للتأكد من أن الواجهة **وقاعدة البيانات**
+   * جاهزتان فعلاً، بدل الاعتماد على نص شاشة التحميل أو مجرد وجود عنصر جذر.
+   */
+  useEffect(() => {
+    document.documentElement.dataset.appBoot = needsSetup ? 'setup' : boot.status;
+  }, [boot.status, needsSetup]);
+
   if (boot.status === 'storage-error') return <StorageErrorScreen error={boot.error} />;
 
   if (boot.status === 'loading') {
@@ -139,8 +148,8 @@ function App() {
 
   return (
     <Router>
-      <NativeBackButton />
-      <Layout>
+      <BackNavigationHandler />
+      <Layout initialSettings={setupSettings}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/materials" element={<Materials />} />

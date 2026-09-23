@@ -1,7 +1,8 @@
-import { db, getSettings, getSettingsOrDefault, updateSettings } from './db';
+import { logBackgroundFailure } from './lifecycle';
+import { db, getSettings, getSettingsOrDefault, refreshSettings, updateSettings } from './db';
 import { normalizeBackup, readBackupFile } from './validate';
 import { reallocateCustomerInvoices } from './invoices';
-import { sanitizeFileName } from './utils';
+import { MAX_FILE_NAME_BYTES, sanitizeFileName, utf8ByteLength } from './utils';
 import { saveFile } from './files';
 import type { BackupData, BackupSnapshot } from '@/types';
 
@@ -47,6 +48,14 @@ export async function createBackup(): Promise<BackupData> {
   };
 }
 
+/**
+ * اسم ملف النسخة الاحتياطية: `اسم المكتب_Backup_التاريخ_الوقت.json`
+ *
+ * اسم المكتب يُكتب كاملاً ما أمكن، لكن مع حدّ **بايتات** إجمالي لاسم الملف
+ * حتى لا يتجاوز حدود أنظمة الملفات (Windows/Android/ext4) خصوصاً مع الأسماء
+ * العربية الطويلة (كل حرف عربي بايتان). الطوابع الزمنية لا تُقتطع أبداً،
+ * ولا يُقتطع الاسم المحفوظ داخل الملف نفسه — القصّ يخص اسم الملف فقط.
+ */
 export function backupFileName(officeName?: string, date: Date = new Date()): string {
   const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
     date.getDate()
@@ -54,14 +63,25 @@ export function backupFileName(officeName?: string, date: Date = new Date()): st
   const timeStr = `${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(
     date.getSeconds()
   ).padStart(2, '0')}`;
-  const name = sanitizeFileName(officeName || 'AgriOffice', 'AgriOffice');
-  return `${name}_Backup_${dateStr}_${timeStr}.json`;
+  const suffix = `_Backup_${dateStr}_${timeStr}.json`;
+  const availableForName = Math.max(24, MAX_FILE_NAME_BYTES - utf8ByteLength(suffix));
+  const name = sanitizeFileName(officeName || 'AgriOffice', 'AgriOffice', availableForName);
+  return `${name}${suffix}`;
+}
+
+/** اسم ملف عند الاستيراد: يوضح أن الملف مستورد مع لقطة من اسمه الأصلي. */
+export function importedBackupFileName(originalFileName: string, date: Date = new Date()): string {
+  const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+  const suffix = `_Imported_${stamp}.json`;
+  const availableForName = Math.max(24, MAX_FILE_NAME_BYTES - utf8ByteLength(suffix));
+  const base = originalFileName.replace(/\.json$/i, '');
+  return `${sanitizeFileName(base, 'backup', availableForName)}${suffix}`;
 }
 
 async function recordBackupMeta(fileName: string, size: number, type: 'auto' | 'manual' | 'import') {
   await db.backups.add({ fileName, date: new Date().toISOString(), size, type });
   await updateSettings({ lastBackup: new Date().toISOString() }).catch((error) =>
-    console.warn('تعذّر تحديث تاريخ آخر نسخة:', error)
+    logBackgroundFailure('تعذّر تحديث تاريخ آخر نسخة:', error)
   );
 }
 
@@ -169,7 +189,7 @@ export async function saveSnapshot(type: 'auto' | 'manual' = 'auto'): Promise<Ba
   if (stale.length) await db.snapshots.bulkDelete(stale);
 
   await updateSettings({ lastBackup: new Date().toISOString() }).catch((error) =>
-    console.warn('تعذّر تحديث تاريخ آخر نسخة:', error)
+    logBackgroundFailure('تعذّر تحديث تاريخ آخر نسخة:', error)
   );
 
   return (await db.snapshots.get(snapshotId)) ?? null;
@@ -220,6 +240,32 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       db.activityLogs
     ],
     async () => {
+      /* حماية من ملف مبتور أو تالف: نسخة بلا أي سجل تجاري لا يجوز أن تمحو
+         بيانات مكتب قائم. (الاستيراد إلى مكتب جديد فارغ لا يزال مسموحاً.) */
+      const incomingRecords =
+        data.materials.length +
+        data.customers.length +
+        data.invoices.length +
+        data.invoiceItems.length +
+        data.payments.length +
+        (data.purchases?.length ?? 0) +
+        (data.purchaseItems?.length ?? 0);
+      if (incomingRecords === 0) {
+        const existingRecords =
+          (await db.materials.count()) +
+          (await db.customers.count()) +
+          (await db.invoices.count()) +
+          (await db.invoiceItems.count()) +
+          (await db.payments.count()) +
+          (await db.purchases.count()) +
+          (await db.purchaseItems.count());
+        if (existingRecords > 0) {
+          throw new Error(
+            'النسخة الاحتياطية لا تحتوي على أي سجلات بيانات؛ تم إلغاء الاستيراد لحماية بيانات المكتب الحالية'
+          );
+        }
+      }
+
       await db.settings.clear();
       await db.users.clear();
       await db.materials.clear();
@@ -253,6 +299,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
     await db.settings.add(fallback);
     allWarnings.push('لم تحتوي النسخة على إعدادات، تم إنشاء إعدادات افتراضية');
   }
+  // نشر الإعدادات المستعادة: التخطيط يعرض اسم المكتب من النسخة المستوردة فوراً
+  await refreshSettings();
 
   // مصالحة الأرصدة بعد الاستعادة حتى تتطابق حالة الفواتير مع التسديدات
   const customerIds = (await db.customers.toCollection().primaryKeys()) as number[];
@@ -286,14 +334,14 @@ export async function importBackup(file: File): Promise<RestoreResult> {
   const result = await restoreBackupData(normalized.value, normalized.warnings);
 
   await db.backups.add({
-    fileName: `Imported_${sanitizeFileName(file.name, 'backup')}`,
+    fileName: importedBackupFileName(file.name),
     date: new Date().toISOString(),
     size: file.size,
     type: 'import'
   });
 
   // نسخة أمان داخلية بعد الاستيراد مباشرة
-  await saveSnapshot('auto').catch((error) => console.warn('تعذّر إنشاء نسخة بعد الاستيراد:', error));
+  await saveSnapshot('auto').catch((error) => logBackgroundFailure('تعذّر إنشاء نسخة بعد الاستيراد:', error));
 
   return result;
 }

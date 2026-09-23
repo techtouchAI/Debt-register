@@ -1,3 +1,4 @@
+import { logBackgroundFailure } from './lifecycle';
 import { db, logActivity, createNotification, checkLowStock, getSettingsOrDefault } from './db';
 import { roundMoney, toFiniteNumber } from './utils';
 import type { Material } from '@/types';
@@ -98,7 +99,7 @@ export async function createMaterial(input: Partial<MaterialInput>): Promise<Mat
   const material: Material = { ...record, id };
 
   await logActivity('إضافة مادة', `تمت إضافة مادة جديدة: ${material.name}`, 'material', id).catch((error) =>
-    console.warn('تعذّر تسجيل النشاط:', error)
+    logBackgroundFailure('تعذّر تسجيل النشاط:', error)
   );
 
   if (material.quantity <= material.minQuantity) {
@@ -106,10 +107,10 @@ export async function createMaterial(input: Partial<MaterialInput>): Promise<Mat
       'تنبيه مخزون',
       `المادة "${material.name}" كميتها منخفضة: ${material.quantity}`,
       { type: 'warning', relatedId: id, relatedType: 'material', code: 'low-stock' }
-    ).catch((error) => console.warn('تعذّر إنشاء الإشعار:', error));
+    ).catch((error) => logBackgroundFailure('تعذّر إنشاء الإشعار:', error));
   }
 
-  await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+  await checkLowStock().catch((error) => logBackgroundFailure('تعذّر فحص المخزون:', error));
   return { ok: true, material, id };
 }
 
@@ -137,9 +138,9 @@ export async function updateMaterial(id: number, input: Partial<MaterialInput>):
   const material: Material = { ...record, id };
 
   await logActivity('تعديل مادة', `تم تعديل المادة: ${material.name}`, 'material', id).catch((error) =>
-    console.warn('تعذّر تسجيل النشاط:', error)
+    logBackgroundFailure('تعذّر تسجيل النشاط:', error)
   );
-  await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+  await checkLowStock().catch((error) => logBackgroundFailure('تعذّر فحص المخزون:', error));
 
   return { ok: true, material, id };
 }
@@ -169,7 +170,7 @@ export async function deleteMaterial(id: number): Promise<{ ok: true } | { ok: f
 
   if (!result.ok) return result;
   await logActivity('حذف مادة', `تم حذف المادة: ${result.material.name}`, 'material', id).catch((error) =>
-    console.warn('تعذّر تسجيل النشاط:', error)
+    logBackgroundFailure('تعذّر تسجيل النشاط:', error)
   );
   return { ok: true };
 }

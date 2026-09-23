@@ -13,9 +13,12 @@ build
 .parcel-cache
 .turbo
 
-# Capacitor
+# Capacitor (مشاريع مُولَّدة محلياً — تُنشأ بـ npx cap add)
 android
 ios
+# أصول الغلاف الأصلية التي تحتاجها سكربتات التحضير والتدقيق في CI
+!resources/android/
+!resources/android/*.xml
 
 # Environment
 .env

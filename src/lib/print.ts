@@ -1,4 +1,5 @@
 import { escapeHtml, formatDate } from './utils';
+import { officeNameFontSize } from './officeName';
 import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase, PurchaseItem } from '@/types';
 
 /**
@@ -36,7 +37,8 @@ const DOCUMENT_CSS = `
 .doc h1, .doc h2, .doc h3, .doc p { margin: 0; }
 .doc .page { max-width: 770px; margin: 0 auto; background: #fff; }
 .doc-header { text-align: center; border-bottom: 2px solid #8f7048; padding-bottom: 12px; margin-bottom: 14px; }
-.doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.4; overflow-wrap: anywhere; }
+.doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.4; overflow-wrap: anywhere; word-break: normal; white-space: normal; }
+.doc-header h1.office-name, .doc.receipt h2.office-name { display: block; overflow: visible; -webkit-line-clamp: unset; line-clamp: unset; }
 .doc-header .sub { color: #6b7280; font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .doc-header img { max-height: 60px; max-width: 180px; margin-top: 8px; object-fit: contain; }
 .doc-meta { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: space-between; margin-bottom: 14px; font-size: 13px; }
@@ -73,6 +75,18 @@ const DOCUMENT_CSS = `
 }
 @page { size: A4; margin: 10mm; }
 `;
+
+/**
+ * ترويسة اسم المكتب.
+ * الاسم يُطبع كاملاً دائماً؛ وإذا طال نصغّر الخط تدريجياً بدل أن يخرج عن
+ * حدود الصفحة (يعمل مع الطباعة و PDF لأن الاثنين يستخدمان القالب نفسه).
+ */
+function officeNameHeading(settings: OfficeSettings, tag: 'h1' | 'h2' = 'h1'): string {
+  const name = settings.officeName || '';
+  const size = officeNameFontSize(name);
+  const extra = tag === 'h1' ? '' : '; font-size:' + Math.max(14, size - 5) + 'px';
+  return `<${tag} class="office-name doc-office-name" data-office-name="${escapeHtml(name)}" style="font-size:${size}px${extra}">${escapeHtml(name)}</${tag}>`;
+}
 
 export type DocumentKind = 'invoice' | 'receipt' | 'statement';
 
@@ -200,7 +214,7 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
   return `
     <div class="doc"><div class="page">
       <div class="doc-header">
-        <h1>${escapeHtml(settings.officeName)}</h1>
+        ${officeNameHeading(settings)}
         ${settings.logo ? `<img src="${escapeHtml(settings.logo)}" alt="" />` : ''}
         <p class="sub">${escapeHtml(settings.address || '')}${settings.address && settings.phone ? ' | ' : ''}<span class="num">${escapeHtml(settings.phone || '')}</span></p>
       </div>
@@ -252,7 +266,7 @@ export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings
   const methodText = payment.method === 'cash' ? 'نقدي' : payment.method === 'transfer' ? 'تحويل' : 'أخرى';
   return `
     <div class="doc receipt"><div class="page" style="text-align:center;">
-      <h2>${escapeHtml(settings.officeName)}</h2>
+      ${officeNameHeading(settings, 'h2')}
       ${settings.phone ? `<p class="muted num">${escapeHtml(settings.phone)}</p>` : ''}
       <hr />
       <h3 style="font-size:15px;">وصل قبض</h3>
@@ -310,7 +324,7 @@ export function buildCustomerStatementPrintHtml(
   return `
     <div class="doc"><div class="page">
       <div class="doc-header">
-        <h1>${escapeHtml(settings.officeName)}</h1>
+        ${officeNameHeading(settings)}
         <p class="sub">${escapeHtml(settings.address || '')}${settings.address && settings.phone ? ' | ' : ''}<span class="num">${escapeHtml(settings.phone || '')}</span></p>
         <h2 style="font-size:16px; margin-top:6px;">كشف حساب الزبون</h2>
       </div>
@@ -375,7 +389,7 @@ export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[]
   return `
     <div class="doc"><div class="page">
       <div class="doc-header">
-        <h1>${escapeHtml(settings.officeName)}</h1>
+        ${officeNameHeading(settings)}
         ${settings.logo ? `<img src="${escapeHtml(settings.logo)}" alt="" />` : ''}
         <p class="sub">${escapeHtml(settings.address || '')}${settings.address && settings.phone ? ' | ' : ''}<span class="num">${escapeHtml(settings.phone || '')}</span></p>
         <h2 style="font-size:16px; margin-top:8px; color:#8f7048;">وصل شراء / إدخال مخزن</h2>

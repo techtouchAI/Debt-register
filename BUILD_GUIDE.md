@@ -15,6 +15,7 @@ npm ci          # تثبيت مطابق لقفل الحزم (lockfile متزام
 npm run dev     # خادم تطوير على http://localhost:5173
 npm run build   # إنتاج → dist/ مع Service Worker وmanifest
 npm run preview # معاينة نسخة الإنتاج
+npm run verify  # تدقيق الأغلفة + ESLint + tsc + الاختبارات + البناء
 ```
 
 مهم: البناء يستخدم `base: './'` و`HashRouter`، لذلك يعمل `dist/` عند:
@@ -50,6 +51,50 @@ npm run android:init && npm run android:build   # Android APK
 ```
 
 السكربتات في `desktop/` تبني التطبيق الجذري أولاً تلقائياً ثم تنسخ `dist/` إلى `desktop/src-tauri/dist/`، لذا الغلاف يغلّف التطبيق الكامل وليس نسخة تجريبية.
+
+## 4.1) التحقق من الأغلفة قبل البناء وبعده
+
+```bash
+npm run audit:shells   # 82 فحصاً ثابتاً لأغلفة Electron/Capacitor/Tauri + ناتج الويب
+npm run cap:prepare    # تجهيز مشروع أندرويد المُولَّد (صلاحيات + أيقونات + مسارات + أسماء)
+```
+
+`audit:shells` هو أول خطوة في `npm run verify` ويفشل (exit 1) عند أي نقص في إعداد
+الأغلفة: صلاحيات الإشعارات، منع النص الصريح، أهداف NSIS/portable، أمان نافذة
+Electron، أيقونات Tauri، أو مسارات مطلقة في `dist/`.
+
+`cap:prepare` (وهو `scripts/prepare-android.mjs`) **idempotent**: يضيف الصلاحيات
+(`POST_NOTIFICATIONS`، `READ/WRITE_EXTERNAL_STORAGE` بحدود `maxSdk`،
+`SCHEDULE_EXACT_ALARM`) وأيقونة `ic_stat_agri` أحادية اللون، ويعلن **مزوّد الملفات**
+(`androidx.core.content.FileProvider` بسلطة `${applicationId}.fileprovider` مع
+`res/xml/file_paths.xml`)، ويزامن `app_name`، ويتحقق من `capacitor.config.json` —
+وإن تشغيله مرتين لا يُنتج أي فرق (يفحصه CI بـ `diff`، وتغطيه 17 حالة اختبار تشغّل
+السكربت فعلياً على مشروع مؤقت).
+
+> **لماذا مزوّد الملفات إلزامي؟** `@capacitor/share` يحوّل رابط `file://` إلى
+> `content://` عبر `FileProvider.getUriForFile(context, packageName + ".fileprovider", file)`؛
+> وبلا مزوّد معلن بهذه السلطة في المانيفست يفشل `Share.share` كلياً — أي فشل
+> حفظ/مشاركة ملفات PDF والنسخ الاحتياطية على الجهاز. المصدر الوحيد للحقيقة هو
+> `resources/android/file_paths.xml`، وCI يقارنه بالمنسوخ داخل مشروع أندرويد.
+
+وبعد البناء يتحقق CI من النواتج الفعلية لا من نجاح الأوامر فقط:
+
+- **APK**: `aapt2 dump permissions/resources/xmltree` للتأكد من الصلاحيات وأيقونة
+  الإشعارات ومورد مسارات المزوّد ووجود `androidx.core.content.FileProvider`
+  و`usesCleartextTraffic` داخل المانيفست المدمج، و`unzip -l` للتأكد من واجهة
+  التطبيق داخل الـ APK، مع فحص `targetSdk ≥ 33` و`compileSdk ≥ 34`. كل تحقق
+  يطبع سطراً يوضح ما فحصه، وعند الفشل يطبع مقتطفاً من الملف الذي فحصه.
+- **مثبّت ويندوز**: فحص محتوى `app.asar`، تشغيل النسخة المحمولة باختبار دخان فعلي،
+  ثم تثبيت صامت (`/S`) وتشغيل النسخة المثبّتة، وبعد إلغاء التثبيت يُتحقق من أن
+  بيانات المكتب (IndexedDB في `%APPDATA%`) **لم تُحذف**.
+- **Tauri**: بناء deb/AppImage وmsi/nsis، والتحقق من نسخ `dist/index.html`، ومن
+  احتواء حزمة deb على ملف التنفيذ، ومن وجود واجهة التطبيق **داخل الثنائي**
+  (`id="root"` — فـ Tauri يدمج الواجهة ولا يوزّع ملفات `dist`)، ومن سلامة ترويسة
+  ELF في ملف AppImage.
+
+في البيئات المقيّدة (بلا JDK/SDK/Wine/Rust أو مع شبكة تحجب مواقع التنزيل) لا يمكن
+بناء APK/مثبّت محلياً؛ استخدم مهام CI أعلاه — وهي التي تُنتج القطع القابلة للاختبار
+اليدوي على جهاز حقيقي.
 
 ## 5) CI + التوقيع + النشر
 

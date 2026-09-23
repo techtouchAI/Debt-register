@@ -6,6 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, updateSettings, logActivity } from '@/lib/db';
 import { fileToBase64, toFiniteNumber } from '@/lib/utils';
+import { MAX_OFFICE_NAME_LENGTH, validateOfficeName } from '@/lib/officeName';
+import { useAsyncScope } from '@/hooks/useAsyncScope';
+import { useTheme } from '@/hooks/useTheme';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { hashPin, isHashedPin, isValidPin, maskPin } from '@/lib/security';
@@ -15,12 +18,15 @@ import { useModalCloser } from '@/hooks/useModalCloser';
 
 export function Settings() {
   const [formData, setFormData] = useState<Partial<OfficeSettings>>({});
-  const [isDark, setIsDark] = useState(false);
+  // السمة من المخزن المشترك (نفس ما يعرضه التخطيط) — لا حالة مكرّرة هنا
+  const { isDark, setTheme } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [userForm, setUserForm] = useState({ name: '', pin: '', role: 'sales' as 'admin' | 'sales' });
   const formEditedRef = useRef(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const scope = useAsyncScope();
 
   const users = useLiveQuery(() => db.users.toArray(), []);
 
@@ -52,12 +58,6 @@ export function Settings() {
     };
 
     void loadSettings();
-    try {
-      const savedTheme = localStorage.getItem('theme');
-      setIsDark(savedTheme === 'dark' || document.documentElement.classList.contains('dark'));
-    } catch {
-      /* التخزين المحلي غير متاح */
-    }
 
     return () => {
       cancelled = true;
@@ -66,32 +66,44 @@ export function Settings() {
 
   const handleSave = async () => {
     if (isSaving) return;
-    if (!formData.officeName?.trim()) {
-      toast.warning('اسم المكتب مطلوب', 'أدخل اسم المكتب قبل الحفظ');
+
+    // نفس قواعد التحقق المستخدمة في معالج التشغيل الأول: الاسم يُحفظ كاملاً
+    // (حتى لو كان طويلاً) ويُرفض فقط إذا كان فارغاً أو تجاوز الحد الأقصى.
+    const validation = validateOfficeName(formData.officeName);
+    if (!validation.ok) {
+      setNameError(validation.error ?? 'اسم المكتب مطلوب');
+      toast.warning('اسم المكتب غير صالح', validation.error ?? 'أدخل اسم المكتب قبل الحفظ');
       return;
     }
+    setNameError(null);
 
     setIsSaving(true);
     try {
-      await updateSettings({
-        ...formData,
-        officeName: formData.officeName.trim(),
-        phone: (formData.phone ?? '').trim(),
-        address: (formData.address ?? '').trim(),
-        lowStockThreshold: Math.max(0, toFiniteNumber(formData.lowStockThreshold, 5)),
-        autoBackupInterval: Math.max(5, toFiniteNumber(formData.autoBackupInterval, 60))
+      const saved = await scope.run(async () => {
+        await updateSettings({
+          ...formData,
+          officeName: validation.value,
+          phone: (formData.phone ?? '').trim(),
+          address: (formData.address ?? '').trim(),
+          lowStockThreshold: Math.max(0, toFiniteNumber(formData.lowStockThreshold, 5)),
+          autoBackupInterval: Math.max(5, toFiniteNumber(formData.autoBackupInterval, 60))
+        });
+        scope.throwIfAborted();
+        await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب').catch((error) =>
+          console.warn('تعذّر تسجيل نشاط الإعدادات:', error)
+        );
+        scope.throwIfAborted();
+        return getSettings();
       });
-      await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب').catch((error) =>
-        console.warn('تعذّر تسجيل نشاط الإعدادات:', error)
-      );
-      const s = await getSettings();
-      if (s) setFormData(s);
+      if (scope.aborted) return;
+      if (saved) setFormData(saved);
       formEditedRef.current = false;
-      toast.success('تم حفظ الإعدادات');
+      toast.success('تم حفظ الإعدادات', 'سيظهر الاسم الكامل في الفواتير والتخطيط والنسخ الاحتياطية');
     } catch (error) {
+      if (scope.aborted) return;
       reportError('Settings.save', error, 'تعذّر حفظ الإعدادات');
     } finally {
-      setIsSaving(false);
+      if (!scope.aborted) setIsSaving(false);
     }
   };
 
@@ -116,17 +128,10 @@ export function Settings() {
   };
 
   const toggleTheme = () => {
-    const newTheme = !isDark;
-    setIsDark(newTheme);
-    if (newTheme) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-      patchFormData({ theme: 'dark' });
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-      patchFormData({ theme: 'light' });
-    }
+    const newTheme = isDark ? 'light' : 'dark';
+    // المخزن المشترك يطبّق الصنف على <html> ويحفظ الاختيار
+    setTheme(newTheme);
+    patchFormData({ theme: newTheme });
   };
 
   const handleUserSubmit = async (e: React.FormEvent) => {
@@ -224,7 +229,31 @@ export function Settings() {
                 <div className="flex-1 space-y-4">
                   <div>
                     <label className="text-sm font-medium mb-1 block">اسم المكتب الزراعي *</label>
-                    <Input placeholder="مثلاً: مكتب الرافدين الزراعي" value={formData.officeName || ''} onChange={(e) => patchFormData({ officeName: e.target.value })} />
+                    <Input
+                      placeholder="مثلاً: مكتب الرافدين الزراعي"
+                      value={formData.officeName || ''}
+                      onChange={(e) => {
+                        patchFormData({ officeName: e.target.value });
+                        if (nameError) setNameError(null);
+                      }}
+                      className={nameError ? 'border-red-400 focus:ring-red-400' : ''}
+                      aria-invalid={nameError ? true : undefined}
+                      aria-describedby="settings-office-name-help"
+                      maxLength={MAX_OFFICE_NAME_LENGTH}
+                      title={formData.officeName || undefined}
+                    />
+                    <div id="settings-office-name-help" className="mt-1.5 flex items-center justify-between gap-2 text-[11px]">
+                      {nameError ? (
+                        <span className="text-red-600 dark:text-red-400 font-medium">{nameError}</span>
+                      ) : (
+                        <span className="text-gray-500 dark:text-gray-400">
+                          يُحفظ الاسم كاملاً ويظهر في التخطيط والفواتير واسم ملف النسخة الاحتياطية
+                        </span>
+                      )}
+                      <span className="text-gray-400 dark:text-gray-500 tabular-nums">
+                        {(formData.officeName || '').length}/{MAX_OFFICE_NAME_LENGTH}
+                      </span>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -325,7 +354,7 @@ export function Settings() {
                         {user.name.charAt(0)}
                       </div>
                       <div>
-                        <p className="font-medium text-sm flex items-center gap-2">{user.name} {user.role === 'admin' ? <Badge variant="destructive" className="text-[10px]"><Shield className="w-3 h-3 ml-1" />مدير</Badge> : <Badge variant="secondary" className="text-[10px]">مبيعات</Badge>}</p>
+                        <div className="font-medium text-sm flex items-center gap-2">{user.name} {user.role === 'admin' ? <Badge variant="destructive" className="text-[10px]"><Shield className="w-3 h-3 ml-1" />مدير</Badge> : <Badge variant="secondary" className="text-[10px]">مبيعات</Badge>}</div>
                         <p className="text-xs text-gray-500">رمز الدخول: {maskPin()} • منذ {new Date(user.createdAt).toLocaleDateString('ar-EG')}</p>
                       </div>
                     </div>
