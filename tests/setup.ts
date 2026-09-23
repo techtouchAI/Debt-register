@@ -20,6 +20,8 @@ beforeEach(async () => {
   resetHistoryTrapForTests();
   // مخزن الإعدادات ذاكرة وحدة، فيجب تصفيره بين الاختبارات كما تُفرَّغ القاعدة
   resetSettingsStore();
+  // مسودات النماذج في localStorage يجب ألا تتسرّب بين الاختبارات
+  window.localStorage.clear();
   await db.delete();
   await openDatabase();
   await initializeDB();

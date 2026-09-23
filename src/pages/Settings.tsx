@@ -1,12 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
-import { Settings as SettingsIcon, Building, Image, Moon, Sun, Save, Upload, Trash2, User, Shield, Database } from 'lucide-react';
+import { Settings as SettingsIcon, Building, Moon, Sun, Save, Loader2, User, Shield, Database } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, updateSettings, logActivity } from '@/lib/db';
-import { fileToBase64, toFiniteNumber } from '@/lib/utils';
-import { MAX_OFFICE_NAME_LENGTH, validateOfficeName } from '@/lib/officeName';
+import { toFiniteNumber } from '@/lib/utils';
+import {
+  firstInvalidField,
+  profileFromSettings,
+  validateOfficeProfile,
+  type OfficeProfile,
+  type OfficeProfileErrors
+} from '@/lib/officeProfile';
+import { clearFormDraft, loadFormDraft, saveFormDraft } from '@/lib/formDraft';
+import { OfficeProfileFields, type OfficeProfileFieldsHandle } from '@/components/setup/OfficeProfileFields';
 import { useAsyncScope } from '@/hooks/useAsyncScope';
 import { useTheme } from '@/hooks/useTheme';
 import { toast } from '@/lib/toast';
@@ -16,24 +24,86 @@ import { OfficeSettings, User as UserType } from '@/types';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useModalCloser } from '@/hooks/useModalCloser';
 
+/** تفضيلات المخزن والنسخ — الأرقام تُحفظ نصاً أثناء التحرير (انظر أدناه). */
+interface SystemPrefs {
+  lowStockThreshold: string;
+  autoBackupEnabled: boolean;
+  autoBackupInterval: string;
+}
+
+interface SettingsDraft {
+  profile: Omit<OfficeProfile, 'logo'>;
+  prefs: SystemPrefs;
+}
+
+const SETTINGS_DRAFT_KEY = 'settings-office';
+
+function prefsFromSettings(settings: Partial<OfficeSettings> | null | undefined): SystemPrefs {
+  return {
+    lowStockThreshold: String(settings?.lowStockThreshold ?? 5),
+    autoBackupEnabled: settings?.autoBackupEnabled ?? true,
+    autoBackupInterval: String(settings?.autoBackupInterval || 60)
+  };
+}
+
 export function Settings() {
-  const [formData, setFormData] = useState<Partial<OfficeSettings>>({});
+  /*
+   * حالة النموذج:
+   *   - `profile` بيانات الترويسة (قواعدها في lib/officeProfile.ts).
+   *   - `prefs` تفضيلات المخزن والنسخ. حقل الرقم يُحفظ **نصاً** أثناء الكتابة:
+   *     التحويل الفوري بـ Number('') كان يجعل مسح الرقم يكتب 0 في الحقل فلا
+   *     يمكن تفريغه وإعادة كتابته (النص "يقفز" تحت أصابع المستخدم).
+   *   - `revisionRef` يزيد مع كل تعديل: الحفظ يلتقط الرقم قبل الكتابة، وبعد
+   *     انتهائها لا يلمس النموذج إن كتب المستخدم شيئاً خلال الحفظ. سابقاً كانت
+   *     القيمة المحفوظة تُكتب فوق الحقول فتُحذف الأحرف المكتوبة أثناء الحفظ.
+   */
+  const [profile, setProfile] = useState<OfficeProfile>(() => profileFromSettings(null));
+  const [prefs, setPrefs] = useState<SystemPrefs>(() => prefsFromSettings(null));
+  const [errors, setErrors] = useState<OfficeProfileErrors>({});
+  const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [restoredDraft, setRestoredDraft] = useState(false);
   // السمة من المخزن المشترك (نفس ما يعرضه التخطيط) — لا حالة مكرّرة هنا
   const { isDark, setTheme } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [userForm, setUserForm] = useState({ name: '', pin: '', role: 'sales' as 'admin' | 'sales' });
-  const formEditedRef = useRef(false);
-  const [nameError, setNameError] = useState<string | null>(null);
+  const revisionRef = useRef(0);
+  const fieldsRef = useRef<OfficeProfileFieldsHandle>(null);
   const scope = useAsyncScope();
 
   const users = useLiveQuery(() => db.users.toArray(), []);
 
-  const patchFormData = (patch: Partial<OfficeSettings>) => {
-    formEditedRef.current = true;
-    setFormData((current) => ({ ...current, ...patch }));
+  /** تسجيل تعديل من المستخدم (يبطل أي نتيجة حفظ جارية عن الكتابة فوقه). */
+  const markEdited = () => {
+    revisionRef.current += 1;
+    setDirty(true);
   };
+
+  const handleProfileChange = (patch: Partial<OfficeProfile>) => {
+    markEdited();
+    setProfile((current) => ({ ...current, ...patch }));
+    setErrors((current) => {
+      const keys = Object.keys(patch).filter((key) => key in current);
+      if (keys.length === 0) return current;
+      const next = { ...current };
+      for (const key of keys) delete next[key as keyof OfficeProfileErrors];
+      return next;
+    });
+  };
+
+  const patchPrefs = (patch: Partial<SystemPrefs>) => {
+    markEdited();
+    setPrefs((current) => ({ ...current, ...patch }));
+  };
+
+  // المسودة تُكتب بعد كل تعديل فعلي فقط (لا عند التحميل)، بلا الشعار الكبير.
+  useEffect(() => {
+    if (!loaded || !dirty) return;
+    const { logo: _logo, ...text } = profile;
+    saveFormDraft<SettingsDraft>(SETTINGS_DRAFT_KEY, { profile: text, prefs });
+  }, [loaded, dirty, profile, prefs]);
 
   const closeUserForm = () => {
     setShowUserForm(false);
@@ -49,11 +119,25 @@ export function Settings() {
       try {
         const s = await getSettings();
         if (cancelled) return;
-        // لا تستبدل ما يكتبه المستخدم إذا اكتملت الاستجابة بعد بدء التحرير؛
-        // السباق القديم كان يعيد نسخة قديمة من الاسم فوق الحقل.
-        if (s && !formEditedRef.current) setFormData(s);
+        // لا تستبدل ما يكتبه المستخدم إذا اكتملت الاستجابة بعد بدء التحرير.
+        if (revisionRef.current === 0) {
+          const draft = loadFormDraft<SettingsDraft>(SETTINGS_DRAFT_KEY);
+          const saved = profileFromSettings(s);
+          if (draft?.profile && draft.prefs) {
+            // مسودة من جلسة سابقة (مغادرة قبل الحفظ / إعادة تشغيل WebView)
+            setProfile({ ...saved, ...draft.profile, logo: saved.logo });
+            setPrefs({ ...prefsFromSettings(s), ...draft.prefs });
+            setDirty(true);
+            setRestoredDraft(true);
+          } else {
+            setProfile(saved);
+            setPrefs(prefsFromSettings(s));
+          }
+        }
       } catch (error) {
         if (!cancelled) reportError('Settings.load', error, 'تعذّر تحميل الإعدادات');
+      } finally {
+        if (!cancelled) setLoaded(true);
       }
     };
 
@@ -64,40 +148,70 @@ export function Settings() {
     };
   }, []);
 
+  /** التراجع عن التعديلات غير المحفوظة والعودة للقيم المحفوظة. */
+  const discardChanges = async () => {
+    try {
+      const s = await scope.run(() => getSettings());
+      clearFormDraft(SETTINGS_DRAFT_KEY);
+      revisionRef.current += 1;
+      setProfile(profileFromSettings(s));
+      setPrefs(prefsFromSettings(s));
+      setErrors({});
+      setDirty(false);
+      setRestoredDraft(false);
+    } catch (error) {
+      if (!scope.aborted) reportError('Settings.discard', error, 'تعذّر استعادة القيم المحفوظة');
+    }
+  };
+
   const handleSave = async () => {
     if (isSaving) return;
 
-    // نفس قواعد التحقق المستخدمة في معالج التشغيل الأول: الاسم يُحفظ كاملاً
-    // (حتى لو كان طويلاً) ويُرفض فقط إذا كان فارغاً أو تجاوز الحد الأقصى.
-    const validation = validateOfficeName(formData.officeName);
+    // نفس قواعد التحقق المستخدمة في معالج التشغيل الأول (lib/officeProfile.ts)
+    const validation = validateOfficeProfile(profile);
     if (!validation.ok) {
-      setNameError(validation.error ?? 'اسم المكتب مطلوب');
-      toast.warning('اسم المكتب غير صالح', validation.error ?? 'أدخل اسم المكتب قبل الحفظ');
+      setErrors(validation.errors);
+      const field = firstInvalidField(validation.errors);
+      if (field) fieldsRef.current?.focusField(field);
+      toast.warning('بيانات المكتب غير مكتملة', 'صحّح الحقول المعلَّمة باللون الأحمر ثم احفظ');
       return;
     }
-    setNameError(null);
+    setErrors({});
+
+    const revisionAtStart = revisionRef.current;
+    const value = validation.value;
+    const nextPrefs = {
+      lowStockThreshold: Math.max(0, toFiniteNumber(prefs.lowStockThreshold, 5)),
+      autoBackupEnabled: prefs.autoBackupEnabled,
+      autoBackupInterval: Math.max(5, toFiniteNumber(prefs.autoBackupInterval, 60))
+    };
 
     setIsSaving(true);
     try {
-      const saved = await scope.run(async () => {
-        await updateSettings({
-          ...formData,
-          officeName: validation.value,
-          phone: (formData.phone ?? '').trim(),
-          address: (formData.address ?? '').trim(),
-          lowStockThreshold: Math.max(0, toFiniteNumber(formData.lowStockThreshold, 5)),
-          autoBackupInterval: Math.max(5, toFiniteNumber(formData.autoBackupInterval, 60))
-        });
+      await scope.run(async () => {
+        // الحقول المحرَّرة فقط — لا نكتب نسخة كاملة قديمة من الإعدادات (كانت
+        // تمسح lastBackup الذي يكتبه النسخ التلقائي في الخلفية).
+        await updateSettings({ ...value, logo: value.logo, ...nextPrefs, theme: isDark ? 'dark' : 'light' });
         scope.throwIfAborted();
         await logActivity('تعديل الإعدادات', 'تم تحديث إعدادات المكتب').catch((error) =>
           console.warn('تعذّر تسجيل نشاط الإعدادات:', error)
         );
-        scope.throwIfAborted();
-        return getSettings();
       });
       if (scope.aborted) return;
-      if (saved) setFormData(saved);
-      formEditedRef.current = false;
+
+      if (revisionRef.current === revisionAtStart) {
+        // لم يُكتب شيء أثناء الحفظ: نعرض القيم المطبّعة كما حُفظت
+        setProfile(value);
+        setPrefs({
+          lowStockThreshold: String(nextPrefs.lowStockThreshold),
+          autoBackupEnabled: nextPrefs.autoBackupEnabled,
+          autoBackupInterval: String(nextPrefs.autoBackupInterval)
+        });
+        setDirty(false);
+        clearFormDraft(SETTINGS_DRAFT_KEY);
+      }
+      // وإلا: المستخدم كتب أثناء الحفظ — نُبقي نصه كما هو ويبقى "غير محفوظ"
+      setRestoredDraft(false);
       toast.success('تم حفظ الإعدادات', 'سيظهر الاسم الكامل في الفواتير والتخطيط والنسخ الاحتياطية');
     } catch (error) {
       if (scope.aborted) return;
@@ -107,31 +221,10 @@ export function Settings() {
     }
   };
 
-  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      toast.warning('ملف غير مدعوم', 'اختر صورة PNG أو JPG');
-      return;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      toast.warning('حجم الشعار كبير', 'يجب أن يكون أقل من 2 ميجابايت');
-      return;
-    }
-    try {
-      const base64 = await fileToBase64(file);
-      patchFormData({ logo: base64 });
-    } catch (error) {
-      reportError('Settings.logo', error, 'تعذّر قراءة الصورة');
-    }
-  };
-
   const toggleTheme = () => {
-    const newTheme = isDark ? 'light' : 'dark';
-    // المخزن المشترك يطبّق الصنف على <html> ويحفظ الاختيار
-    setTheme(newTheme);
-    patchFormData({ theme: newTheme });
+    // المخزن المشترك يطبّق الصنف على <html> ويحفظه فوراً — السمة تفضيل عرض
+    // لا تحتاج زر "حفظ"، وتُكتب في قاعدة البيانات مع الحفظ التالي.
+    setTheme(isDark ? 'light' : 'dark');
   };
 
   const handleUserSubmit = async (e: React.FormEvent) => {
@@ -225,84 +318,22 @@ export function Settings() {
               <p className="text-xs text-gray-500">هذه البيانات ستظهر في ترويسة كل فاتورة ووصل</p>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col md:flex-row gap-6">
-                <div className="flex-1 space-y-4">
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">اسم المكتب الزراعي *</label>
-                    <Input
-                      placeholder="مثلاً: مكتب الرافدين الزراعي"
-                      value={formData.officeName || ''}
-                      onChange={(e) => {
-                        patchFormData({ officeName: e.target.value });
-                        if (nameError) setNameError(null);
-                      }}
-                      className={nameError ? 'border-red-400 focus:ring-red-400' : ''}
-                      aria-invalid={nameError ? true : undefined}
-                      aria-describedby="settings-office-name-help"
-                      maxLength={MAX_OFFICE_NAME_LENGTH}
-                      title={formData.officeName || undefined}
-                    />
-                    <div id="settings-office-name-help" className="mt-1.5 flex items-center justify-between gap-2 text-[11px]">
-                      {nameError ? (
-                        <span className="text-red-600 dark:text-red-400 font-medium">{nameError}</span>
-                      ) : (
-                        <span className="text-gray-500 dark:text-gray-400">
-                          يُحفظ الاسم كاملاً ويظهر في التخطيط والفواتير واسم ملف النسخة الاحتياطية
-                        </span>
-                      )}
-                      <span className="text-gray-400 dark:text-gray-500 tabular-nums">
-                        {(formData.officeName || '').length}/{MAX_OFFICE_NAME_LENGTH}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium mb-1 block">رقم الهاتف</label>
-                      <Input placeholder="07xxxxxxxx" value={formData.phone || ''} onChange={(e) => patchFormData({ phone: e.target.value })} dir="ltr" />
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium mb-1 block">العملة</label>
-                      <select value={formData.currency || 'د.ع'} onChange={(e) => patchFormData({ currency: e.target.value })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
-                        <option value="د.ع">دينار عراقي (د.ع)</option>
-                        <option value="$">$ دولار أمريكي</option>
-                        <option value="ر.س">ريال سعودي</option>
-                        <option value="ج.م">جنيه مصري</option>
-                        <option value="د.أ">دينار أردني</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">العنوان</label>
-                    <Input placeholder="المحافظة - المنطقة - الشارع" value={formData.address || ''} onChange={(e) => patchFormData({ address: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">تذييل الفاتورة</label>
-                    <Input placeholder="شكراً لتعاملكم معنا..." value={formData.invoiceFooter || ''} onChange={(e) => patchFormData({ invoiceFooter: e.target.value })} />
-                  </div>
+              {restoredDraft && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300" role="status">
+                  <span>استُعيدت تعديلات لم تُحفظ من المرة السابقة — راجعها ثم اضغط "حفظ جميع الإعدادات".</span>
+                  <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void discardChanges()}>
+                    تجاهل التعديلات
+                  </Button>
                 </div>
-
-                <div className="md:w-48">
-                  <label className="text-sm font-medium mb-2 block flex items-center gap-1"><Image className="w-4 h-4" />شعار المكتب</label>
-                  <div className="border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center">
-                    {formData.logo ? (
-                      <div className="space-y-3">
-                        <img src={formData.logo} alt="Logo" className="w-24 h-24 mx-auto rounded-xl object-cover border" />
-                        <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => patchFormData({ logo: undefined })}><Trash2 className="w-3 h-3 ml-1" />حذف الشعار</Button>
-                      </div>
-                    ) : (
-                      <div className="py-6">
-                        <Image className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                        <p className="text-xs text-gray-500 mb-3">ارفع شعار المكتب</p>
-                        <label className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-xs cursor-pointer hover:bg-primary-700">
-                          <Upload className="w-3 h-3" />اختيار ملف
-                          <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-                        </label>
-                      </div>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-gray-500 mt-2">يظهر في الفواتير - أقل من 2MB</p>
-                </div>
-              </div>
+              )}
+              <OfficeProfileFields
+                ref={fieldsRef}
+                idPrefix="settings"
+                value={profile}
+                errors={errors}
+                onChange={handleProfileChange}
+                disabled={!loaded}
+              />
             </CardContent>
           </Card>
 
@@ -314,17 +345,17 @@ export function Settings() {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه (افتراضي)</label>
-                <Input type="number" min="0" value={formData.lowStockThreshold ?? 5} onChange={(e) => patchFormData({ lowStockThreshold: Number(e.target.value) })} />
+                <Input type="number" inputMode="numeric" min="0" value={prefs.lowStockThreshold} onChange={(e) => patchPrefs({ lowStockThreshold: e.target.value })} />
                 <p className="text-[11px] text-gray-500 mt-1">عند وصول الكمية لهذا الحد يظهر تنبيه نفاد</p>
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">النسخ الاحتياطي التلقائي</label>
                 <div className="flex gap-2">
-                  <select value={formData.autoBackupEnabled ? 'yes' : 'no'} onChange={(e) => patchFormData({ autoBackupEnabled: e.target.value === 'yes' })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                  <select value={prefs.autoBackupEnabled ? 'yes' : 'no'} onChange={(e) => patchPrefs({ autoBackupEnabled: e.target.value === 'yes' })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                     <option value="yes">مفعل</option>
                     <option value="no">معطل</option>
                   </select>
-                  <select value={formData.autoBackupInterval || 60} onChange={(e) => patchFormData({ autoBackupInterval: Number(e.target.value) })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                  <select value={prefs.autoBackupInterval} onChange={(e) => patchPrefs({ autoBackupInterval: e.target.value })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                     <option value="30">كل 30 دقيقة</option>
                     <option value="60">كل ساعة</option>
                     <option value="120">كل ساعتين</option>
@@ -414,10 +445,15 @@ export function Settings() {
             </CardContent>
           </Card>
 
-          <Button onClick={handleSave} disabled={isSaving} className="w-full bg-primary-600 hover:bg-primary-700 h-12 font-bold text-base">
-            <Save className="w-5 h-5 ml-2" />
-            {isSaving ? 'جاري الحفظ…' : 'حفظ جميع الإعدادات'}
-          </Button>
+          <div className="space-y-2 lg:sticky lg:top-20">
+            <Button onClick={handleSave} disabled={isSaving || !loaded} className="w-full bg-primary-600 hover:bg-primary-700 h-12 font-bold text-base">
+              {isSaving ? <Loader2 className="w-5 h-5 ml-2 animate-spin" /> : <Save className="w-5 h-5 ml-2" />}
+              {isSaving ? 'جاري الحفظ…' : 'حفظ جميع الإعدادات'}
+            </Button>
+            <p className="text-center text-[11px] text-gray-500 dark:text-gray-400" aria-live="polite">
+              {dirty ? 'لديك تعديلات غير محفوظة (محفوظة كمسودة على هذا الجهاز)' : 'جميع التعديلات محفوظة'}
+            </p>
+          </div>
         </div>
       </div>
 

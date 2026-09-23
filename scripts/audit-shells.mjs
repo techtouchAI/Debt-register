@@ -116,6 +116,10 @@ async function main() {
   check('webDir = dist', capacitor.webDir === 'dist');
   check('androidScheme = https', capacitor.server?.androidScheme === 'https');
   check('allowMixedContent معطّل', capacitor.android?.allowMixedContent === false);
+  check(
+    'captureInput معطّل (المحرر الأصلي للوحة المفاتيح — لا حذف كلمات أثناء الكتابة)',
+    !capacitor.android?.captureInput
+  );
   const iconAsset = (await fileText(join(repoRoot, 'resources/android/ic_stat_agri.xml'))) ?? '';
   check(
     'أيقونة الإشعارات محدّدة ومتاحة',

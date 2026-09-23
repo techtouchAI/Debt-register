@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '@/App';
-import { updateSettings } from '@/lib/db';
+import { seedOfficeProfile } from './helpers';
 import { endShutdown } from '@/lib/lifecycle';
 import { setNativeBackSubscriber, type NativeBackEvent } from '@/lib/nativeBridge';
 import { openModalCount, hasOpenModal } from '@/lib/modalStack';
@@ -39,7 +39,7 @@ beforeEach(() => {
 
 /** تركيب التطبيق على مسار محدد والانتظار حتى تجاوز شاشة التحميل. */
 async function bootApp(hash: string, officeName = 'مكتب الاختبار الزراعي') {
-  await updateSettings({ officeName });
+  await seedOfficeProfile(officeName);
   window.location.hash = hash;
   render(<App />);
   await waitFor(

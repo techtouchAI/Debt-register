@@ -27,6 +27,7 @@ import { setupAutoBackup } from '@/lib/backup';
 import { runStartupMaintenance } from '@/lib/maintenance';
 import { installGlobalErrorHandlers, reportError } from '@/lib/errors';
 import { initSystemNotifications } from '@/lib/notify';
+import { isOfficeProfileComplete } from '@/lib/officeProfile';
 import type { OfficeSettings } from '@/types';
 
 type BootState =
@@ -66,8 +67,8 @@ function StorageErrorScreen({ error }: { error: string }) {
 
 function App() {
   const [boot, setBoot] = useState<BootState>({ status: 'loading' });
-  // معالج التشغيل الأول: يظهر عندما لا يوجد اسم مكتب مُدخل (تثبيت جديد
-  // أو نسخة مستوردة بلا اسم) — لا يُكتب أي اسم تلقائياً.
+  // معالج التشغيل الأول: يظهر عندما تكون بيانات الترويسة ناقصة (تثبيت جديد
+  // أو نسخة مستوردة ناقصة) — لا يُكتب أي اسم تلقائياً ولا يمكن تخطيه.
   const [needsSetup, setNeedsSetup] = useState(false);
   const [setupSettings, setSetupSettings] = useState<OfficeSettings | null>(null);
 
@@ -91,7 +92,10 @@ function App() {
         await initSystemNotifications();
 
         const settings = await getSettings();
-        if (!cancelled && !settings?.officeName?.trim()) {
+        // بيانات الترويسة إلزامية: أي حقل ناقص (تثبيت جديد، أو نسخة قديمة
+        // مستوردة بلا هاتف/عنوان) يعيد المستخدم إلى المعالج — نفس قواعد
+        // التحقق المستخدمة عند الحفظ، فلا يمكن تجاوزه بحفظ جزئي.
+        if (!cancelled && !isOfficeProfileComplete(settings)) {
           setSetupSettings(settings || null);
           setNeedsSetup(true);
         }

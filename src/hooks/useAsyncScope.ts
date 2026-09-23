@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import type { DependencyList } from 'react';
-import { createAbortScope, isBenignLifecycleError, type AbortScope } from '@/lib/lifecycle';
+import { createAbortScope, createMountScope, isBenignLifecycleError, type AbortScope } from '@/lib/lifecycle';
 import { reportError } from '@/lib/errors';
 
 /**
@@ -9,6 +9,11 @@ import { reportError } from '@/lib/errors';
  * كل عملية غير متزامنة تبدأ من شاشة (حفظ، تصدير، طباعة، جلب تقرير) تُنفَّذ
  * داخل النطاق، وعند مغادرة الشاشة يُلغى النطاق فيتوقف ما تبقّى من خطوات بدل
  * أن يتابع الكتابة في قاعدة بيانات أُغلقت أو يحدّث واجهة لم تعد موجودة.
+ *
+ * المرجع ثابت طوال عمر المكوّن، والنطاق الداخلي يتجدّد عند كل تركيب: الإصدار
+ * السابق كان يُنشئ النطاق مرة واحدة (`useMemo`) ويلغيه في التنظيف، فبعد دورة
+ * "تركيب ← إلغاء ← تركيب" في StrictMode يبقى ملغى إلى الأبد ويفشل كل حفظ
+ * بصمت (زر "جاري الحفظ…" عالق والبيانات لا تُكتب).
  *
  * مثال:
  *   const scope = useAsyncScope();
@@ -19,10 +24,11 @@ import { reportError } from '@/lib/errors';
  *   });
  */
 export function useAsyncScope(): AbortScope {
-  const scope = useMemo(() => createAbortScope('unmounted'), []);
+  const [scope] = useState(() => createMountScope('unmounted'));
   useEffect(() => {
+    scope.mount();
     return () => {
-      scope.abort('unmounted');
+      scope.unmount();
     };
   }, [scope]);
   return scope;

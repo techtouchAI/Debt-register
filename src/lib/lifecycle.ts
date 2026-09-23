@@ -223,3 +223,56 @@ export function logBackgroundFailure(label: string, error: unknown): void {
   if (isBenignLifecycleError(error) || isDatabaseClosedError(error)) return;
   console.warn(`${label}:`, error);
 }
+
+/* ------------------------------------------------------------------ *
+ * نطاق مربوط بدورة التركيب (يتحمّل إعادة التركيب في StrictMode)
+ * ------------------------------------------------------------------ */
+
+/** نطاق إلغاء يتجدّد عند كل تركيب ويُلغى عند كل إلغاء تركيب. */
+export interface MountScope extends AbortScope {
+  /** يُستدعى عند التركيب: يُنشئ نطاقاً جديداً إن كان السابق ملغى. */
+  mount(): void;
+  /** يُستدعى عند إلغاء التركيب: يُلغي النطاق الحالي. */
+  unmount(): void;
+}
+
+/**
+ * نطاق إلغاء لمكوّن React يبقى مرجعه ثابتاً طوال عمر المكوّن، بينما يتجدّد
+ * النطاق الداخلي عند كل تركيب.
+ *
+ * لماذا؟ React (StrictMode في التطوير، و Activity/Offscreen مستقبلاً) يركّب
+ * المكوّن ثم يلغي تركيبه ثم يركّبه من جديد **بنفس الحالة**. النطاق المنشأ
+ * مرة واحدة ثم المُلغى في التنظيف كان يبقى ملغى إلى الأبد، فيرمي كل
+ * `scope.run(...)` خطأ إلغاء فوراً: زر الحفظ يعلق على "جاري الحفظ…" ولا
+ * يُكتب شيء، ثم تضيع البيانات المكتوبة عند مغادرة الشاشة.
+ */
+export function createMountScope(reason: AbortReason = 'unmounted'): MountScope {
+  let current = createAbortScope(reason);
+
+  return {
+    get signal() {
+      return current.signal;
+    },
+    get aborted() {
+      return current.aborted;
+    },
+    abort(nextReason?: AbortReason) {
+      current.abort(nextReason);
+    },
+    throwIfAborted() {
+      current.throwIfAborted();
+    },
+    run(task) {
+      return current.run(task);
+    },
+    runQuiet(task) {
+      return current.runQuiet(task);
+    },
+    mount() {
+      if (current.aborted) current = createAbortScope(reason);
+    },
+    unmount() {
+      current.abort(reason);
+    }
+  };
+}
