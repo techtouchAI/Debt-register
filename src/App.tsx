@@ -114,6 +114,15 @@ function App() {
     };
   }, []);
 
+  /**
+   * حالة الإقلاع مرئية من خارج الصفحة (`data-app-boot`) — يستخدمها اختبار
+   * الدخان في أغلفة Electron/Windows للتأكد من أن الواجهة **وقاعدة البيانات**
+   * جاهزتان فعلاً، بدل الاعتماد على نص شاشة التحميل أو مجرد وجود عنصر جذر.
+   */
+  useEffect(() => {
+    document.documentElement.dataset.appBoot = needsSetup ? 'setup' : boot.status;
+  }, [boot.status, needsSetup]);
+
   if (boot.status === 'storage-error') return <StorageErrorScreen error={boot.error} />;
 
   if (boot.status === 'loading') {

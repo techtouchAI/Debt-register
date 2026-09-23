@@ -144,7 +144,12 @@ jobs:
           grep -q "android.permission.POST_NOTIFICATIONS" "$MANIFEST"
           grep -q "android.permission.WRITE_EXTERNAL_STORAGE" "$MANIFEST"
           grep -q 'android:usesCleartextTraffic="false"' "$MANIFEST"
-          grep -q 'name="app_name"' android/app/src/main/res/values/strings.xml
+          # وسم app_name مرة واحدة بالضبط: التكرار يُفشل MergeResources في Gradle
+          test "$(grep -c 'name="app_name"' android/app/src/main/res/values/strings.xml)" = "1"
+          grep -q '<string name="app_name">' android/app/src/main/res/values/strings.xml
+          grep -q 'android:name="android.permission.POST_NOTIFICATIONS"' "$MANIFEST"
+          # أيقونة الإشعارات منسوخة من أصل المستودع بلا تعديل
+          diff -q resources/android/ic_stat_agri.xml android/app/src/main/res/drawable/ic_stat_agri.xml
       - name: التحقق من إعدادات SDK (الإشعارات تحتاج targetSdk 33+)
         run: |
           set -euo pipefail
@@ -240,7 +245,9 @@ jobs:
           $asar = 'release/win-unpacked/resources/app.asar'
           if (-not (Test-Path $asar)) { Write-Error 'ملف app.asar غير موجود' }
           npx --yes @electron/asar list $asar | Out-File asar-list.txt
-          $entries = Get-Content asar-list.txt
+          # asar list تطبع الفواصل بنمط النظام (\ على ويندوز) فنوحّدها قبل المقارنة
+          $entries = Get-Content asar-list.txt | ForEach-Object { $_.Trim() -replace '\\', '/' }
+          $entries | Select-Object -First 12
           foreach ($required in @('/dist/index.html', '/electron/main.cjs', '/electron/preload.cjs')) {
             if ($entries -notcontains $required) { Write-Error "محتوى asar ينقصه: $required" }
           }
@@ -324,12 +331,31 @@ jobs:
         run: |
           set -euo pipefail
           ls -la desktop/src-tauri/target/release/bundle
-          find desktop/src-tauri/target/release/bundle -name '*.deb' -o -name '*.AppImage' | head
-          test -n "$(find desktop/src-tauri/target/release/bundle -name '*.deb' | head -1)"
-          # الواجهة المبنية يجب أن تكون منسوخة داخل حزمة Tauri
+          # نسخة الواجهة المبنية التي غلّفها Tauri (تُدمج داخل الملف التنفيذي عند البناء)
           test -f desktop/src-tauri/dist/index.html
+          ls -la desktop/src-tauri/dist | head -5
+
           DEB="$(find desktop/src-tauri/target/release/bundle -name '*.deb' | head -1)"
-          dpkg-deb -c "$DEB" | grep -q 'dist/index.html'
+          APPIMAGE="$(find desktop/src-tauri/target/release/bundle -name '*.AppImage' | head -1)"
+          test -n "$DEB"
+          test -n "$APPIMAGE"
+
+          # بيانات الحزمة ومحتواها
+          dpkg-deb -f "$DEB" Package Version Architecture
+          dpkg-deb -c "$DEB" | grep -qE 'usr/bin/|usr/lib/'
+
+          # الملف التنفيذي داخل الحزمة يجب أن يحتوي واجهة التطبيق المدمجة فعلاً
+          TMP="$(mktemp -d)"
+          dpkg-deb -x "$DEB" "$TMP"
+          BIN="$(find "$TMP" -type f -perm -u+x -name 'agro-office*' | head -1)"
+          test -n "$BIN"
+          echo "binary=$BIN size=$(stat -c%s "$BIN")"
+          grep -qa 'id="root"' "$BIN"
+
+          # والـ AppImage ملف تنفيذي صالح بحجم معقول
+          test -s "$APPIMAGE"
+          file "$APPIMAGE"
+          head -c 4 "$APPIMAGE" | grep -qa 'ELF'
       - uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Tauri-Linux

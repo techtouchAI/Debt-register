@@ -9,27 +9,28 @@
  *   - منع حركة النص الصريح (usesCleartextTraffic=false) على مستوى التطبيق.
  *   - أيقونة صغيرة أحادية اللون للإشعارات (قناة `ic_stat_agri`) بدل أيقونة
  *     التطبيق الملونة التي تظهر كمربع أبيض في شريط الحالة.
- *   - التحقق من أن اسم التطبيق في strings.xml مطابق لما في capacitor.config.
+ *   - مزامنة اسم التطبيق في strings.xml مع capacitor.config.json **دون تكرار
+ *     الوسم** (تكرار `app_name` يُفشل `MergeResources` في Gradle: Found item
+ *     String/app_name more than one time).
  *
- * التشغيل المتكرر آمن: لا يُكرر أي وسم ولا يستبدل شيئاً موجوداً. يُنفَّذ في
- * CI مرتين متتاليتين ويُقارن المانيفست قبل/بعد للتأكد من ذلك.
+ * التشغيل المتكرر آمن: لا يُكرر أي وسم ولا يستبدل شيئاً موجوداً إلا القيم
+ * المقصودة. الدوال مُصدَّرة لتُختبر مباشرة على مشروع مؤقت في `tests/`.
  */
 
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const androidDir = join(repoRoot, 'android');
-const manifestPath = join(androidDir, 'app/src/main/AndroidManifest.xml');
-const stringsPath = join(androidDir, 'app/src/main/res/values/strings.xml');
-const drawableDir = join(androidDir, 'app/src/main/res/drawable');
 
 const NOTIFICATION_ICON = 'ic_stat_agri';
 
+/** تعبير وسم app_name مهما كان ترتيب سماته. */
+const APP_NAME_TAG = /<string\s+name="app_name"[^>]*>[\s\S]*?<\/string>/g;
+
 /** الصلاحيات المطلوبة مع سبب كل واحدة (تُطبع في السجل للتشخيص). */
-const PERMISSIONS = [
+export const PERMISSIONS = [
   {
     name: 'android.permission.POST_NOTIFICATIONS',
     extra: '',
@@ -52,138 +53,184 @@ const PERMISSIONS = [
   }
 ];
 
-function fail(message) {
-  console.error(`✖ ${message}`);
-  process.exit(1);
+/** مصدر الحقيقة الوحيد لأيقونة الإشعارات (يُستنسخ إلى مشروع أندرويد). */
+export const NOTIFICATION_ICON_SOURCE = 'resources/android/ic_stat_agri.xml';
+
+/** تهريب محارف XML في القيم التي نكتبها (اسم التطبيق من الإعداد). */
+function escapeXml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 }
 
-function log(message) {
-  console.log(`• ${message}`);
-}
-
-async function readJson(path) {
-  return JSON.parse(await readFile(path, 'utf8'));
-}
-
-async function prepareManifest() {
-  if (!existsSync(manifestPath)) {
-    fail(`لم يُعثر على ${manifestPath}. شغّل أولاً: npx cap add android`);
-  }
-
-  let xml = await readFile(manifestPath, 'utf8');
-  const added = [];
-  const skipped = [];
-
-  for (const permission of PERMISSIONS) {
-    if (xml.includes(`android:name="${permission.name}"`)) {
-      skipped.push(permission.name);
-      continue;
-    }
-    const tag = `    <uses-permission android:name="${permission.name}"${permission.extra} />`;
-    if (xml.includes('</manifest>')) {
-      xml = xml.replace('</manifest>', `${tag}\n</manifest>`);
-    } else {
-      fail('ملف المانيفست غير مكتمل (لا يوجد وسم </manifest>)');
-    }
-    added.push(`${permission.name} — ${permission.reason}`);
-  }
-
-  // منع النص الصريح (http) على مستوى التطبيق — كل شيء محلي
-  const applicationMatch = xml.match(/<application[\s\S]*?>/);
-  if (!applicationMatch) fail('لم يُعثر على وسم <application> في المانيفست');
-  let applicationTag = applicationMatch[0];
-  if (/android:usesCleartextTraffic=/.test(applicationTag)) {
-    applicationTag = applicationTag.replace(
-      /android:usesCleartextTraffic="[^"]*"/,
-      'android:usesCleartextTraffic="false"'
-    );
-  } else {
-    applicationTag = applicationTag.replace(/<application/, '<application\n        android:usesCleartextTraffic="false"');
-  }
-  if (/android:allowBackup=/.test(applicationTag)) {
-    applicationTag = applicationTag.replace(/android:allowBackup="[^"]*"/, 'android:allowBackup="true"');
-  }
-  xml = xml.replace(applicationMatch[0], applicationTag);
-
-  await writeFile(manifestPath, xml, 'utf8');
-  for (const entry of added) log(`أُضيفت صلاحية: ${entry}`);
-  if (skipped.length) log(`صلاحيات موجودة مسبقاً: ${skipped.length}`);
-  log('المانيفست جاهز: صلاحيات الإشعارات/التخزين ومنع النص الصريح');
-}
-
-async function prepareNotificationIcon() {
-  await mkdir(drawableDir, { recursive: true });
-  const iconPath = join(drawableDir, `${NOTIFICATION_ICON}.xml`);
-  // أيقونة متجهية أحادية اللون (سنبلة داخل قوس) — تعمل مع theme أي اللون
-  const vector = `<?xml version="1.0" encoding="utf-8"?>
-<!-- أيقونة إشعارات أحادية اللون (تُولَّد تلقائياً من إعداد Capacitor) -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24"
-    android:tint="#FFFFFFFF">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M12,2c-1.1,0 -2,0.9 -2,2v5.2C6.9,9.6 5,12.1 5,15v5c0,0.6 0.4,1 1,1h12c0.6,0 1,-0.4 1,-1v-5c0,-2.9 -1.9,-5.4 -5,-5.8V4c0,-1.1 -0.9,-2 -2,-2zM12,11c2.8,0 5,2.2 5,5v3H7v-3c0,-2.8 2.2,-5 5,-5zM9.5,13.5l1.5,1.5 3.5,-3.5 1,1 -4.5,4.5 -2.5,-2.5z" />
-</vector>
-`;
-  const previous = existsSync(iconPath) ? await readFile(iconPath, 'utf8') : null;
-  if (previous === vector) {
-    log(`أيقونة الإشعارات موجودة ومطابقة: drawable/${NOTIFICATION_ICON}.xml`);
-  } else {
-    await writeFile(iconPath, vector, 'utf8');
-    log(`كُتبت أيقونة الإشعارات: drawable/${NOTIFICATION_ICON}.xml`);
-  }
-}
-
-async function verifyStringsAndConfig() {
-  const config = await readJson(join(repoRoot, 'capacitor.config.json'));
-  const appName = config.appName;
-
-  if (!existsSync(stringsPath)) fail('لم يُعثر على res/values/strings.xml');
-  let strings = await readFile(stringsPath, 'utf8');
-  if (!/name="app_name"[\s\S]*?<string name="app_name">([^<]*)<\/string>/.test(strings)) {
-    strings = strings.replace('</resources>', `    <string name="app_name">${appName}</string>\n</resources>`);
-    await writeFile(stringsPath, strings, 'utf8');
-    log(`أُضيف اسم التطبيق إلى strings.xml: ${appName}`);
-  }
-  const match = strings.match(/<string name="app_name">([^<]*)<\/string>/);
-  if (match && match[1] !== appName) {
-    strings = strings.replace(match[0], `<string name="app_name">${appName}</string>`);
-    await writeFile(stringsPath, strings, 'utf8');
-    log(`حُدّث اسم التطبيق في strings.xml: ${appName}`);
-  }
-
-  const iconName = config.plugins?.LocalNotifications?.smallIcon;
-  if (iconName !== NOTIFICATION_ICON) {
-    fail(
-      `smallIcon في capacitor.config.json يجب أن يكون "${NOTIFICATION_ICON}" (المطلوب فعلياً: ${String(iconName)})`
+/** التحقق من إعداد Capacitor (يُستخدم أيضاً في التدقيق الثابت). */
+export function validateCapacitorConfig(config) {
+  const smallIcon = config?.plugins?.LocalNotifications?.smallIcon;
+  if (smallIcon !== NOTIFICATION_ICON) {
+    throw new Error(
+      `smallIcon في capacitor.config.json يجب أن يكون "${NOTIFICATION_ICON}" (المطلوب فعلياً: ${String(smallIcon)})`
     );
   }
-  if (config.plugins?.LocalNotifications?.sound) {
-    fail('لا تُستخدم قيمة sound في إعداد الإشعارات: لا يوجد ملف صوت مرفق، فيُستخدم نغمة النظام');
+  if (config.plugins.LocalNotifications.sound) {
+    throw new Error('لا تُستخدم قيمة sound في إعداد الإشعارات: لا يوجد ملف صوت مرفق، فيُستخدم نغمة النظام');
   }
-  if (config.plugins?.LocalNotifications?.iconColor && !/^#[0-9a-f]{6}$/i.test(config.plugins.LocalNotifications.iconColor)) {
-    fail('iconColor يجب أن يكون بصيغة #RRGGBB');
+  const iconColor = config.plugins.LocalNotifications.iconColor;
+  if (iconColor && !/^#[0-9a-f]{6}$/i.test(iconColor)) {
+    throw new Error('iconColor يجب أن يكون بصيغة #RRGGBB');
   }
   if (config.android?.allowMixedContent !== false) {
-    fail('allowMixedContent يجب أن يكون false');
+    throw new Error('allowMixedContent يجب أن يكون false');
   }
-  log('capacitor.config.json متوافق مع الأيقونة والصلاحيات');
+  if (!config.appName || !String(config.appName).trim()) {
+    throw new Error('appName مطلوب في capacitor.config.json');
+  }
+  return { appName: String(config.appName).trim() };
 }
 
-async function main() {
+/**
+ * يزامن `app_name` في strings.xml مع إعداد التطبيق.
+ *  - لا يوجد الوسم ⇒ يُضاف مرة واحدة قبل `</resources>`.
+ *  - يوجد أكثر من نسخة (مشروع مُجهَّز بنسخة أقدم من السكربت) ⇒ يُدمج في نسخة
+ *    واحدة؛ تكرار الوسم يُفشل بناء Gradle.
+ */
+export function syncAppName(stringsXml, appName) {
+  const wanted = `<string name="app_name">${escapeXml(appName)}</string>`;
+  const occurrences = stringsXml.match(APP_NAME_TAG)?.length ?? 0;
+
+  if (occurrences === 0) {
+    if (!stringsXml.includes('</resources>')) {
+      throw new Error('ملف strings.xml غير مكتمل (لا يوجد </resources>)');
+    }
+    return { xml: stringsXml.replace('</resources>', `    ${wanted}\n</resources>`), added: true, duplicates: 0 };
+  }
+
+  let first = true;
+  const xml = stringsXml.replace(APP_NAME_TAG, () => {
+    if (!first) return '';
+    first = false;
+    return wanted;
+  });
+
+  // إزالة الأسطر الفارغة الناتجة عن حذف النسخ المكررة
+  const cleaned = xml.replace(/[ \t]+\n\s*\n/g, '\n');
+  const remaining = cleaned.match(APP_NAME_TAG)?.length ?? 0;
+  if (remaining !== 1) {
+    throw new Error(`تعذّر توحيد app_name في strings.xml (بقيت ${remaining} نسخة)`);
+  }
+  return { xml: cleaned, added: false, duplicates: Math.max(0, occurrences - 1) };
+}
+
+/** يضيف وسم الصلاحية مرة واحدة فقط إن لم يكن موجوداً. */
+export function ensurePermission(manifestXml, permission) {
+  if (manifestXml.includes(`android:name="${permission.name}"`)) return { xml: manifestXml, added: false };
+  if (!manifestXml.includes('</manifest>')) {
+    throw new Error('ملف المانيفست غير مكتمل (لا يوجد وسم </manifest>)');
+  }
+  const tag = `    <uses-permission android:name="${permission.name}"${permission.extra} />`;
+  return { xml: manifestXml.replace('</manifest>', `${tag}\n</manifest>`), added: true };
+}
+
+/** يفرض قيمة سمة على وسم <application> (يضيفها إن لم تكن موجودة). */
+export function ensureApplicationAttribute(manifestXml, attribute, value) {
+  const applicationMatch = manifestXml.match(/<application[\s\S]*?>/);
+  if (!applicationMatch) throw new Error('لم يُعثر على وسم <application> في المانيفست');
+
+  const pattern = new RegExp(`${attribute}="[^"]*"`);
+  let tag = applicationMatch[0];
+  if (pattern.test(tag)) {
+    tag = tag.replace(pattern, `${attribute}="${value}"`);
+  } else {
+    tag = tag.replace(/<application/, `<application\n        ${attribute}="${value}"`);
+  }
+  return manifestXml.replace(applicationMatch[0], tag);
+}
+
+/**
+ * التجهيز الكامل لمشروع أندرويد الموجود في `root/android`.
+ * يُعيد ملخّص ما حدث (يُستخدم في الاختبارات والسجل).
+ */
+export async function prepareAndroid({ root = repoRoot, log = () => undefined } = {}) {
+  const androidDir = join(root, 'android');
+  const manifestPath = join(androidDir, 'app/src/main/AndroidManifest.xml');
+  const stringsPath = join(androidDir, 'app/src/main/res/values/strings.xml');
+  const drawableDir = join(androidDir, 'app/src/main/res/drawable');
+
   if (!existsSync(androidDir)) {
-    fail('مجلد android غير موجود. شغّل: npx cap add android ثم npx cap sync');
+    throw new Error('مجلد android غير موجود. شغّل: npx cap add android ثم npx cap sync');
   }
-  await prepareManifest();
-  await prepareNotificationIcon();
-  await verifyStringsAndConfig();
-  console.log('✔ مشروع أندرويد جاهز (سكربت قابل للتكرار بلا تكرار وسوم).');
+  if (!existsSync(manifestPath)) throw new Error(`لم يُعثر على ${manifestPath}. شغّل أولاً: npx cap add android`);
+  if (!existsSync(stringsPath)) throw new Error('لم يُعثر على res/values/strings.xml');
+
+  /* 1) المانيفست: صلاحيات + منع النص الصريح + السماح بالنسخ الاحتياطي */
+  let manifest = await readFile(manifestPath, 'utf8');
+  const addedPermissions = [];
+  const existingPermissions = [];
+  for (const permission of PERMISSIONS) {
+    const result = ensurePermission(manifest, permission);
+    manifest = result.xml;
+    if (result.added) addedPermissions.push(permission.name);
+    else existingPermissions.push(permission.name);
+  }
+  manifest = ensureApplicationAttribute(manifest, 'android:usesCleartextTraffic', 'false');
+  manifest = ensureApplicationAttribute(manifest, 'android:allowBackup', 'true');
+  await writeFile(manifestPath, manifest, 'utf8');
+  for (const name of addedPermissions) log(`أُضيفت صلاحية: ${name}`);
+  log(
+    `المانيفست جاهز: أُضيفت ${addedPermissions.length} صلاحية، موجودة مسبقاً ${existingPermissions.length}، ومنع النص الصريح مفروض`
+  );
+
+  /* 2) أيقونة الإشعارات: تُنسخ من أصل المستودع (مصدر واحد للحقيقة) */
+  const iconSourcePath = join(root, NOTIFICATION_ICON_SOURCE);
+  if (!existsSync(iconSourcePath)) {
+    throw new Error(`لم يُعثر على أصل أيقونة الإشعارات: ${NOTIFICATION_ICON_SOURCE}`);
+  }
+  const iconSource = await readFile(iconSourcePath, 'utf8');
+  await mkdir(drawableDir, { recursive: true });
+  const iconPath = join(drawableDir, `${NOTIFICATION_ICON}.xml`);
+  const previousIcon = existsSync(iconPath) ? await readFile(iconPath, 'utf8') : null;
+  const iconWritten = previousIcon !== iconSource;
+  if (iconWritten) await writeFile(iconPath, iconSource, 'utf8');
+  log(
+    iconWritten
+      ? `كُتبت أيقونة الإشعارات: drawable/${NOTIFICATION_ICON}.xml`
+      : `أيقونة الإشعارات موجودة ومطابقة: drawable/${NOTIFICATION_ICON}.xml`
+  );
+
+  /* 3) اسم التطبيق في strings.xml + التحقق من إعداد Capacitor */
+  const config = JSON.parse(await readFile(join(root, 'capacitor.config.json'), 'utf8'));
+  const { appName } = validateCapacitorConfig(config);
+
+  const strings = await readFile(stringsPath, 'utf8');
+  const synced = syncAppName(strings, appName);
+  if (synced.added) log(`أُضيف اسم التطبيق إلى strings.xml: ${appName}`);
+  if (synced.duplicates) log(`أُزيل تكرار app_name في strings.xml (${synced.duplicates} نسخة زائدة)`);
+  if (synced.xml !== strings) await writeFile(stringsPath, synced.xml, 'utf8');
+  log('capacitor.config.json متوافق مع الأيقونة والصلاحيات');
+
+  return {
+    appName,
+    addedPermissions,
+    existingPermissions,
+    duplicatesRemoved: synced.duplicates,
+    iconWritten
+  };
 }
 
-main().catch((error) => {
-  console.error('✖ فشل تجهيز مشروع أندرويد:', error);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  prepareAndroid({ log: (message) => console.log(`• ${message}`) })
+    .then(() => {
+      console.log('✔ مشروع أندرويد جاهز (سكربت قابل للتكرار بلا تكرار وسوم).');
+    })
+    .catch((error) => {
+      // الرسائل المتوقعة تُطبع وحدها؛ غيرها يُطبع مع التفاصيل للتشخيص
+      console.error(`✖ ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && !error.message.match(/مجلد android|لم يُعثر|يجب أن|appName|iconColor|sound|allowMixedContent|أصل أيقونة/)) {
+        console.error(error);
+      }
+      process.exit(1);
+    });
+}

@@ -169,8 +169,50 @@ function createWindow() {
       app.exit(1);
     };
     const timeout = setTimeout(() => fail('انتهت المهلة دون تحميل الواجهة'), 45000);
+
+    /**
+     * انتظار جاهزية التطبيق فعلياً: انتهاء الإقلاع (data-app-boot) **وإنشاء
+     * قاعدة البيانات المحلية** — والإقلاع لا يُعتبر ناجحاً إن فشل فتح IndexedDB
+     * (`storage-error`). هذا ما يمنع تسليم مُثبِّت يفتح واجهة لكن لا يستطيع
+     * القراءة/الكتابة.
+     */
+    const waitForAppReady = async () => {
+      const deadline = Date.now() + 30000;
+      let last = {};
+      while (Date.now() < deadline) {
+        try {
+          last = await mainWindow.webContents.executeJavaScript(
+            `(async () => {
+               let dbCount = 0;
+               try { dbCount = (await indexedDB.databases()).length; } catch { dbCount = 0; }
+               return {
+                 boot: document.documentElement.dataset.appBoot || 'loading',
+                 rootChildren: document.getElementById('root')?.childElementCount ?? 0,
+                 dbCount
+               };
+             })()`
+          );
+        } catch (error) {
+          last = { boot: 'error', error: String(error) };
+        }
+        if (last.boot === 'storage-error') return last;
+        if ((last.boot === 'ready' || last.boot === 'setup') && last.rootChildren > 0 && last.dbCount > 0) {
+          return last;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return last;
+    };
+
     mainWindow.webContents.once('did-finish-load', async () => {
       try {
+        const readiness = await waitForAppReady();
+        if (readiness.boot === 'storage-error') return fail('فشل فتح قاعدة البيانات المحلية على هذا الجهاز');
+        if (readiness.boot !== 'ready' && readiness.boot !== 'setup') {
+          return fail(`لم يكتمل إقلاع التطبيق (الحالة: ${readiness.boot})`);
+        }
+        if (!readiness.dbCount) return fail('قاعدة البيانات المحلية لم تُنشأ');
+
         const result = await mainWindow.webContents.executeJavaScript(
           `({
              title: document.title,
@@ -188,7 +230,14 @@ function createWindow() {
         const info = await mainWindow.webContents.executeJavaScript('window.electronAPI.appInfo()');
         if (!info?.isElectron) return fail('appInfo لم تُرجع معلومات Electron');
         clearTimeout(timeout);
-        console.log(`SMOKE_OK ${JSON.stringify({ title: result.title, bridge: result.bridgeMethods })}`);
+        console.log(
+          `SMOKE_OK ${JSON.stringify({
+            title: result.title,
+            boot: readiness.boot,
+            databases: readiness.dbCount,
+            bridge: result.bridgeMethods
+          })}`
+        );
         app.exit(0);
       } catch (error) {
         clearTimeout(timeout);

@@ -65,6 +65,7 @@ async function main() {
   const mainCjs = await readText('electron/main.cjs');
   const preloadCjs = await readText('electron/preload.cjs');
   const prepareAndroid = await readText('scripts/prepare-android.mjs');
+  const appTsx = await readText('src/App.tsx');
   const workflow = await readText('.github/workflows/build.yml');
 
   /* ---------------------------- عام ---------------------------- */
@@ -72,6 +73,10 @@ async function main() {
   check('سكربت بناء الويب موجود', typeof pkg.scripts?.build === 'string');
   check('سكربت الاختبارات موجود', typeof pkg.scripts?.test === 'string');
   check('اختبار الدخان لسطح المكتب موثّق', /--smoke-test/.test(mainCjs));
+  check(
+    'اختبار الدخان ينتظر جاهزية قاعدة البيانات لا مجرد رسم الواجهة',
+    /waitForAppReady/.test(mainCjs) && /indexedDB\.databases\(\)/.test(mainCjs) && /data-app-boot/.test(appTsx)
+  );
 
   /* --------------------------- إلكترون --------------------------- */
   section('إلكترون (ويندوز)');
@@ -110,10 +115,14 @@ async function main() {
   check('webDir = dist', capacitor.webDir === 'dist');
   check('androidScheme = https', capacitor.server?.androidScheme === 'https');
   check('allowMixedContent معطّل', capacitor.android?.allowMixedContent === false);
+  const iconAsset = (await fileText(join(repoRoot, 'resources/android/ic_stat_agri.xml'))) ?? '';
   check(
     'أيقونة الإشعارات محدّدة ومتاحة',
-    capacitor.plugins?.LocalNotifications?.smallIcon === 'ic_stat_agri' &&
-      (await fileExists(join(repoRoot, 'resources/android/ic_stat_agri.xml')))
+    capacitor.plugins?.LocalNotifications?.smallIcon === 'ic_stat_agri' && iconAsset.length > 0
+  );
+  check(
+    'أيقونة الإشعارات أحادية اللون (tint + fillColor أبيض)',
+    /android:tint="#FFFFFFFF"/.test(iconAsset) && /android:fillColor="#FFFFFFFF"/.test(iconAsset)
   );
   check('لا إشارة إلى ملف صوت غير موجود', !capacitor.plugins?.LocalNotifications?.sound);
   check(
@@ -124,6 +133,16 @@ async function main() {
   check('سكربت التجهيز يمنع النص الصريح', /usesCleartextTraffic/.test(prepareAndroid));
   check('سكربت التجهيز يكتب أيقونة الإشعارات', /ic_stat_agri/.test(prepareAndroid));
   check('سكربت التجهيز متكرر بلا تكرار وسوم', /includes\(`android:name="\$\{permission\.name\}"`\)/.test(prepareAndroid));
+  check(
+    'سكربت التجهيز يزامن app_name بلا تكراره (كان يُفشل MergeResources)',
+    /const APP_NAME_TAG =/.test(prepareAndroid) &&
+      /match\(APP_NAME_TAG\)/.test(prepareAndroid) &&
+      /remaining !== 1/.test(prepareAndroid)
+  );
+  check(
+    'سكربت التجهيز ينسخ أيقونة الإشعارات من أصل المستودع',
+    /NOTIFICATION_ICON_SOURCE = 'resources\/android\/ic_stat_agri\.xml'/.test(prepareAndroid)
+  );
   check('سكربت التجهيز متاح من package.json', /prepare-android\.mjs/.test(pkg.scripts?.['cap:prepare'] ?? ''));
 
   /* ---------------------------- Tauri ---------------------------- */
@@ -182,6 +201,15 @@ async function main() {
     process.exit(1);
   }
   console.log('✔ تدقيق الأغلفة ناجح');
+}
+
+/** قراءة ملف نصي أو null إذا لم يوجد. */
+async function fileText(path) {
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 async function fileExists(path) {
