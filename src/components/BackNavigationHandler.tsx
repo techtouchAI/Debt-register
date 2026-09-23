@@ -1,36 +1,55 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { subscribeNativeBack, type NativeBackEvent } from '@/lib/nativeBridge';
+import { subscribeNativeBack } from '@/lib/nativeBridge';
+import { installDesktopBack } from '@/lib/desktopBack';
 import { closeTopModal, hasOpenModal, openModalCount, subscribeModalStack } from '@/lib/modalStack';
 import { installHistoryTrap, syncHistoryTrap } from '@/lib/historyTrap';
 import { resolveBackIntent } from '@/lib/backIntent';
+import { canGoBackInApp, currentHistoryIndex, recordHistoryEntry } from '@/lib/navigation';
+import { canExitApp } from '@/lib/appExit';
 import { toast } from '@/lib/toast';
+import { ExitConfirmDialog } from '@/components/ExitConfirmDialog';
 
 /**
  * المعالج الموحّد لكل طرق الرجوع:
  *
  *   1) زر الرجوع في أندرويد (Capacitor `backButton`).
- *   2) زر الفأرة الخلفي و Alt+← في Electron و Tauri و المتصفح (حدث السجل).
- *   3) Escape (في `lib/modalStack.ts`).
+ *   2) زر الفأرة الخلفي و Alt+← في Electron (قناة `back-request` من العملية
+ *      الرئيسية) — يمرّان بنفس القرار تماماً كزر أندرويد.
+ *   3) زر الرجوع في المتصفح (حدث السجل عبر `historyTrap`).
+ *   4) Escape (في `lib/modalStack.ts`).
  *
- * القواعد (مطبَّقة في كل المنصات بنفس الترتيب):
- *   - نافذة/درج مفتوح ← يُغلق ولا يتغيّر المسار.
- *   - لسنا في الرئيسية ← رجوع شاشة واحدة.
- *   - في الرئيسية ← البقاء داخل التطبيق (لا خروج، ولا إغلاق نافذة).
+ * القواعد (في `resolveBackIntent`، بنفس الترتيب في كل المنصات):
+ *   - نافذة/درج مفتوح ← يُغلق وحده ولا يتغيّر المسار.
+ *   - لسنا في الرئيسية ← رجوع **شاشة واحدة** إلى الصفحة السابقة، أو الصعود
+ *     للصفحة الأم إن لم يوجد سجل — فتتقدّم السلسلة دائماً نحو الرئيسية.
+ *   - في الرئيسية ← حوار تأكيد الخروج: التطبيق لا يخرج أبداً بضغطة واحدة
+ *     ولا يعود من الرئيسية إلى صفحات قديمة في السجل.
  *
- * السلوك السابق كان يترك زر الرجوع في Electron/Tauri وبالمتصفح يغيّر المسار
- * والنافذة مفتوحة (تضارب بين الواجهة والمسار) — الآن المسار لا يتغيّر إلا
- * بعد إغلاق آخر طبقة.
+ * ضمانات إضافية مقابل النسخة السابقة:
+ *   - إزالة فخّ السجل لم تعد ترجع خطوة إن تنقّل المستخدم فوقه (نقرة رابط
+ *     داخل الدرج الجانبي) — كان ذلك يُلغي التنقل ويترك ضغطات رجوع ميتة.
+ *   - مدخل الفخّ القديم يُتجاوز بصمت عند أول رجوع: كل ضغطة = خطوة واحدة.
  */
 export function BackNavigationHandler() {
   const navigate = useNavigate();
   const location = useLocation();
+  // حوار تأكيد الخروج يُفتح من هنا (عند الرجوع في الرئيسية) ويُغلق بزر
+  // الرجوع/Escape مثل أي طبقة عبر مكدس النوافذ.
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+
   // يُحدَّث في useLayoutEffect لا أثناء الرسم: قراءة/كتابة ref داخل الرسم
   // تكسر ضمانات React (قواعد react-hooks/immutability).
   const pathRef = useRef(location.pathname);
   useLayoutEffect(() => {
     pathRef.current = location.pathname;
   }, [location.pathname]);
+
+  // تسجيل مسار كل مدخل في السجل (يستخدمه `useReturnTo` ليرجع بدل أن يدفع
+  // نسخة مكررة من الصفحة السابقة). المفتاح يتغيّر مع كل تنقّل حتى لنفس المسار.
+  useLayoutEffect(() => {
+    recordHistoryEntry(currentHistoryIndex(), location.pathname);
+  }, [location.key, location.pathname]);
 
   // (1) مزامنة فخّ السجل مع عدد الطبقات المفتوحة (فتح/إغلاق/إغلاق الكل)
   useEffect(() => {
@@ -44,34 +63,42 @@ export function BackNavigationHandler() {
     return installHistoryTrap(closeTopModal, openModalCount);
   }, []);
 
+  // قرار الرجوع الموحّد لكل المصادر (أندرويد، زر الفأرة، Alt+←)
+  const handleBackRequest = useEffectEvent(() => {
+    const intent = resolveBackIntent({
+      hasOpenOverlay: hasOpenModal(),
+      pathname: pathRef.current,
+      // المعيار فهرس React Router داخل التطبيق، لا `canGoBack` من Capacitor
+      // الذي يشمل مدخلات خارج التطبيق وفخاخ الطبقات.
+      hasInAppHistory: canGoBackInApp()
+    });
+
+    switch (intent.action) {
+      case 'close-overlay':
+        closeTopModal();
+        return;
+      case 'navigate-back':
+        navigate(-1);
+        return;
+      case 'navigate-up':
+        // لا سجل (فتح مباشر أو استعادة بعد إنهاء التطبيق): نستبدل الصفحة
+        // بالصفحة الأم حتى لا يتكوّن مدخل يعيد المستخدم إليها لاحقاً.
+        navigate(intent.to, { replace: true });
+        return;
+      case 'confirm-exit':
+        // الخروج قرار صريح — حوار تأكيد إن كان الخروج ممكناً على المنصة
+        if (canExitApp()) setExitConfirmOpen(true);
+        else toast.info('أنت في الصفحة الرئيسية');
+        return;
+    }
+  });
+
   // (3) حدث الرجوع الأصلي (أندرويد)
   useEffect(() => {
     let disposed = false;
     let subscription: { remove: () => Promise<void> | void } | undefined;
 
-    const handleNativeBack = (event: NativeBackEvent) => {
-      const intent = resolveBackIntent({
-        hasOpenOverlay: hasOpenModal(),
-        pathname: pathRef.current,
-        canGoBackInHistory: event.canGoBack
-      });
-
-      if (intent.action === 'close-overlay') {
-        closeTopModal();
-        return;
-      }
-
-      if (intent.action === 'navigate-back') {
-        if (event.canGoBack) navigate(-1);
-        else navigate('/', { replace: true });
-        return;
-      }
-
-      // في الصفحة الرئيسية: لا نستدعي exitApp أبداً — يبقى التطبيق مفتوحاً.
-      toast.info('أنت في الصفحة الرئيسية');
-    };
-
-    void subscribeNativeBack(handleNativeBack).then((next) => {
+    void subscribeNativeBack(() => handleBackRequest()).then((next) => {
       if (disposed) {
         void next?.remove();
         return;
@@ -83,7 +110,10 @@ export function BackNavigationHandler() {
       disposed = true;
       void subscription?.remove();
     };
-  }, [navigate]);
+  }, []);
 
-  return null;
+  // (4) زر الفأرة الخلفي و Alt+← (Electron والمتصفح): نفس قرار زر أندرويد
+  useEffect(() => installDesktopBack(() => handleBackRequest()), []);
+
+  return <ExitConfirmDialog open={exitConfirmOpen} onClose={() => setExitConfirmOpen(false)} />;
 }

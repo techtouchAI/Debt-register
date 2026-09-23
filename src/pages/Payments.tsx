@@ -4,6 +4,7 @@ import { CreditCard, Plus, Search, Printer, Download, Trash2, DollarSign, User, 
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumericTextInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { getCustomerBalance } from '@/lib/debts';
@@ -11,6 +12,7 @@ import { savePayment, deletePayment } from '@/lib/payments';
 import { buildReceiptPrintHtml, printReceipt } from '@/lib/print';
 import { generateReceiptPDF } from '@/lib/pdf';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { dismissOverlayThroughHistory } from '@/lib/historyTrap';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate, formatLocalDateInput, formatLocalDateTimeInput, isSameLocalDay, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
@@ -98,7 +100,8 @@ export function Payments() {
     })
     .slice(0, 20);
 
-  const closeForm = () => {
+  /** إعادة ضبط النموذج ومغادرة مسار الإجراء السريع — مُغلِق الطبقة في المكدس. */
+  const resetForm = () => {
     setShowForm(false);
     setSelectedCustomer(null);
     setSearchCustomer('');
@@ -111,7 +114,11 @@ export function Payments() {
     if (isNewPaymentRoute) navigate('/payments', { replace: true });
   };
 
-  useModalCloser(isFormOpen, closeForm);
+  // أزرار الإلغاء/الحفظ تُغلق عبر السجل حتى لا يبقى مدخل `/payments/new`
+  // خلف الصفحة فيعيد زر الرجوع فتح النموذج بعد إغلاقه.
+  const closeForm = () => dismissOverlayThroughHistory(resetForm);
+
+  useModalCloser(isFormOpen, resetForm);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -362,7 +369,7 @@ export function Payments() {
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto">
+          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain">
             <CardContent className="p-6">
               <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5 text-green-600" />نافذة القبض - تسديد دين</h2>
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -409,7 +416,7 @@ export function Payments() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-sm font-medium mb-1 block">المبلغ المسدد * ({currency})</label>
-                    <Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required className="text-lg font-bold" placeholder="مثلاً: 1000000" />
+                    <NumericTextInput value={amount} onValueChange={setAmount} required className="text-lg font-bold" placeholder="مثلاً: 1000000" />
                     {selectedCustomer && customerDebt > 0 && (
                       <div className="flex gap-1 mt-2">
                         <Button type="button" variant="outline" size="sm" className="text-[11px] flex-1" onClick={() => setAmount(String(roundMoney(customerDebt)))}>كامل الدين</Button>

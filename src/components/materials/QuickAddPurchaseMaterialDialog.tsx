@@ -3,6 +3,7 @@ import { Loader2, Package } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumericTextInput } from '@/components/ui/number-input';
 import { createMaterial, findMaterialByName } from '@/lib/materials';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { reportError } from '@/lib/errors';
@@ -91,7 +92,7 @@ function QuickAddPurchaseMaterialForm({
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="تسجيل مادة جديدة">
-      <Card className="w-full max-w-lg animate-slide-up">
+      <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain animate-slide-up">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Package className="w-5 h-5 text-primary-600" />
@@ -120,11 +121,11 @@ function QuickAddPurchaseMaterialForm({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر الشراء ({currency}) *</label>
-                <Input type="number" min="0" step="0.01" value={purchasePrice} onChange={(event) => setPurchasePrice(event.target.value)} placeholder="0" required />
+                <NumericTextInput value={purchasePrice} onValueChange={setPurchasePrice} placeholder="0" required />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر البيع المقترح</label>
-                <Input type="number" min="0" step="0.01" value={salePrice} onChange={(event) => setSalePrice(event.target.value)} placeholder="اختياري" />
+                <NumericTextInput value={salePrice} onValueChange={setSalePrice} placeholder="اختياري" />
               </div>
             </div>
             <div className="flex gap-2 pt-2">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
 import { ArrowRight, FileText, Printer, Download, Eye, Edit, Trash2, User, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,8 @@ import type { Customer, Invoice, InvoiceItem, OfficeSettings } from '@/types';
 export function InvoiceView() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useGoBack();
+  const returnTo = useReturnTo();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
@@ -108,13 +111,14 @@ export function InvoiceView() {
         return;
       }
       toast.success('تم حذف الفاتورة', 'أُعيدت الكميات إلى المخزن');
-      navigate('/invoices', { replace: true });
+      // السجل المحذوف لا يبقى في السجل: نرجع للقائمة إن جئنا منها، وإلا نستبدله
+      returnTo('/invoices');
     } catch (error) {
       reportError('InvoiceView.delete', error, 'حدث خطأ أثناء الحذف');
     } finally {
       setIsBusy(false);
     }
-  }, [invoice, isBusy, navigate]);
+  }, [invoice, isBusy, returnTo]);
 
   if (isLoading) {
     return (
@@ -131,7 +135,7 @@ export function InvoiceView() {
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/invoices')} aria-label="رجوع للفواتير">
+          <Button variant="ghost" size="icon" onClick={() => goBack('/invoices')} aria-label="رجوع للفواتير">
             <ArrowRight className="w-5 h-5" />
           </Button>
           <div>

@@ -1,21 +1,26 @@
 /**
  * منطق "طلب الرجوع" كمكوّن نقي قابل للاختبار.
  *
- * كل طرق الرجوع (زر أندرويد، زر الفأرة الخلفي، Alt+←، Escape) تمر من هنا
- * بنفس القواعد، فتُختبر مرة واحدة بدل تكرار المنطق في كل مكوّن:
+ * كل طرق الرجوع (زر أندرويد، زر الفأرة الخلفي و Alt+← في سطح المكتب،
+ * Escape للطبقات) تمر من هنا بنفس القواعد:
  *
- *   1) طبقة مفتوحة (نافذة/درج جانبي/معاينة) ← تُغلق هي فقط.
- *   2) لسنا في الصفحة الرئيسية ← الرجوع شاشة واحدة داخل التطبيق.
- *   3) في الصفحة الرئيسية ← لا شيء: التطبيق لا يخرج ولا يُغلق.
+ *   1. طبقة مفتوحة (نافذة/درج جانبي/معاينة) ← تُغلق هي فقط.
+ *   2. لسنا في الصفحة الرئيسية وفي السجل صفحة سابقة داخل التطبيق ← الرجوع
+ *      إليها (شاشة واحدة بالضبط).
+ *   3. لسنا في الرئيسية ولا سجل (فتح مباشر/استعادة بعد إنهاء التطبيق) ←
+ *      الصعود إلى الصفحة الأم في الهرم، فيتقدّم الرجوع نحو الرئيسية دائماً.
+ *   4. في الصفحة الرئيسية ← حوار تأكيد الخروج. الرئيسية نهاية سلسلة الرجوع:
+ *      لا نعود منها إلى صفحات قديمة في السجل، والتطبيق لا يخرج بضغطة واحدة.
  */
+import { parentPath } from './navigation';
 
 export interface BackIntentInput {
   /** هل توجد طبقة مفتوحة (نافذة، درج، معاينة)؟ */
   hasOpenOverlay: boolean;
   /** المسار الحالي. */
   pathname: string;
-  /** هل يمكن الرجوع في سجل التصفّح؟ (canGoBack من Capacitor) */
-  canGoBackInHistory?: boolean;
+  /** هل توجد صفحة سابقة داخل التطبيق في السجل؟ */
+  hasInAppHistory?: boolean;
   /** مسار الصفحة الرئيسية. */
   homePath?: string;
 }
@@ -23,21 +28,19 @@ export interface BackIntentInput {
 export type BackIntent =
   /** أغلق الطبقة العليا فقط. */
   | { action: 'close-overlay' }
-  /** ارجع شاشة واحدة داخل التطبيق. */
+  /** ارجع إلى الصفحة السابقة في السجل. */
   | { action: 'navigate-back' }
-  /** نحن في الرئيسية ويمكن الرجوع في السجل (مسارات أعمق) — ارجع أيضاً. */
-  | { action: 'navigate-back' }
-  /** في الرئيسية: ابقَ في التطبيق ولا تغلقه. */
-  | { action: 'stay-home' };
+  /** لا سجل: اصعد إلى الصفحة الأم (استبدال المدخل الحالي). */
+  | { action: 'navigate-up'; to: string }
+  /** في الرئيسية: اعرض حوار تأكيد الخروج. */
+  | { action: 'confirm-exit' };
 
 export const HOME_PATH = '/';
 
 export function resolveBackIntent(input: BackIntentInput): BackIntent {
   const home = input.homePath ?? HOME_PATH;
   if (input.hasOpenOverlay) return { action: 'close-overlay' };
-  if (input.pathname !== home) return { action: 'navigate-back' };
-  // حتى في الرئيسية: إذا كان في السجل مدخلات (وصول مباشر ثم تنقّل داخلي)
-  // نرجع بدل الخروج، فالمستخدم لا يفقد مكانه.
-  if (input.canGoBackInHistory) return { action: 'navigate-back' };
-  return { action: 'stay-home' };
+  if (input.pathname === home) return { action: 'confirm-exit' };
+  if (input.hasInAppHistory) return { action: 'navigate-back' };
+  return { action: 'navigate-up', to: parentPath(input.pathname) };
 }

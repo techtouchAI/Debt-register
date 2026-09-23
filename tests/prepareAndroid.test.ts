@@ -159,6 +159,13 @@ describe('الصلاحيات وسمات التطبيق', () => {
     const withSound = structuredClone(CAPACITOR_CONFIG);
     (withSound.plugins.LocalNotifications as { sound?: string }).sound = 'beep.mp3';
     expect(() => validateCapacitorConfig(withSound)).toThrow(/sound/);
+
+    // captureInput يُفسد الكتابة العربية (حذف كلمات/اختفاء النص) — ممنوع
+    const captured = structuredClone(CAPACITOR_CONFIG) as typeof CAPACITOR_CONFIG & {
+      android: { captureInput?: boolean };
+    };
+    captured.android.captureInput = true;
+    expect(() => validateCapacitorConfig(captured)).toThrow(/captureInput/);
   });
 });
 

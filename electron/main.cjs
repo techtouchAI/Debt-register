@@ -118,6 +118,14 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  /* ----------------------- زر الرجوع (الفأرة و Alt+←) -----------------------
+   * يُعالَج داخل الواجهة (`src/lib/desktopBack.ts`) لا هنا: الواجهة تلتقط زر
+   * الفأرة الخلفي و Alt+← وتلغي سلوك Chromium الافتراضي، ثم تطبّق نفس قواعد
+   * زر أندرويد (إغلاق النافذة ← الصفحة السابقة ← تأكيد الخروج في الرئيسية).
+   * لا نضيف `app-command`/`goBack()` هنا عمداً: كان ذلك سيُنتج رجوعاً مزدوجاً
+   * ويتجاوز حوار تأكيد الخروج.
+   */
+
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (!isInternalUrl(url)) {
       event.preventDefault();

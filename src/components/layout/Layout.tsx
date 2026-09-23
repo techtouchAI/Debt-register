@@ -74,14 +74,18 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 font-cairo">
       {/* Sidebar - Mobile overlay */}
       {sidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} />
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
       )}
 
       {/* Sidebar */}
       <div className={`fixed inset-y-0 right-0 z-50 w-72 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full overflow-hidden">
           {/* Logo */}
-          <div className="flex items-center justify-between h-20 px-6 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex-none flex items-center justify-between h-20 px-6 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center gap-3">
               {settings?.logo ? (
                 <img src={settings.logo} alt="Logo" className="w-10 h-10 rounded-lg object-cover" />
@@ -113,8 +117,17 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
             </Button>
           </div>
 
-          {/* Navigation */}
-          <nav className="flex-1 overflow-y-auto px-4 py-6 space-y-1">
+          {/* Navigation
+              min-h-0 إلزامي هنا: بدونها لا ينكمش عنصر flex تحت حجم محتواه
+              (الافتراضي min-height: auto) فلا يعمل التمرير داخل القائمة أبداً،
+              وتُصبح البنود الأخيرة خارج الشاشة بلا إمكانية نقر، ويتسرب
+              التمرير إلى الصفحة الخلفية.
+              overscroll-contain يمنع "تسلسل" التمرير إلى الخلفية عند تجاوز
+              حدود القائمة. */}
+          <nav
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-6 space-y-1"
+            aria-label="التنقل الرئيسي"
+          >
             {navigation.map((item) => {
               const isActive = location.pathname === item.href || (item.href !== '/' && location.pathname.startsWith(item.href));
               return (
@@ -141,7 +154,7 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
           </nav>
 
           {/* Footer */}
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
+          <div className="flex-none p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
             <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-2">
               <span>الإصدار 1.0.0</span>
               <span>© 2024</span>

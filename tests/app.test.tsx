@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 // إزالة كل تركيب سابق بعد كل اختبار حتى لا تتداخل نسخ التطبيق
 afterEach(() => cleanup());
 import App from '@/App';
-import { db, getSettings, updateSettings } from '@/lib/db';
+import { db, getSettings } from '@/lib/db';
+import { fillRequiredSetupFields, seedOfficeProfile } from './helpers';
 
 /**
  * اختبار إقلاع حقيقي: يُركّب التطبيق بالكامل (ErrorBoundary + Router + Layout +
@@ -13,7 +14,7 @@ import { db, getSettings, updateSettings } from '@/lib/db';
 describe('إقلاع التطبيق', () => {
   it('يعرض لوحة التحكم بعد تهيئة قاعدة البيانات', async () => {
     // مكتب مُعد مسبقاً حتى لا يظهر معالج التشغيل الأول
-    await updateSettings({ officeName: 'مكتب الاختبار' });
+    await seedOfficeProfile('مكتب الاختبار');
     const now = new Date().toISOString();
     await db.materials.add({
       name: 'سماد يوريا',
@@ -64,6 +65,10 @@ describe('إقلاع التطبيق', () => {
     expect(nameInput.value).toBe('');
 
     fireEvent.change(nameInput, { target: { value: 'مكتب الرافدين الزراعي' } });
+    fillRequiredSetupFields(
+      (element, value) => fireEvent.change(element, { target: { value } }),
+      (id) => document.getElementById(id)!
+    );
     fireEvent.click(screen.getByText(/حفظ وبدء استخدام النظام/));
 
     await waitFor(

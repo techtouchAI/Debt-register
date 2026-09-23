@@ -11,6 +11,7 @@ import {
   validateOfficeName
 } from '@/lib/officeName';
 import { MAX_FILE_NAME_BYTES, sanitizeFileName, truncateToUtf8Bytes, utf8ByteLength } from '@/lib/utils';
+import { fillRequiredSetupFields, seedOfficeProfile } from './helpers';
 import type { Invoice, InvoiceItem, OfficeSettings } from '@/types';
 
 /**
@@ -108,7 +109,10 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     fireEvent.change(input, { target: { value: LONG_NAME } });
     // لا استبدال ولا اقتطاع أثناء الكتابة: القيمة الحقلية تساوي الاسم كاملاً
     expect(input.value).toBe(LONG_NAME);
-    expect(input.maxLength).toBe(MAX_OFFICE_NAME_LENGTH);
+    fillRequiredSetupFields(
+      (element, value) => fireEvent.change(element, { target: { value } }),
+      (id) => document.getElementById(id)!
+    );
 
     fireEvent.click(screen.getByText(/حفظ وبدء استخدام النظام/));
 
@@ -181,7 +185,7 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
   });
 
   it('يعرض الاسم الكامل في صفحة الإعدادات دون اقتطاع', async () => {
-    await updateSettings({ officeName: LONG_NAME });
+    await seedOfficeProfile(LONG_NAME);
     window.location.hash = '#/settings';
     render(<App />);
 

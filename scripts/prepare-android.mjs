@@ -105,6 +105,12 @@ export function validateCapacitorConfig(config) {
   if (config.android?.allowMixedContent !== false) {
     throw new Error('allowMixedContent يجب أن يكون false');
   }
+  // captureInput يستبدل محرر WebView الحقيقي باتصال إدخال بدائي غير قابل
+  // للتحرير (BaseInputConnection بلا محرر كامل): لوحة المفاتيح العربية
+  // والاقتراحات التلقائية تستبدل الكلمات عبره فتُحذف كلمات ويختفي النص.
+  if (config.android?.captureInput) {
+    throw new Error('captureInput يجب ألا يُفعَّل: يُفسد الكتابة بلوحة المفاتيح (حذف كلمات واختفاء النص)');
+  }
   if (!config.appName || !String(config.appName).trim()) {
     throw new Error('appName مطلوب في capacitor.config.json');
   }

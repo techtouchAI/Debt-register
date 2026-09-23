@@ -6,7 +6,17 @@
  * عندما يتوفر WebCrypto (سياق آمن)، مع الحفاظ على التوافق مع القيم القديمة.
  */
 
+import { toLatinDigits } from './digits'
+
 const PREFIX = 'sha256$'
+
+/**
+ * صيغة موحّدة للرمز قبل التحقق/التشفير: أرقام لاتينية بلا مسافات، فيطابق
+ * "١٢٣٤" المكتوب بلوحة عربية الرمز "1234" نفسه في كل مكان.
+ */
+export function normalizePin(pin: string): string {
+  return toLatinDigits(pin).trim()
+}
 
 const toHex = (buffer: ArrayBuffer): string =>
   Array.from(new Uint8Array(buffer))
@@ -37,7 +47,8 @@ export function maskPin(): string {
   return '••••'
 }
 
-export async function hashPin(pin: string): Promise<string> {
+export async function hashPin(rawPin: string): Promise<string> {
+  const pin = normalizePin(rawPin)
   const subtle = getSubtle()
   if (!subtle) {
     // بيئة غير آمنة (http على عنوان شبكة): لا يتوفر WebCrypto
@@ -50,7 +61,8 @@ export async function hashPin(pin: string): Promise<string> {
   return `${PREFIX}${salt}$${toHex(digest)}`
 }
 
-export async function verifyPin(pin: string, stored: string): Promise<boolean> {
+export async function verifyPin(rawPin: string, stored: string): Promise<boolean> {
+  const pin = normalizePin(rawPin)
   if (!isHashedPin(stored)) return stored === pin
   const [, salt, expected] = stored.split('$')
   if (!salt || !expected) return false
@@ -63,5 +75,5 @@ export async function verifyPin(pin: string, stored: string): Promise<boolean> {
 
 /** رمز دخول صالح: 4 إلى 8 أرقام. */
 export function isValidPin(pin: string): boolean {
-  return /^\d{4,8}$/.test(pin.trim())
+  return /^\d{4,8}$/.test(normalizePin(pin))
 }
