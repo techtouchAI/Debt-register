@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
 import { ArrowRight, Eye, FileText, Loader2, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { NumberInput } from '@/components/ui/number-input';
 import { QuickAddPurchaseMaterialDialog } from '@/components/materials/QuickAddPurchaseMaterialDialog';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 import { db, getSettingsOrDefault } from '@/lib/db';
@@ -15,14 +17,28 @@ import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import type { Material, OfficeSettings, Purchase } from '@/types';
 
+/**
+ * سطر في الوصل. `null` = الحقل فارغ أثناء التحرير: السطر يبقى في مكانه
+ * ويظهر خطأ تحته بدل حذفه أو إعادة الصفر إلى الحقل.
+ */
 interface CartItem {
   material: Material;
-  quantity: number;
-  purchasePrice: number;
+  quantity: number | null;
+  purchasePrice: number | null;
+}
+
+const lineTotal = (entry: CartItem) => roundMoney(toFiniteNumber(entry.quantity) * toFiniteNumber(entry.purchasePrice));
+
+function cartLineError(entry: CartItem): string | null {
+  if (entry.quantity === null || entry.quantity <= 0) return 'أدخل كمية أكبر من صفر';
+  if (entry.purchasePrice === null || entry.purchasePrice < 0) return 'أدخل سعر الشراء';
+  return null;
 }
 
 export function PurchaseForm() {
   const navigate = useNavigate();
+  const goBack = useGoBack();
+  const returnTo = useReturnTo();
   const { id } = useParams();
   const purchaseId = id ? Number(id) : undefined;
   const isEdit = Number.isFinite(purchaseId) && (purchaseId as number) > 0;
@@ -33,8 +49,8 @@ export function PurchaseForm() {
   const [supplierName, setSupplierName] = useState('');
   const [date, setDate] = useState(formatLocalDateTimeInput());
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'credit'>('cash');
-  const [paidAmount, setPaidAmount] = useState(0);
-  const [discount, setDiscount] = useState(0);
+  const [paidAmount, setPaidAmount] = useState<number | null>(0);
+  const [discount, setDiscount] = useState<number | null>(0);
   const [notes, setNotes] = useState('');
   const [searchMaterial, setSearchMaterial] = useState('');
   const [showMaterialList, setShowMaterialList] = useState(false);
@@ -72,7 +88,7 @@ export function PurchaseForm() {
           const materialMap = new Map(allMaterials.map((material) => [material.id, material]));
           setCart(
             found.items
-              .map((item) => {
+              .map((item): CartItem | null => {
                 const material = materialMap.get(item.materialId);
                 return material ? { material, quantity: item.quantity, purchasePrice: item.purchasePrice } : null;
               })
@@ -104,7 +120,7 @@ export function PurchaseForm() {
   const addToCart = (material: Material) => {
     const existing = cart.find((entry) => entry.material.id === material.id);
     if (existing) {
-      setCart(cart.map((entry) => entry.material.id === material.id ? { ...entry, quantity: roundMoney(entry.quantity + 1) } : entry));
+      setCart(cart.map((entry) => entry.material.id === material.id ? { ...entry, quantity: roundMoney(toFiniteNumber(entry.quantity) + 1) } : entry));
     } else {
       setCart([...cart, { material, quantity: 1, purchasePrice: toFiniteNumber(material.purchasePrice) }]);
     }
@@ -112,26 +128,26 @@ export function PurchaseForm() {
     setShowMaterialList(false);
   };
 
-  const updateQuantity = (materialId: number, value: string) => {
-    const quantity = toFiniteNumber(value, NaN);
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      setCart(cart.filter((entry) => entry.material.id !== materialId));
-      return;
-    }
-    setCart(cart.map((entry) => entry.material.id === materialId ? { ...entry, quantity } : entry));
-  };
-
-  const updatePurchasePrice = (materialId: number, value: string) => {
-    const price = Math.max(0, toFiniteNumber(value));
-    setCart(cart.map((entry) => entry.material.id === materialId ? { ...entry, purchasePrice: price } : entry));
+  // تحديث وظيفي بلا رفض لأي قيمة: التحقق يظهر في السطر ويمنع الحفظ فقط
+  const updateLine = (materialId: number, patch: Partial<Pick<CartItem, 'quantity' | 'purchasePrice'>>) => {
+    setCart((prev) => prev.map((entry) => (entry.material.id === materialId ? { ...entry, ...patch } : entry)));
   };
 
   const { subtotal, discount: safeDiscount, total } = computePurchaseTotals(
-    cart.map((entry) => ({ materialId: entry.material.id, materialName: entry.material.name, quantity: entry.quantity, purchasePrice: entry.purchasePrice })),
-    discount
+    cart.map((entry) => ({
+      materialId: entry.material.id,
+      materialName: entry.material.name,
+      quantity: toFiniteNumber(entry.quantity),
+      purchasePrice: toFiniteNumber(entry.purchasePrice)
+    })),
+    toFiniteNumber(discount)
   );
   const safePaid = paymentMethod === 'cash' ? total : Math.min(total, Math.max(0, roundMoney(toFiniteNumber(paidAmount))));
   const remaining = paymentMethod === 'credit' ? roundMoney(total - safePaid) : 0;
+  const invalidLine = cart.find((entry) => cartLineError(entry) !== null);
+  const discountError = discount !== null && roundMoney(discount) > subtotal ? `الخصم أكبر من المجموع (${subtotal})` : null;
+  const paidError =
+    paymentMethod === 'credit' && paidAmount !== null && roundMoney(paidAmount) > total ? `المدفوع أكبر من الإجمالي (${total})` : null;
 
   const openQuickAdd = (name: string) => {
     setQuickAddName(name.trim());
@@ -154,6 +170,14 @@ export function PurchaseForm() {
       toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل لوصل الشراء');
       return;
     }
+    if (invalidLine) {
+      toast.warning('راجع المواد', `${invalidLine.material.name}: ${cartLineError(invalidLine)}`);
+      return;
+    }
+    if (discountError || paidError) {
+      toast.warning('راجع المبالغ', (discountError ?? paidError) as string);
+      return;
+    }
     const dateISO = toISOStringOrNull(date);
     if (!dateISO) {
       toast.warning('تاريخ غير صالح', 'اختر تاريخ ووقت الوصل ثم أعد المحاولة');
@@ -173,8 +197,8 @@ export function PurchaseForm() {
         items: cart.map((entry) => ({
           materialId: entry.material.id,
           materialName: entry.material.name,
-          quantity: entry.quantity,
-          purchasePrice: entry.purchasePrice,
+          quantity: toFiniteNumber(entry.quantity),
+          purchasePrice: toFiniteNumber(entry.purchasePrice),
           salePrice: entry.material.salePrice,
           category: entry.material.category,
           unit: entry.material.unit
@@ -186,7 +210,9 @@ export function PurchaseForm() {
         return;
       }
       toast.success(isEdit ? 'تم تحديث وصل الشراء' : 'تم حفظ وصل الشراء', `رقم الوصل: ${result.purchaseNumber}`);
-      navigate(`/purchases/${result.purchaseId}`);
+      // صفحة الوصل المحفوظ تحلّ محل النموذج (أو نرجع إليها إن جئنا منها)،
+      // فلا يعيد زر الرجوع فتح نموذج أُرسل للتو.
+      returnTo(`/purchases/${result.purchaseId}`);
     } catch (error) {
       reportError('PurchaseForm.save', error, 'حدث خطأ أثناء حفظ وصل الشراء');
     } finally {
@@ -226,9 +252,9 @@ export function PurchaseForm() {
           purchaseId: 0,
           materialId: entry.material.id as number,
           materialName: entry.material.name,
-          quantity: entry.quantity,
-          purchasePrice: entry.purchasePrice,
-          total: roundMoney(entry.quantity * entry.purchasePrice)
+          quantity: toFiniteNumber(entry.quantity),
+          purchasePrice: toFiniteNumber(entry.purchasePrice),
+          total: lineTotal(entry)
         })),
         s
       ));
@@ -245,7 +271,7 @@ export function PurchaseForm() {
     <div className="space-y-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button>
+          <Button variant="ghost" size="icon" onClick={() => goBack('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><FileText className="w-7 h-7 text-primary-600" />{isEdit ? 'تعديل وصل شراء' : 'وصل شراء جديد'}</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">أدخل المواد مباشرة؛ المادة الجديدة تُسجّل في المخزن تلقائياً عند الحفظ.</p>
@@ -309,14 +335,35 @@ export function PurchaseForm() {
                   <div className="bg-gray-50 dark:bg-gray-800/50 p-3 grid grid-cols-12 gap-2 text-[11px] font-bold text-gray-600 dark:text-gray-400">
                     <div className="col-span-5">المادة</div><div className="col-span-2 text-center">الكمية</div><div className="col-span-3 text-center">سعر الشراء</div><div className="col-span-2 text-center">المجموع</div>
                   </div>
-                  {cart.map((entry) => (
+                  {cart.map((entry) => {
+                    const lineError = cartLineError(entry);
+                    const errorId = `purchase-line-error-${entry.material.id}`;
+                    return (
                     <div key={entry.material.id} className="p-3 grid grid-cols-12 gap-2 items-center border-t border-gray-100 dark:border-gray-800 text-sm">
                       <div className="col-span-5 min-w-0"><p className="font-medium truncate">{entry.material.name}</p><p className="text-[11px] text-gray-500">{entry.material.unit || 'قطعة'} • الرصيد الحالي: {entry.material.quantity}</p></div>
-                      <div className="col-span-2"><Input type="number" min="0.01" step="0.01" value={entry.quantity} onChange={(event) => updateQuantity(entry.material.id as number, event.target.value)} className="h-8 text-center" /></div>
-                      <div className="col-span-3"><Input type="number" min="0" step="0.01" value={entry.purchasePrice} onChange={(event) => updatePurchasePrice(entry.material.id as number, event.target.value)} className="h-8 text-center text-xs" /></div>
-                      <div className="col-span-2 flex items-center justify-between gap-1"><span className="font-bold text-green-600 text-xs whitespace-nowrap">{formatCurrency(roundMoney(entry.quantity * entry.purchasePrice), settings?.currency)}</span><Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${entry.material.name}`} onClick={() => setCart(cart.filter((item) => item.material.id !== entry.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button></div>
+                      <div className="col-span-2">
+                        <NumberInput
+                          value={entry.quantity}
+                          onValueChange={(quantity) => updateLine(entry.material.id as number, { quantity })}
+                          aria-label={`كمية ${entry.material.name}`}
+                          aria-invalid={lineError !== null}
+                          aria-describedby={lineError ? errorId : undefined}
+                          className={`h-8 text-center ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                        />
+                      </div>
+                      <div className="col-span-3">
+                        <NumberInput
+                          value={entry.purchasePrice}
+                          onValueChange={(purchasePrice) => updateLine(entry.material.id as number, { purchasePrice })}
+                          aria-label={`سعر شراء ${entry.material.name}`}
+                          className="h-8 text-center text-xs"
+                        />
+                      </div>
+                      <div className="col-span-2 flex items-center justify-between gap-1"><span className="font-bold text-green-600 text-xs whitespace-nowrap">{formatCurrency(lineTotal(entry), settings?.currency)}</span><Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${entry.material.name}`} onClick={() => setCart((prev) => prev.filter((item) => item.material.id !== entry.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button></div>
+                      {lineError && <p id={errorId} role="alert" className="col-span-12 text-[11px] text-red-600 dark:text-red-400">{lineError}</p>}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-center py-10 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl"><Package className="w-10 h-10 text-gray-300 mx-auto mb-2" /><p className="text-sm text-gray-500">لم تتم إضافة مواد</p><p className="text-xs text-gray-400 mt-1">ابحث عن مادة أو سجّل مادة جديدة من هنا</p></div>
@@ -330,12 +377,13 @@ export function PurchaseForm() {
           <CardContent className="space-y-4">
             <div className="space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">عدد المواد:</span><strong>{cart.length}</strong></div>
-              <div className="flex justify-between"><span className="text-gray-500">إجمالي الكمية:</span><strong>{roundMoney(cart.reduce((sum, entry) => sum + entry.quantity, 0))}</strong></div>
+              <div className="flex justify-between"><span className="text-gray-500">إجمالي الكمية:</span><strong>{roundMoney(cart.reduce((sum, entry) => sum + toFiniteNumber(entry.quantity), 0))}</strong></div>
               <div className="flex justify-between"><span className="text-gray-500">المجموع:</span><strong>{formatCurrency(subtotal, settings?.currency)}</strong></div>
-              <div className="flex items-center justify-between gap-2"><span className="text-gray-500">الخصم:</span><Input type="number" min="0" max={subtotal} step="0.01" value={discount} onChange={(event) => setDiscount(toFiniteNumber(event.target.value))} className="w-28 h-8 text-left" dir="ltr" /></div>
+              <div className="flex items-center justify-between gap-2"><span className="text-gray-500">الخصم:</span><NumberInput value={discount} onValueChange={setDiscount} aria-label="الخصم" aria-invalid={discountError !== null} className={`w-28 h-8 text-left ${discountError ? 'border-red-500' : ''}`} /></div>
+              {discountError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{discountError}</p>}
               <div className="h-px bg-gray-200 dark:bg-gray-700" />
               <div className="flex justify-between text-base"><strong>الإجمالي:</strong><strong className="text-primary-600">{formatCurrency(total, settings?.currency)}</strong></div>
-              {paymentMethod === 'credit' && <><div className="flex items-center justify-between gap-2"><span className="text-gray-500">المدفوع:</span><Input type="number" min="0" max={total} step="0.01" value={paidAmount} onChange={(event) => setPaidAmount(toFiniteNumber(event.target.value))} className="w-28 h-8" /></div><div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><strong className={remaining > 0 ? 'text-red-600' : 'text-green-600'}>{formatCurrency(remaining, settings?.currency)}</strong></div></>}
+              {paymentMethod === 'credit' && <><div className="flex items-center justify-between gap-2"><span className="text-gray-500">المدفوع:</span><NumberInput value={paidAmount} onValueChange={setPaidAmount} aria-label="المدفوع" aria-invalid={paidError !== null} className={`w-28 h-8 text-left ${paidError ? 'border-red-500' : ''}`} /></div>{paidError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{paidError}</p>}<div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><strong className={remaining > 0 ? 'text-red-600' : 'text-green-600'}>{formatCurrency(remaining, settings?.currency)}</strong></div></>}
             </div>
             <div><label className="text-sm font-medium mb-1 block">ملاحظات</label><textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="w-full min-h-[70px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm" placeholder="ملاحظات اختيارية..." /></div>
             <div className="grid gap-2 pt-2">

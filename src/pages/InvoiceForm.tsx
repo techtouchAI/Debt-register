@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
 import { FileText, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumberInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
@@ -16,17 +18,32 @@ import { generateInvoicePDF } from '@/lib/pdf';
 import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialDialog';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 
+/**
+ * سطر في السلة. الكمية والسعر `null` أثناء تفريغ الحقل للكتابة من جديد:
+ * السطر لا يُحذف ولا تُرفض الضغطة؛ الخطأ يظهر تحت الحقل ويُمنع الحفظ فقط.
+ */
 interface CartItem {
   material: Material;
-  quantity: number;
-  unitPrice: number;
-  total: number;
+  quantity: number | null;
+  unitPrice: number | null;
+}
+
+const lineTotal = (item: CartItem) => roundMoney(toFiniteNumber(item.quantity) * toFiniteNumber(item.unitPrice));
+
+/** خطأ السطر (إن وُجد) — يُعرض بجانب الحقل بدل رفض ما يكتبه المستخدم. */
+function cartLineError(item: CartItem): string | null {
+  if (item.quantity === null || item.quantity <= 0) return 'أدخل كمية أكبر من صفر';
+  if (item.quantity > item.material.quantity) return `يتجاوز المتوفر (${item.material.quantity})`;
+  if (item.unitPrice === null || item.unitPrice < 0) return 'أدخل السعر';
+  return null;
 }
 
 const EMPTY_CART_MESSAGE = 'لم تتم إضافة مواد بعد';
 
 export function InvoiceForm() {
   const navigate = useNavigate();
+  const goBack = useGoBack();
+  const returnTo = useReturnTo();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const invoiceId = id ? Number(id) : undefined;
@@ -49,10 +66,10 @@ export function InvoiceForm() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [discount, setDiscount] = useState(0);
+  const [discount, setDiscount] = useState<number | null>(0);
   const [notes, setNotes] = useState('');
   const [date, setDate] = useState(formatLocalDateTimeInput());
-  const [paidAmount, setPaidAmount] = useState(0);
+  const [paidAmount, setPaidAmount] = useState<number | null>(0);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -110,8 +127,7 @@ export function InvoiceForm() {
               // الكمية المعروضة تشمل حصة هذه الفاتورة حتى يمكن تعديلها بحرية
               material: { ...material, quantity: roundMoney(material.quantity + (reserved.get(item.materialId) ?? 0)) },
               quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              total: item.total
+              unitPrice: item.unitPrice
             });
           }
           setCart(cartItems);
@@ -165,17 +181,12 @@ export function InvoiceForm() {
   const addToCart = (material: Material) => {
     const existing = cart.find((item) => item.material.id === material.id);
     if (existing) {
-      if (roundMoney(existing.quantity + 1) > material.quantity) {
+      const nextQuantity = roundMoney(toFiniteNumber(existing.quantity) + 1);
+      if (nextQuantity > material.quantity) {
         toast.warning('الكمية غير كافية', `المتوفر من "${material.name}": ${material.quantity} ${material.unit ?? ''}`);
         return;
       }
-      setCart(
-        cart.map((item) =>
-          item.material.id === material.id
-            ? { ...item, quantity: roundMoney(item.quantity + 1), total: roundMoney((item.quantity + 1) * item.unitPrice) }
-            : item
-        )
-      );
+      setCart(cart.map((item) => (item.material.id === material.id ? { ...item, quantity: nextQuantity } : item)));
     } else {
       if (material.quantity <= 0) {
         toast.warning('المادة غير متوفرة', `لا توجد كمية متوفرة من "${material.name}"`);
@@ -183,59 +194,42 @@ export function InvoiceForm() {
       }
       setCart([
         ...cart,
-        { material, quantity: 1, unitPrice: toFiniteNumber(material.salePrice), total: roundMoney(toFiniteNumber(material.salePrice)) }
+        { material, quantity: 1, unitPrice: toFiniteNumber(material.salePrice) }
       ]);
     }
     setSearchMaterial('');
     setShowMaterialList(false);
   };
 
-  const updateQuantity = (materialId: number, value: string) => {
-    const quantity = toFiniteNumber(value, NaN);
-    if (value.trim() === '' || !Number.isFinite(quantity)) {
-      setCart(cart.filter((item) => item.material.id !== materialId));
-      return;
-    }
-    if (quantity <= 0) {
-      setCart(cart.filter((item) => item.material.id !== materialId));
-      return;
-    }
-    const item = cart.find((entry) => entry.material.id === materialId);
-    if (!item) return;
-    if (quantity > item.material.quantity) {
-      toast.warning('الكمية غير كافية', `المتوفر من "${item.material.name}": ${item.material.quantity}`);
-      return;
-    }
-    setCart(
-      cart.map((entry) =>
-        entry.material.id === materialId
-          ? { ...entry, quantity, total: roundMoney(quantity * entry.unitPrice) }
-          : entry
-      )
-    );
+  // التحديث وظيفي (prev) حتى لا تضيع ضغطة سريعة على نسخة قديمة من السلة،
+  // ولا يرفض أي قيمة: التحقق يظهر في السطر نفسه ويمنع الحفظ فقط.
+  const updateLine = (materialId: number, patch: Partial<Pick<CartItem, 'quantity' | 'unitPrice'>>) => {
+    setCart((prev) => prev.map((item) => (item.material.id === materialId ? { ...item, ...patch } : item)));
   };
 
-  const updatePrice = (materialId: number, value: string) => {
-    const unitPrice = Math.max(0, toFiniteNumber(value));
-    setCart(
-      cart.map((item) =>
-        item.material.id === materialId
-          ? { ...item, unitPrice, total: roundMoney(item.quantity * unitPrice) }
-          : item
-      )
-    );
-  };
-
-  const subtotal = roundMoney(cart.reduce((sum, item) => sum + toFiniteNumber(item.total), 0));
+  const subtotal = roundMoney(cart.reduce((sum, item) => sum + lineTotal(item), 0));
+  const invalidLine = cart.find((item) => cartLineError(item) !== null);
   const safeDiscount = Math.min(Math.max(roundMoney(toFiniteNumber(discount)), 0), subtotal);
   const total = roundMoney(subtotal - safeDiscount);
   const safePaid = Math.min(Math.max(roundMoney(toFiniteNumber(paidAmount)), 0), total);
   const remaining = invoiceType === 'credit' ? roundMoney(total - safePaid) : 0;
+  // حدود الخصم والدفعة تظهر كتحقّق مرئي بدل قصّ القيمة بصمت أثناء الكتابة
+  const discountError = discount !== null && roundMoney(discount) > subtotal ? `الخصم أكبر من المجموع (${subtotal})` : null;
+  const paidError =
+    invoiceType === 'credit' && paidAmount !== null && roundMoney(paidAmount) > total ? `المدفوع أكبر من الإجمالي (${total})` : null;
 
   const handleSave = async (shouldPDF = false) => {
     if (isSaving) return;
     if (cart.length === 0) {
       toast.warning('لا توجد مواد', 'أضف مادة واحدة على الأقل للفاتورة');
+      return;
+    }
+    if (invalidLine) {
+      toast.warning('راجع المواد', `${invalidLine.material.name}: ${cartLineError(invalidLine)}`);
+      return;
+    }
+    if (discountError || paidError) {
+      toast.warning('راجع المبالغ', (discountError ?? paidError) as string);
       return;
     }
 
@@ -259,8 +253,8 @@ export function InvoiceForm() {
         items: cart.map((item) => ({
           materialId: item.material.id as number,
           materialName: item.material.name,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
+          quantity: toFiniteNumber(item.quantity),
+          unitPrice: toFiniteNumber(item.unitPrice),
           purchasePrice: item.material.purchasePrice
         }))
       };
@@ -278,7 +272,9 @@ export function InvoiceForm() {
       }
 
       toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم حفظ الفاتورة', `رقم الفاتورة: ${result.invoiceNumber}`);
-      navigate('/invoices');
+      // استبدال/رجوع لا دفع: الرجوع بعد الحفظ لا يعيد فتح نموذج مُرسَل
+      // من عرض الفاتورة ← تعديل: نعود إلى العرض نفسه؛ وإلا إلى القائمة
+      returnTo('/invoices', [`/invoices/${result.invoiceId}`]);
     } catch (error) {
       reportError('InvoiceForm.save', error, 'حدث خطأ أثناء حفظ الفاتورة');
     } finally {
@@ -321,9 +317,9 @@ export function InvoiceForm() {
           invoiceId: 0,
           materialId: item.material.id as number,
           materialName: item.material.name,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          total: item.total
+          quantity: toFiniteNumber(item.quantity),
+          unitPrice: toFiniteNumber(item.unitPrice),
+          total: lineTotal(item)
         })),
         s
       );
@@ -360,7 +356,7 @@ export function InvoiceForm() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">الفاتورة الذكية - بحث سريع وحساب تلقائي</p>
         </div>
-        <Button variant="outline" onClick={() => navigate('/invoices')}>رجوع للفواتير</Button>
+        <Button variant="outline" onClick={() => goBack('/invoices')}>رجوع للفواتير</Button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -529,24 +525,43 @@ export function InvoiceForm() {
                       <div className="col-span-2 text-center">المجموع</div>
                       <div className="col-span-1"></div>
                     </div>
-                    {cart.map((item) => (
+                    {cart.map((item) => {
+                      const lineError = cartLineError(item);
+                      const errorId = `invoice-line-error-${item.material.id}`;
+                      return (
                       <div key={item.material.id} className="p-3 grid grid-cols-12 gap-2 items-center border-t border-gray-100 dark:border-gray-800 text-sm">
                         <div className="col-span-5">
                           <p className="font-medium truncate">{item.material.name}</p>
                           <p className="text-[11px] text-gray-500">متوفر: {item.material.quantity}</p>
                         </div>
                         <div className="col-span-2">
-                          <Input type="number" min="0.01" step="0.01" value={item.quantity} onChange={(e) => updateQuantity(item.material.id as number, e.target.value)} className="h-8 text-center" />
+                          <NumberInput
+                            value={item.quantity}
+                            onValueChange={(quantity) => updateLine(item.material.id as number, { quantity })}
+                            aria-label={`كمية ${item.material.name}`}
+                            aria-invalid={lineError !== null}
+                            aria-describedby={lineError ? errorId : undefined}
+                            className={`h-8 text-center ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                          />
                         </div>
                         <div className="col-span-2">
-                          <Input type="number" min="0" step="0.01" value={item.unitPrice} onChange={(e) => updatePrice(item.material.id as number, e.target.value)} className="h-8 text-center text-xs" />
+                          <NumberInput
+                            value={item.unitPrice}
+                            onValueChange={(unitPrice) => updateLine(item.material.id as number, { unitPrice })}
+                            aria-label={`سعر ${item.material.name}`}
+                            className="h-8 text-center text-xs"
+                          />
                         </div>
-                        <div className="col-span-2 text-center font-bold text-green-600">{formatCurrency(item.total, settings?.currency)}</div>
+                        <div className="col-span-2 text-center font-bold text-green-600">{formatCurrency(lineTotal(item), settings?.currency)}</div>
                         <div className="col-span-1 text-center">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${item.material.name}`} onClick={() => setCart(cart.filter(c => c.material.id !== item.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${item.material.name}`} onClick={() => setCart((prev) => prev.filter((c) => c.material.id !== item.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button>
                         </div>
+                        {lineError && (
+                          <p id={errorId} role="alert" className="col-span-12 text-[11px] text-red-600 dark:text-red-400">{lineError}</p>
+                        )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -563,12 +578,19 @@ export function InvoiceForm() {
             <CardContent className="space-y-4">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">عدد المواد:</span><span className="font-bold">{cart.length}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">إجمالي الكمية:</span><span className="font-bold">{roundMoney(cart.reduce((sum, i) => sum + i.quantity, 0))}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">إجمالي الكمية:</span><span className="font-bold">{roundMoney(cart.reduce((sum, i) => sum + toFiniteNumber(i.quantity), 0))}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">المجموع:</span><span className="font-bold">{formatCurrency(subtotal, settings?.currency)}</span></div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-gray-500 text-sm">الخصم:</span>
-                  <Input type="number" min="0" max={subtotal} step="0.01" value={discount} onChange={(e) => setDiscount(toFiniteNumber(e.target.value))} className="w-28 h-8 text-left" dir="ltr" />
+                  <NumberInput
+                    value={discount}
+                    onValueChange={setDiscount}
+                    aria-label="الخصم"
+                    aria-invalid={discountError !== null}
+                    className={`w-28 h-8 text-left ${discountError ? 'border-red-500' : ''}`}
+                  />
                 </div>
+                {discountError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{discountError}</p>}
                 <div className="h-px bg-gray-200 dark:bg-gray-700 my-2" />
                 <div className="flex justify-between text-base"><span className="font-bold">الإجمالي النهائي:</span><span className="font-bold text-primary-600 text-lg">{formatCurrency(total, settings?.currency)}</span></div>
 
@@ -576,8 +598,15 @@ export function InvoiceForm() {
                   <>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-gray-500 text-sm">المدفوع الآن:</span>
-                      <Input type="number" min="0" max={total} step="0.01" value={paidAmount} onChange={(e) => setPaidAmount(toFiniteNumber(e.target.value))} className="w-28 h-8" />
+                      <NumberInput
+                        value={paidAmount}
+                        onValueChange={setPaidAmount}
+                        aria-label="المدفوع الآن"
+                        aria-invalid={paidError !== null}
+                        className={`w-28 h-8 text-left ${paidError ? 'border-red-500' : ''}`}
+                      />
                     </div>
+                    {paidError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{paidError}</p>}
                     <div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><span className={`font-bold ${remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(remaining, settings?.currency)}</span></div>
                     <p className="text-[11px] text-gray-500 leading-relaxed">
                       تُسجَّل الدفعة كوصل قبض، ويُوزَّع المسدد تلقائياً على أقدم فواتير الزبون.

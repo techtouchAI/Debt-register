@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, FileText, CreditCard, Printer, Download, Calendar, Phone, MapPin, Eye } from 'lucide-react';
+import { useGoBack } from '@/hooks/useGoBack';
+import { ArrowRight, FileText, CreditCard, Printer, Download, Calendar, Phone, MapPin, Eye } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +17,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 
 export function CustomerStatement() {
   const { id } = useParams();
+  const goBack = useGoBack();
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
   const [showPreview, setShowPreview] = useState(false);
 
@@ -72,7 +74,7 @@ export function CustomerStatement() {
     return (
       <div className="text-center py-16">
         <p>الزبون غير موجود</p>
-        <Link to="/customers"><Button className="mt-4">رجوع للعملاء</Button></Link>
+        <Button className="mt-4" onClick={() => goBack('/customers')}>رجوع للعملاء</Button>
       </div>
     );
   }
@@ -80,9 +82,10 @@ export function CustomerStatement() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-3">
-        <Link to="/customers">
-          <Button variant="ghost" size="icon"><ArrowLeft className="w-5 h-5" /></Button>
-        </Link>
+        {/* رجوع حقيقي (لا رابط يدفع مدخلاً جديداً)؛ السهم لليمين في الواجهة العربية */}
+        <Button variant="ghost" size="icon" onClick={() => goBack('/customers')} aria-label="رجوع للعملاء">
+          <ArrowRight className="w-5 h-5" />
+        </Button>
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">كشف حساب الزبون</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">سجل زمني تفصيلي لجميع مسحوبات ومدفوعات الزبون</p>

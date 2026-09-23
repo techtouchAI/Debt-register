@@ -3,6 +3,7 @@ import { Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumericTextInput } from '@/components/ui/number-input';
 import { createMaterial, findMaterialByName } from '@/lib/materials';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { toast } from '@/lib/toast';
@@ -142,21 +143,21 @@ function QuickAddMaterialForm({
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">الكمية *</label>
-                <Input type="number" min="0" step="0.01" value={quantity} onChange={(e) => setQuantity(e.target.value)} required />
+                <NumericTextInput value={quantity} onValueChange={setQuantity} required />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر البيع *</label>
-                <Input type="number" min="0" step="0.01" value={salePrice} onChange={(e) => setSalePrice(e.target.value)} required placeholder="0" />
+                <NumericTextInput value={salePrice} onValueChange={setSalePrice} required placeholder="0" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر الشراء</label>
-                <Input type="number" min="0" step="0.01" value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)} placeholder="اختياري" />
+                <NumericTextInput value={purchasePrice} onValueChange={setPurchasePrice} placeholder="اختياري" />
               </div>
             </div>
 
             <div>
               <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه</label>
-              <Input type="number" min="0" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} className="max-w-[160px]" />
+              <NumericTextInput value={minQuantity} onValueChange={setMinQuantity} className="max-w-[160px]" />
               <p className="text-[11px] text-gray-500 mt-1">العملة: {currency} — يمكن تعديل كل التفاصيل لاحقاً من صفحة المخزن</p>
             </div>
 

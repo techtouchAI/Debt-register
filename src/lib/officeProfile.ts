@@ -10,6 +10,7 @@
  * مساران مختلفان للتحقق يمكن أن يتباعدا.
  */
 import type { OfficeSettings } from '@/types';
+import { toLatinDigits } from './digits';
 import { MAX_OFFICE_NAME_LENGTH, normalizeOfficeName, validateOfficeName } from './officeName';
 
 /** العملات المدعومة — مصدر واحد لقوائم الاختيار والتحقق. */
@@ -52,21 +53,8 @@ export const OFFICE_PROFILE_FIELDS: readonly OfficeProfileField[] = [
   'invoiceFooter'
 ];
 
-const ARABIC_INDIC_ZERO = 0x0660; // ٠
-const EXTENDED_ARABIC_INDIC_ZERO = 0x06f0; // ۰ (فارسي/أردو)
-
-/**
- * تحويل الأرقام العربية-الهندية (٠-٩) والفارسية (۰-۹) إلى أرقام لاتينية.
- * لوحة المفاتيح العربية في أندرويد تكتب ٠٧٨٠… افتراضياً، ورفض هذه الأرقام أو
- * حفظها كما هي كان يُنتج أرقام هواتف لا تُطبع ولا يُتصل بها.
- */
-export function toLatinDigits(value: string): string {
-  return value.replace(/[\u0660-\u0669\u06F0-\u06F9]/g, (digit) => {
-    const code = digit.charCodeAt(0);
-    const base = code >= EXTENDED_ARABIC_INDIC_ZERO ? EXTENDED_ARABIC_INDIC_ZERO : ARABIC_INDIC_ZERO;
-    return String(code - base);
-  });
-}
+// التحويل نفسه في وحدة مشتركة (تستخدمها حقول الأرقام ورمز الدخول أيضاً)
+export { toLatinDigits };
 
 /** تطبيع الهاتف: أرقام لاتينية فقط مع `+` اختيارية في البداية. */
 export function normalizePhone(raw: unknown): string {

@@ -3,6 +3,7 @@ import { Settings as SettingsIcon, Building, Moon, Sun, Save, Loader2, User, Shi
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumericTextInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, updateSettings, logActivity } from '@/lib/db';
 import { toFiniteNumber } from '@/lib/utils';
@@ -345,7 +346,7 @@ export function Settings() {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه (افتراضي)</label>
-                <Input type="number" inputMode="numeric" min="0" value={prefs.lowStockThreshold} onChange={(e) => patchPrefs({ lowStockThreshold: e.target.value })} />
+                <NumericTextInput value={prefs.lowStockThreshold} onValueChange={(lowStockThreshold) => patchPrefs({ lowStockThreshold })} />
                 <p className="text-[11px] text-gray-500 mt-1">عند وصول الكمية لهذا الحد يظهر تنبيه نفاد</p>
               </div>
               <div>

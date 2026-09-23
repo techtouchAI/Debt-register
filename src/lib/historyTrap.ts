@@ -52,6 +52,8 @@ function defaultAdapter(): HistoryAdapter {
 let adapter: HistoryAdapter | null = null;
 let armed = false;
 let pendingProgrammaticBacks = 0;
+/** إغلاق طبقة عبر السجل قيد التنفيذ (يمنع رجوعاً مزدوجاً بنقرتين سريعتين). */
+let dismissPending = false;
 let installedCleanup: (() => void) | undefined;
 
 function historyAdapter(): HistoryAdapter {
@@ -73,6 +75,29 @@ export function setHistoryAdapterForTests(next: HistoryAdapter | null): void {
   adapter = next;
   armed = false;
   pendingProgrammaticBacks = 0;
+  dismissPending = false;
+}
+
+/**
+ * إغلاق طبقة **مرتبطة بمسار** (مثل `/payments/new` أو `?action=new`) من زر
+ * إلغاء/حفظ داخلها.
+ *
+ * هذه الطبقات تغيّر المسار عند إغلاقها. لو غيّرته والفخ ما زال المدخل الحالي
+ * لاستبدلت مدخل الفخ نفسه وبقي مدخل مسار الطبقة تحته، فيعيد زر الرجوع فتح
+ * النموذج الذي أُغلق للتو. لذلك نُغلقها بالطريق نفسه الذي يسلكه زر الرجوع:
+ * نزيل مدخل الفخ أولاً (رجوع واحد) فيستدعي مستمع السجل مُغلِق الطبقة العليا
+ * — أي `close` — وهو الآن على مدخل مسار الطبقة الحقيقي فيستبدله بسلام.
+ *
+ * إن لم يكن الفخ مسلّحاً (بيئة بلا سجل، أو أُزيل مسبقاً) تُستدعى `close` مباشرة.
+ */
+export function dismissOverlayThroughHistory(close: () => void): void {
+  if (dismissPending) return;
+  if (installedCleanup && armed && isOverlayTrapState(historyAdapter().state)) {
+    dismissPending = true;
+    historyAdapter().back();
+    return;
+  }
+  close();
 }
 
 function armTrap(): void {
@@ -130,7 +155,8 @@ export function installHistoryTrap(
       return;
     }
 
-    // رجوع المستخدم: نغلق الطبقة العليا إن وُجدت — استدعاء غير مشروط حتى
+    dismissPending = false;
+    // رجوع المستخدم (أو إغلاق عبر السجل): نغلق الطبقة العليا إن وُجدت — استدعاء غير مشروط حتى
     // في الحالات الانتقالية التي لا يتزامن فيها علم التسليح مع المكدس.
     armed = false;
     const closed = closeTopOverlay();
@@ -165,6 +191,7 @@ export function resetHistoryTrapForTests(): void {
   adapter = null;
   armed = false;
   pendingProgrammaticBacks = 0;
+  dismissPending = false;
   installedCleanup?.();
   installedCleanup = undefined;
 }

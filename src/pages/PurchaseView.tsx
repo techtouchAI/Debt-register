@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
 import { ArrowRight, ClipboardList, Download, Edit, Eye, Loader2, Printer, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,6 +18,8 @@ import type { OfficeSettings, Purchase, PurchaseItem } from '@/types';
 export function PurchaseView() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const goBack = useGoBack();
+  const returnTo = useReturnTo();
   const [purchase, setPurchase] = useState<Purchase | null>(null);
   const [items, setItems] = useState<PurchaseItem[]>([]);
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
@@ -93,13 +96,14 @@ export function PurchaseView() {
         return;
       }
       toast.success('تم حذف وصل الشراء', 'تم تحديث المخزن');
-      navigate('/purchases', { replace: true });
+      // السجل المحذوف لا يبقى في السجل: نرجع للقائمة إن جئنا منها، وإلا نستبدله
+      returnTo('/purchases');
     } catch (error) {
       reportError('PurchaseView.delete', error, 'تعذّر حذف وصل الشراء');
     } finally {
       setIsBusy(false);
     }
-  }, [isBusy, navigate, purchase]);
+  }, [isBusy, purchase, returnTo]);
 
   if (isLoading) return <div className="flex items-center justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-primary-600" /></div>;
   if (!purchase || !settings) return null;
@@ -107,7 +111,7 @@ export function PurchaseView() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3"><Button variant="ghost" size="icon" onClick={() => navigate('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button><div><h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><ClipboardList className="w-6 h-6 text-primary-600" />{purchase.purchaseNumber}</h1><p className="text-xs sm:text-sm text-gray-500 mt-1">{formatDate(purchase.date, true)} • {purchase.itemsCount} مادة</p></div></div>
+        <div className="flex items-center gap-3"><Button variant="ghost" size="icon" onClick={() => goBack('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button><div><h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><ClipboardList className="w-6 h-6 text-primary-600" />{purchase.purchaseNumber}</h1><p className="text-xs sm:text-sm text-gray-500 mt-1">{formatDate(purchase.date, true)} • {purchase.itemsCount} مادة</p></div></div>
         <Badge variant={purchase.paymentMethod === 'cash' ? 'success' : 'warning'}>{purchase.paymentMethod === 'cash' ? 'مدفوع نقداً' : 'آجل للمورد'}</Badge>
       </div>
 

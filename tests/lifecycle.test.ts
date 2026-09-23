@@ -324,12 +324,14 @@ describe('فخّ سجل الرجوع', () => {
 describe('قرار زر الرجوع', () => {
   it('يغلق الطبقة أولاً، ثم يرجع في السجل، ثم يطلب تأكيد الخروج في الرئيسية', () => {
     expect(resolveBackIntent({ hasOpenOverlay: true, pathname: '/materials' })).toEqual({ action: 'close-overlay' });
-    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/materials' })).toEqual({ action: 'navigate-back' });
-    // في الرئيسية بلا سجل: لا خروج صامتاً — حوار تأكيد صريح
-    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'confirm-exit' });
-    // من الرئيسية مع وجود سجل سابق: رجوع بدل خروج من التطبيق
-    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/', canGoBackInHistory: true })).toEqual({
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/materials', hasInAppHistory: true })).toEqual({
       action: 'navigate-back'
+    });
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/materials' })).toEqual({ action: 'navigate-up', to: '/' });
+    // في الرئيسية: حوار تأكيد صريح دائماً (مع سجل أو بدونه)
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'confirm-exit' });
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/', hasInAppHistory: true })).toEqual({
+      action: 'confirm-exit'
     });
   });
 });

@@ -57,15 +57,24 @@ describe('منطق الرجوع المجرّد', () => {
     expect(resolveBackIntent({ hasOpenOverlay: true, pathname: '/customers' })).toEqual({
       action: 'close-overlay'
     });
-    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/customers' })).toEqual({
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/customers', hasInAppHistory: true })).toEqual({
       action: 'navigate-back'
     });
-    // في الرئيسية بلا سجل: لا خروج صامتاً — تأكيد صريح
+    // بلا سجل (فتح مباشر/استعادة بعد إنهاء التطبيق): صعود للصفحة الأم
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/invoices/7/edit' })).toEqual({
+      action: 'navigate-up',
+      to: '/invoices/7'
+    });
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/customers' })).toEqual({
+      action: 'navigate-up',
+      to: '/'
+    });
+    // في الرئيسية: تأكيد صريح دائماً — حتى مع وجود سجل سابق، فالرئيسية
+    // نهاية سلسلة الرجوع ولا نعود منها إلى صفحات قديمة
     expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/' })).toEqual({ action: 'confirm-exit' });
-    // في الرئيسية مع وجود سجل: نرجع بدل الخروج
-    expect(
-      resolveBackIntent({ hasOpenOverlay: false, pathname: '/', canGoBackInHistory: true })
-    ).toEqual({ action: 'navigate-back' });
+    expect(resolveBackIntent({ hasOpenOverlay: false, pathname: '/', hasInAppHistory: true })).toEqual({
+      action: 'confirm-exit'
+    });
   });
 });
 
@@ -177,20 +186,20 @@ describe('القائمة الجانبية (الدرج الجوال)', () => {
     expect(hasOpenModal()).toBe(false);
   });
 
-  it('بعد التنقل من الدرج: ضغطة رجوع واحدة تعود شاشة واحدة بالضبط', async () => {
-    await bootApp('#/customers');
+  it('بعد التنقل من الدرج: التنقّل يصل، والدرج يُغلق، ولا ضغطات رجوع ميتة', async () => {
+    await bootApp('#/');
     fireEvent.click(screen.getByLabelText('فتح قائمة التنقل'));
-    fireEvent.click(screen.getByText('لوحة التحكم'));
-    await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
+    fireEvent.click(screen.getByText('العملاء', { selector: 'nav *' }));
+    await waitFor(() => expect(window.location.hash).toBe('#/customers'), { timeout: 2000 });
+    await waitFor(() => expect(hasOpenModal()).toBe(false));
 
     act(() => {
       lastBackListener?.({ canGoBack: true, exitApp: vi.fn() });
     });
 
-    // شاشة واحدة بالضبط — لا ضغطة ميتة ولا قفزة مزدوجة
-    await waitFor(() => expect(window.location.hash).toBe('#/customers'), { timeout: 2000 });
-    expect(screen.getByText('إدارة العملاء ومتابعة الديون')).toBeTruthy();
+    // شاشة واحدة بالضبط — لا ضغطة ميتة على مدخل الفخ ولا قفزة مزدوجة
+    await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
+    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
   });
 
   it('الدرج الجانبي في الجوال يُغلق بزر الرجوع', async () => {

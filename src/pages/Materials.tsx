@@ -4,15 +4,31 @@ import { Package, Plus, Search, Edit, Trash2, AlertTriangle, Filter, TrendingDow
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumberInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
 import { createMaterial, deleteMaterial, updateMaterial } from '@/lib/materials';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { dismissOverlayThroughHistory } from '@/lib/historyTrap';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { Material } from '@/types';
+
+/** نموذج مادة فارغ. سعر الشراء غير محدد (اختياري) بدل صفر يُحفظ دون قصد. */
+function emptyMaterialForm(lowStockThreshold?: number): Partial<Material> {
+  return {
+    name: '',
+    quantity: 0,
+    salePrice: 0,
+    purchasePrice: undefined,
+    minQuantity: toFiniteNumber(lowStockThreshold, 5),
+    category: '',
+    unit: 'قطعة',
+    description: ''
+  };
+}
 
 export function Materials() {
   const [search, setSearch] = useState('');
@@ -25,16 +41,7 @@ export function Materials() {
   const quickAddRequested = searchParams.get('action') === 'new';
   const isFormOpen = showForm || quickAddRequested;
   const [editing, setEditing] = useState<Material | null>(null);
-  const [formData, setFormData] = useState<Partial<Material>>({
-    name: '',
-    quantity: 0,
-    salePrice: 0,
-    purchasePrice: 0,
-    minQuantity: 5,
-    category: '',
-    unit: 'قطعة',
-    description: ''
-  });
+  const [formData, setFormData] = useState<Partial<Material>>(() => emptyMaterialForm());
 
   const settings = useLiveQuery(() => getSettings(), []);
 
@@ -59,7 +66,8 @@ export function Materials() {
     return filtered.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   }, [search, filter]);
 
-  const closeForm = () => {
+  /** إعادة ضبط النموذج وإزالة معامل الإجراء السريع — مُغلِق الطبقة في المكدس. */
+  const resetForm = () => {
     setShowForm(false);
     setEditing(null);
     // نُنظّف معامل الرابط بعد الإغلاق حتى لا يعود النموذج عند أي تنقّل لاحق
@@ -70,9 +78,12 @@ export function Materials() {
     }
   };
 
+  // الإلغاء/الحفظ يُغلقان عبر السجل حتى لا يبقى مدخل `?action=new` خلف
+  // الصفحة فيعيد زر الرجوع فتح النموذج بعد إغلاقه.
+  const closeForm = () => dismissOverlayThroughHistory(resetForm);
   const openForm = () => setShowForm(true);
 
-  useModalCloser(isFormOpen, closeForm);
+  useModalCloser(isFormOpen, resetForm);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,7 +91,8 @@ export function Materials() {
     // الحفظ عبر الوحدة الموحّدة (نفس قواعد الإضافة السريعة داخل الفاتورة)
     const input = {
       name: formData.name ?? '',
-      quantity: toFiniteNumber(formData.quantity),
+      // حقل فارغ ⇒ NaN فيظهر خطأ التحقق بدل حفظ صفر لم يكتبه المستخدم
+      quantity: toFiniteNumber(formData.quantity, NaN),
       salePrice: toFiniteNumber(formData.salePrice, NaN),
       purchasePrice: formData.purchasePrice ?? undefined,
       minQuantity: toFiniteNumber(formData.minQuantity, toFiniteNumber(settings?.lowStockThreshold, 5)),
@@ -108,7 +120,7 @@ export function Materials() {
       }
 
       closeForm();
-      setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: toFiniteNumber(settings?.lowStockThreshold, 5), category: '', unit: 'قطعة', description: '' });
+      setFormData(emptyMaterialForm(settings?.lowStockThreshold));
     } catch (error) {
       reportError('Materials.save', error, 'حدث خطأ أثناء الحفظ');
     }
@@ -156,7 +168,7 @@ export function Materials() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدارة المواد الزراعية والأسمدة والمبيدات</p>
         </div>
-        <Button onClick={() => { setEditing(null); setFormData({ name: '', quantity: 0, salePrice: 0, purchasePrice: 0, minQuantity: toFiniteNumber(settings?.lowStockThreshold, 5), category: '', unit: 'قطعة', description: '' }); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
+        <Button onClick={() => { setEditing(null); setFormData(emptyMaterialForm(settings?.lowStockThreshold)); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
           <Plus className="w-4 h-4 ml-2" />
           إضافة مادة جديدة
         </Button>
@@ -348,7 +360,7 @@ export function Materials() {
                     <Input
                       placeholder="مثلاً: مبيد عناكب، سماد يوريا، بذور طماطم..."
                       value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
                       required
                     />
                   </div>
@@ -357,14 +369,14 @@ export function Materials() {
                     <Input
                       placeholder="مبيدات، أسمدة، بذور..."
                       value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, category: e.target.value }))}
                     />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الوحدة</label>
                     <select
                       value={formData.unit}
-                      onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, unit: e.target.value }))}
                       className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm"
                     >
                       <option value="قطعة">قطعة</option>
@@ -378,29 +390,29 @@ export function Materials() {
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الكمية الحالية *</label>
-                    <Input type="number" min="0" step="0.01" value={formData.quantity} onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) })} required />
+                    <NumberInput value={formData.quantity} onValueChange={(value) => setFormData((prev) => ({ ...prev, quantity: value ?? undefined }))} required />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه</label>
-                    <Input type="number" min="0" value={formData.minQuantity} onChange={(e) => setFormData({ ...formData, minQuantity: Number(e.target.value) })} />
+                    <NumberInput value={formData.minQuantity} onValueChange={(value) => setFormData((prev) => ({ ...prev, minQuantity: value ?? undefined }))} />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">سعر البيع * ({settings?.currency})</label>
-                    <Input type="number" min="0" step="0.01" value={formData.salePrice} onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) })} required />
+                    <NumberInput value={formData.salePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, salePrice: value ?? undefined }))} required />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">سعر الشراء (اختياري - لحساب الأرباح)</label>
-                    <Input type="number" min="0" step="0.01" value={formData.purchasePrice || ''} onChange={(e) => setFormData({ ...formData, purchasePrice: e.target.value ? Number(e.target.value) : undefined })} />
+                    <NumberInput value={formData.purchasePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, purchasePrice: value ?? undefined }))} />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الباركود (اختياري)</label>
-                    <Input placeholder="رمز المادة" value={formData.barcode || ''} onChange={(e) => setFormData({ ...formData, barcode: e.target.value })} />
+                    <Input placeholder="رمز المادة" value={formData.barcode || ''} onChange={(e) => setFormData((prev) => ({ ...prev, barcode: e.target.value }))} />
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-sm font-medium mb-1 block">الوصف</label>
                     <textarea
                       value={formData.description || ''}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      onChange={(e) => setFormData((prev) => ({ ...prev, description: e.target.value }))}
                       className="flex min-h-[80px] w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm"
                       placeholder="وصف المادة وطريقة الاستخدام..."
                     />
