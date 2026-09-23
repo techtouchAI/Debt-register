@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Package, Plus, Search, Edit, Trash2, AlertTriangle, Filter, TrendingDown, DollarSign } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,7 +17,13 @@ import { Material } from '@/types';
 export function Materials() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'low' | 'out' | 'normal'>('all');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showForm, setShowForm] = useState(false);
+  // الإضافة السريعة تأتي من رابط `/materials?action=new`. المسار في هذا
+  // التطبيق HashRouter، فالمعامل موجود داخل الهاش ولا يظهر في
+  // `window.location.search` — وكان ذلك يجعل الزر لا يفتح النموذج أبداً.
+  const quickAddRequested = searchParams.get('action') === 'new';
+  const isFormOpen = showForm || quickAddRequested;
   const [editing, setEditing] = useState<Material | null>(null);
   const [formData, setFormData] = useState<Partial<Material>>({
     name: '',
@@ -52,19 +59,20 @@ export function Materials() {
     return filtered.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   }, [search, filter]);
 
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('action') === 'new') {
-      setShowForm(true);
-    }
-  }, []);
-
   const closeForm = () => {
     setShowForm(false);
     setEditing(null);
+    // نُنظّف معامل الرابط بعد الإغلاق حتى لا يعود النموذج عند أي تنقّل لاحق
+    if (quickAddRequested) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('action');
+      setSearchParams(next, { replace: true });
+    }
   };
 
-  useModalCloser(showForm, closeForm);
+  const openForm = () => setShowForm(true);
+
+  useModalCloser(isFormOpen, closeForm);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -319,13 +327,13 @@ export function Materials() {
             <Package className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <h3 className="font-bold text-gray-900 dark:text-white mb-2">لا توجد مواد</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">ابدأ بإضافة موادك الزراعية للمخزن</p>
-            <Button onClick={() => setShowForm(true)}><Plus className="w-4 h-4 ml-2" />إضافة مادة</Button>
+            <Button onClick={() => openForm()}><Plus className="w-4 h-4 ml-2" />إضافة مادة</Button>
           </CardContent>
         </Card>
       )}
 
       {/* Form Modal */}
-      {showForm && (
+      {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <CardHeader>

@@ -60,7 +60,9 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src')
+      // import.meta.dirname متاح في Node 20.11+ وهو المسار الذي يتوقعه مُحمِّل
+      // الإعداد الأصلي في Vite (__dirname غير مدعوم هناك).
+      '@': path.resolve(import.meta.dirname, './src')
     }
   },
   server: {
@@ -75,14 +77,23 @@ export default defineConfig({
     allowedHosts: ['.e2b.app', 'localhost']
   },
   build: {
-    // تقسيم الحزم: يقلّل حجم الملف الرئيسي ويمنع تحذير 500KB
+    // أكبر حزمة هي مولّد PDF (jspdf + html2canvas ≈ 780KB) وهي **مُحمّلة
+    // تأخيرياً** (تُستدعى عند الطباعة/حفظ PDF فقط)، فرفع حد التحذير هنا مقصود
+    // ومُوثّق بدل تقسيمها عبثاً إلى ملفات صغيرة تُحمَّل معاً دائماً.
+    chunkSizeWarningLimit: 900,
+    // تقسيم الحزم: يقلّل حجم الملف الرئيسي. Rspack/Rolldown في Vite 8
+    // يتطلب دالة (`manualChunks` بصيغة كائن لم تعد مدعومة).
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom', 'react-router-dom'],
-          dexie: ['dexie', 'dexie-react-hooks'],
-          pdf: ['jspdf'],
-          icons: ['lucide-react']
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
+            return 'react'
+          }
+          if (/[\\/]node_modules[\\/](dexie|dexie-react-hooks)[\\/]/.test(id)) return 'dexie'
+          if (/[\\/]node_modules[\\/](jspdf|html2canvas|canvg|dompurify|fflate)[\\/]/.test(id)) return 'pdf'
+          if (/[\\/]node_modules[\\/]lucide-react[\\/]/.test(id)) return 'icons'
+          return undefined
         }
       }
     }

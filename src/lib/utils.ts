@@ -267,7 +267,8 @@ export function truncateToUtf8Bytes(text: string, maxBytes: number): string {
     bytes += size
   }
   // لا نترك مسافة أو نقطة أو شرطة أو تشكيلاً عربياً معلقاً في نهاية الاسم
-  return result.replace(/[\s._\-\u064B-\u0652\u0670\u0640]+$/u, '')
+  // ‏ لا نترك مسافة/نقطة/شرطة أو علامات تشكيل عربية معلّقة في النهاية
+  return result.replace(/[\s._\-\p{M}\u0640]+$/u, '')
 }
 
 /** الحد الافتراضي لطول اسم الملف بالبايت (آمن على Windows و Android و ext4). */
@@ -281,7 +282,7 @@ export const MAX_FILE_NAME_BYTES = 120
 export function sanitizeFileName(name: string, fallback = 'file', maxBytes = MAX_FILE_NAME_BYTES): string {
   const cleaned = String(name ?? '')
     // أحرف التحكم (قد تصل من نص ملصوق أو ملف مستورد) تُحوَّل لمسافة
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\p{Cc}+/gu, ' ')
     .replace(/[^0-9A-Za-z\u0600-\u06FF\s._-]+/g, '_')
     .replace(/\.+/g, '.')
     .replace(/_{2,}/g, '_')

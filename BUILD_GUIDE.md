@@ -15,6 +15,7 @@ npm ci          # تثبيت مطابق لقفل الحزم (lockfile متزام
 npm run dev     # خادم تطوير على http://localhost:5173
 npm run build   # إنتاج → dist/ مع Service Worker وmanifest
 npm run preview # معاينة نسخة الإنتاج
+npm run verify  # تدقيق الأغلفة + ESLint + tsc + الاختبارات + البناء
 ```
 
 مهم: البناء يستخدم `base: './'` و`HashRouter`، لذلك يعمل `dist/` عند:
@@ -50,6 +51,36 @@ npm run android:init && npm run android:build   # Android APK
 ```
 
 السكربتات في `desktop/` تبني التطبيق الجذري أولاً تلقائياً ثم تنسخ `dist/` إلى `desktop/src-tauri/dist/`، لذا الغلاف يغلّف التطبيق الكامل وليس نسخة تجريبية.
+
+## 4.1) التحقق من الأغلفة قبل البناء وبعده
+
+```bash
+npm run audit:shells   # 73 فحصاً ثابتاً لأغلفة Electron/Capacitor/Tauri + ناتج الويب
+npm run cap:prepare    # تجهيز مشروع أندرويد المُولَّد (صلاحيات + أيقونة إشعارات + أسماء)
+```
+
+`audit:shells` هو أول خطوة في `npm run verify` ويفشل (exit 1) عند أي نقص في إعداد
+الأغلفة: صلاحيات الإشعارات، منع النص الصريح، أهداف NSIS/portable، أمان نافذة
+Electron، أيقونات Tauri، أو مسارات مطلقة في `dist/`.
+
+`cap:prepare` (وهو `scripts/prepare-android.mjs`) **idempotent**: يضيف الصلاحيات
+(`POST_NOTIFICATIONS`، `READ/WRITE_EXTERNAL_STORAGE` بحدود `maxSdk`،
+`SCHEDULE_EXACT_ALARM`) وأيقونة `ic_stat_agri` أحادية اللون، ويزامن `app_name`،
+ويتحقق من `capacitor.config.json` — وإن تشغيله مرتين لا يُنتج أي فرق (يفحصه CI بـ `diff`).
+
+وبعد البناء يتحقق CI من النواتج الفعلية لا من نجاح الأوامر فقط:
+
+- **APK**: `aapt2 dump permissions/resources` + `unzip -l` للتأكد من الصلاحيات
+  وأيقونة الإشعارات و`fileprovider` وواجهة التطبيق داخل الـ APK، مع فحص
+  `targetSdk ≥ 33` و`compileSdk ≥ 34`.
+- **مثبّت ويندوز**: فحص محتوى `app.asar`، تشغيل النسخة المحمولة باختبار دخان فعلي،
+  ثم تثبيت صامت (`/S`) وتشغيل النسخة المثبّتة، وبعد إلغاء التثبيت يُتحقق من أن
+  بيانات المكتب (IndexedDB في `%APPDATA%`) **لم تُحذف**.
+- **Tauri**: بناء deb/AppImage وmsi/nsis والتحقق من نسخ `dist/index.html` داخل الحزمة.
+
+في البيئات المقيّدة (بلا JDK/SDK/Wine/Rust أو مع شبكة تحجب مواقع التنزيل) لا يمكن
+بناء APK/مثبّت محلياً؛ استخدم مهام CI أعلاه — وهي التي تُنتج القطع القابلة للاختبار
+اليدوي على جهاز حقيقي.
 
 ## 5) CI + التوقيع + النشر
 

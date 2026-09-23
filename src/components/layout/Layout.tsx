@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -18,14 +18,23 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, countUnreadNotifications } from '@/lib/db';
+import { db, countUnreadNotifications } from '@/lib/db';
 import { getStockStatus } from '@/lib/utils';
 import { officeNameLengthClass } from '@/lib/officeName';
+import type { OfficeSettings } from '@/types';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import { useModalCloser } from '@/hooks/useModalCloser';
+import { useTheme } from '@/hooks/useTheme';
 
 interface LayoutProps {
   children: React.ReactNode;
+  /**
+   * إعدادات محمّلة مسبقاً من شاشة الإقلاع: تُعرض فوراً في الترويسة حتى قبل
+   * وصول نتيجة الاستعلام الحيّ، فلا يظهر اسم المكتب فارغاً للحظة بعد
+   * معالج التشغيل الأول (وميض بصري + نتائج اختبار غير حتمية).
+   */
+  initialSettings?: OfficeSettings | null;
 }
 
 const navigation = [
@@ -40,15 +49,17 @@ const navigation = [
   { name: 'الإعدادات', href: '/settings', icon: Settings },
 ];
 
-export function Layout({ children }: LayoutProps) {
+export function Layout({ children, initialSettings = null }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isDark, setIsDark] = useState(false);
   const location = useLocation();
+  // السمة مصدرها مخزن واحد مشترك: أي تبديل من الإعدادات أو التخطيط يظهر
+  // فوراً في كل مكان بلا رسم متتالٍ داخل تأثير.
+  const { isDark, toggleTheme } = useTheme();
 
-  // useLiveQuery يضمن أن اسم المكتب والعملة والشعار يتغيرون في التخطيط
-  // والفواتير فور نجاح حفظ الإعدادات، بلا إعادة تشغيل التطبيق.
-  const liveSettings = useLiveQuery(() => getSettings(), []);
-  const settings = liveSettings ?? null;
+  // الإعدادات تأتي من المخزن المشترك: تُنشَر عند الحفظ وعند كل قراءة، فتظهر
+  // القيمة المحفوظة في أول رسم بلا انتظار استعلام حيّ (سبب ظهور الاسم
+  // الافتراضي لحظةً بعد الإعداد في النسخة السابقة).
+  const settings = useOfficeSettings(initialSettings);
 
   const unreadNotifications = useLiveQuery(() => countUnreadNotifications(), []) || 0;
   const lowStockCount = useLiveQuery(async () => {
@@ -58,28 +69,6 @@ export function Layout({ children }: LayoutProps) {
 
   // الدرج الجانبي في الجوال يُغلق بزر الرجوع و Escape مثل أي نافذة
   useModalCloser(sidebarOpen, () => setSidebarOpen(false), { label: 'قائمة التنقل' });
-
-  useEffect(() => {
-    try {
-      const savedTheme = localStorage.getItem('theme');
-      const shouldUseDark = savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      setIsDark(shouldUseDark);
-      document.documentElement.classList.toggle('dark', shouldUseDark);
-    } catch {
-      /* التخزين المحلي غير متاح */
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    const newTheme = !isDark;
-    setIsDark(newTheme);
-    document.documentElement.classList.toggle('dark', newTheme);
-    try {
-      localStorage.setItem('theme', newTheme ? 'dark' : 'light');
-    } catch {
-      /* التخزين المحلي غير متاح */
-    }
-  };
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 font-cairo">

@@ -1,3 +1,4 @@
+import { publishSettings } from './settingsStore';
 import Dexie, { Table, type Transaction } from 'dexie';
 import {
   OfficeSettings,
@@ -326,10 +327,27 @@ export async function initializeDB() {
       });
     }
   });
+
+  // نشر الإعدادات بعد الإقلاع: التخطيط والصفحات تعرض القيمة المحفوظة فوراً
+  // بدل انتظار استعلام حيّ قد يتأخر إطاراً كاملاً.
+  publishSettings(await db.settings.toCollection().first());
 }
 
+/**
+ * قراءة الإعدادات (وتحديث المخزن المشترك بها).
+ * كل قراءة تُنشئ كائناً جديداً، ولا تُنشر إلا إذا تغيّرت القيم فعلاً.
+ */
 export async function getSettings(): Promise<OfficeSettings | undefined> {
-  return await db.settings.toCollection().first();
+  const settings = await db.settings.toCollection().first();
+  publishSettings(settings);
+  return settings;
+}
+
+/** إعادة قراءة الإعدادات ونشرها (بعد استيراد نسخة أو حذف كل البيانات). */
+export async function refreshSettings(): Promise<OfficeSettings | undefined> {
+  const settings = await db.settings.toCollection().first();
+  publishSettings(settings ?? null);
+  return settings ?? undefined;
 }
 
 /**
@@ -372,6 +390,10 @@ export async function updateSettings(updates: Partial<OfficeSettings>): Promise<
     }
     await db.settings.add({ ...DEFAULT_SETTINGS, ...changes });
   });
+
+  // الشاشات تتحدّث فوراً من المخزن المشترك: لا انتظار لاستعلام حيّ ولا نافذة
+  // زمنية يظهر فيها اسم قديم بعد الحفظ.
+  publishSettings(await db.settings.toCollection().first());
 }
 
 /* ------------------------------------------------------------------ *

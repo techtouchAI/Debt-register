@@ -140,7 +140,7 @@ function App() {
   return (
     <Router>
       <BackNavigationHandler />
-      <Layout>
+      <Layout initialSettings={setupSettings}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/materials" element={<Materials />} />

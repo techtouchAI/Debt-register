@@ -10,6 +10,8 @@
  * الرجوع في النظام، ويجب على التطبيق أن يقرر: إغلاق نافذة، أو رجوع شاشة،
  * أو البقاء (عدم الخروج). عدم استدعاء `exitApp` = البقاء في التطبيق.
  */
+import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 
 export interface NativeBackEvent {
   /** هل يمكن الرجوع في سجل WebView؟ (تُرسله Capacitor) */
@@ -49,9 +51,11 @@ export function hasCustomNativeBackSubscriber(): boolean {
  * لا يعمل في المتصفح ولا في Electron/Tauri (هناك يكفي فخّ السجل + Alt+←).
  */
 async function capacitorSubscriber(listener: NativeBackListener): Promise<NativeBackSubscription | undefined> {
-  const { Capacitor } = await import('@capacitor/core');
+  // الاستيراد ثابت: `@capacitor/core` مستورد أصلاً في مسار الإقلاع (الإشعارات
+  // والملفات)، فالاستيراد الديناميكي هنا لم يكن يقسم شيئاً فعلاً — وكان يُنتج
+  // تحذير Vite عن استيراد ديناميكي غير فعّال. الاستدعاء يبقى داخل try/catch
+  // في `subscribeNativeBack` فلا يتعطل التطبيق إن لم تتوفر الإضافة.
   if (!Capacitor.isNativePlatform()) return undefined;
-  const { App } = await import('@capacitor/app');
   const handle = await App.addListener('backButton', ({ canGoBack }) => {
     listener({
       canGoBack: Boolean(canGoBack),

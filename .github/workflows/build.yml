@@ -145,6 +145,16 @@ jobs:
           grep -q "android.permission.WRITE_EXTERNAL_STORAGE" "$MANIFEST"
           grep -q 'android:usesCleartextTraffic="false"' "$MANIFEST"
           grep -q 'name="app_name"' android/app/src/main/res/values/strings.xml
+      - name: التحقق من إعدادات SDK (الإشعارات تحتاج targetSdk 33+)
+        run: |
+          set -euo pipefail
+          FILE=android/variables.gradle
+          test -f "$FILE"
+          TARGET=$(grep -oE 'targetSdkVersion = [0-9]+' "$FILE" | grep -oE '[0-9]+')
+          COMPILE=$(grep -oE 'compileSdkVersion = [0-9]+' "$FILE" | grep -oE '[0-9]+')
+          echo "compileSdk=$COMPILE targetSdk=$TARGET"
+          test "$TARGET" -ge 33
+          test "$COMPILE" -ge 34
       - name: Gradle release build
         working-directory: android
         run: |
@@ -188,6 +198,8 @@ jobs:
           cat apk-permissions.txt
           grep -q "android.permission.POST_NOTIFICATIONS" apk-permissions.txt
           grep -q "android.permission.READ_EXTERNAL_STORAGE" apk-permissions.txt
+          "$AAPT2" dump resources "$APK" > apk-resources.txt
+          grep -q "ic_stat_agri" apk-resources.txt
           "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > apk-manifest.txt
           grep -q "usesCleartextTraffic" apk-manifest.txt
           # مزوّد مشاركة الملفات من @capacitor/share (لازم لحفظ/مشاركة PDF والنسخ)
@@ -235,6 +247,50 @@ jobs:
           Copy-Item $setup -Destination artifacts/windows
           Copy-Item $portable -Destination artifacts/windows
           Get-ChildItem artifacts/windows
+
+      - name: تشغيل النسخة المحمولة فعلياً (اختبار دخان على ويندوز)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $portable = Get-ChildItem release -Recurse -Filter 'AgriOffice-Portable-*.exe' | Select-Object -First 1
+          if (-not $portable) { Write-Error 'لا توجد نسخة محمولة لتشغيلها' }
+          $proc = Start-Process -FilePath $portable.FullName -ArgumentList '--smoke-test','--no-sandbox' -PassThru
+          if (-not $proc.WaitForExit(180000)) { $proc.Kill(); Write-Error 'انتهت مهلة اختبار دخان النسخة المحمولة' }
+          if ($proc.ExitCode -ne 0) { Write-Error "فشل اختبار دخان النسخة المحمولة (رمز الخروج $($proc.ExitCode))" }
+          Write-Host '✔ النسخة المحمولة تعمل وتحمّل الواجهة والجسر'
+
+      - name: تثبيت المثبّت صامتاً وتشغيل النسخة المثبّتة
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem release -Recurse -Filter 'AgriOffice-Setup-*.exe' | Select-Object -First 1
+          if (-not $setup) { Write-Error 'لا يوجد مثبّت NSIS' }
+          $installProc = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($installProc.ExitCode -ne 0) { Write-Error "فشل تثبيت NSIS (رمز $($installProc.ExitCode))" }
+          Start-Sleep -Seconds 5
+          $asar = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Recurse -Filter 'app.asar' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $asar) { Write-Error 'لم يُعثر على التطبيق المثبّت (app.asar مفقود)' }
+          $appDir = Split-Path (Split-Path $asar.FullName -Parent) -Parent
+          $exe = Get-ChildItem $appDir -Filter '*.exe' | Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
+          if (-not $exe) { Write-Error 'لم يُعثر على ملف التطبيق التنفيذي بعد التثبيت' }
+          $run = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test','--no-sandbox' -PassThru
+          if (-not $run.WaitForExit(180000)) { $run.Kill(); Write-Error 'انتهت مهلة اختبار دخان النسخة المثبّتة' }
+          if ($run.ExitCode -ne 0) { Write-Error "فشل اختبار دخان النسخة المثبّتة (رمز $($run.ExitCode))" }
+
+      - name: إلغاء التثبيت مع التحقق من بقاء بيانات المكتب
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appDataBefore = Get-ChildItem $env:APPDATA -Recurse -Directory -Filter 'IndexedDB' -Depth 3 -ErrorAction SilentlyContinue
+          if (-not $appDataBefore) { Write-Error 'لم تُنشئ النسخة المثبّتة قاعدة بيانات محلية (IndexedDB)' }
+          $uninstaller = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Recurse -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninstaller) { Write-Error 'ملف إلغاء التثبيت غير موجود' }
+          $uninstallProc = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($uninstallProc.ExitCode -ne 0) { Write-Error "فشل إلغاء التثبيت (رمز $($uninstallProc.ExitCode))" }
+          Start-Sleep -Seconds 5
+          $appDataAfter = Get-ChildItem $env:APPDATA -Recurse -Directory -Filter 'IndexedDB' -Depth 3 -ErrorAction SilentlyContinue
+          if (-not $appDataAfter) { Write-Error 'حُذفت بيانات المكتب عند إلغاء التثبيت — يجب أن تبقى' }
+          Write-Host '✔ مثبّت ويتعامل مع البيانات كما هو متوقع (تبقى بعد إلغاء التثبيت)'
       - uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Windows
@@ -264,12 +320,16 @@ jobs:
       - run: npm --prefix desktop ci
       - name: بناء حزم Tauri (deb + AppImage)
         run: npm --prefix desktop run build -- --bundles deb,appimage
-      - name: التحقق من وجود الحزم
+      - name: التحقق من وجود الحزم والواجهة داخلها
         run: |
           set -euo pipefail
           ls -la desktop/src-tauri/target/release/bundle
           find desktop/src-tauri/target/release/bundle -name '*.deb' -o -name '*.AppImage' | head
           test -n "$(find desktop/src-tauri/target/release/bundle -name '*.deb' | head -1)"
+          # الواجهة المبنية يجب أن تكون منسوخة داخل حزمة Tauri
+          test -f desktop/src-tauri/dist/index.html
+          DEB="$(find desktop/src-tauri/target/release/bundle -name '*.deb' | head -1)"
+          dpkg-deb -c "$DEB" | grep -q 'dist/index.html'
       - uses: actions/upload-artifact@v4
         with:
           name: AgriOffice-Tauri-Linux

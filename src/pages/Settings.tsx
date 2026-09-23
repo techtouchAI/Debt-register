@@ -8,6 +8,7 @@ import { db, getSettings, updateSettings, logActivity } from '@/lib/db';
 import { fileToBase64, toFiniteNumber } from '@/lib/utils';
 import { MAX_OFFICE_NAME_LENGTH, validateOfficeName } from '@/lib/officeName';
 import { useAsyncScope } from '@/hooks/useAsyncScope';
+import { useTheme } from '@/hooks/useTheme';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { hashPin, isHashedPin, isValidPin, maskPin } from '@/lib/security';
@@ -17,7 +18,8 @@ import { useModalCloser } from '@/hooks/useModalCloser';
 
 export function Settings() {
   const [formData, setFormData] = useState<Partial<OfficeSettings>>({});
-  const [isDark, setIsDark] = useState(false);
+  // السمة من المخزن المشترك (نفس ما يعرضه التخطيط) — لا حالة مكرّرة هنا
+  const { isDark, setTheme } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
@@ -56,12 +58,6 @@ export function Settings() {
     };
 
     void loadSettings();
-    try {
-      const savedTheme = localStorage.getItem('theme');
-      setIsDark(savedTheme === 'dark' || document.documentElement.classList.contains('dark'));
-    } catch {
-      /* التخزين المحلي غير متاح */
-    }
 
     return () => {
       cancelled = true;
@@ -132,17 +128,10 @@ export function Settings() {
   };
 
   const toggleTheme = () => {
-    const newTheme = !isDark;
-    setIsDark(newTheme);
-    if (newTheme) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-      patchFormData({ theme: 'dark' });
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-      patchFormData({ theme: 'light' });
-    }
+    const newTheme = isDark ? 'light' : 'dark';
+    // المخزن المشترك يطبّق الصنف على <html> ويحفظ الاختيار
+    setTheme(newTheme);
+    patchFormData({ theme: newTheme });
   };
 
   const handleUserSubmit = async (e: React.FormEvent) => {
@@ -365,7 +354,7 @@ export function Settings() {
                         {user.name.charAt(0)}
                       </div>
                       <div>
-                        <p className="font-medium text-sm flex items-center gap-2">{user.name} {user.role === 'admin' ? <Badge variant="destructive" className="text-[10px]"><Shield className="w-3 h-3 ml-1" />مدير</Badge> : <Badge variant="secondary" className="text-[10px]">مبيعات</Badge>}</p>
+                        <div className="font-medium text-sm flex items-center gap-2">{user.name} {user.role === 'admin' ? <Badge variant="destructive" className="text-[10px]"><Shield className="w-3 h-3 ml-1" />مدير</Badge> : <Badge variant="secondary" className="text-[10px]">مبيعات</Badge>}</div>
                         <p className="text-xs text-gray-500">رمز الدخول: {maskPin()} • منذ {new Date(user.createdAt).toLocaleDateString('ar-EG')}</p>
                       </div>
                     </div>

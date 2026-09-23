@@ -123,9 +123,15 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     const stored = await getSettings();
     expect(stored?.officeName).toBe(LONG_NAME);
 
-    // التخطيط (الشريط الجانبي) يعرض الاسم كاملاً بلا اقتطاع نصي
-    const heading = screen.getByTitle(LONG_NAME);
-    expect(heading.textContent).toBe(LONG_NAME);
+    // التخطيط (الشريط الجانبي) يعرض الاسم كاملاً بلا اقتطاع نصي.
+    // ننتظر ظهوره لأن استعلامات Dexie الحيّة تصل في إطار رسم لاحق؛
+    // الاستعلام المتزامن كان يجعل هذا الاختبار متذبذباً (flaky).
+    await waitFor(
+      () => {
+        expect(screen.getByTitle(LONG_NAME).textContent).toBe(LONG_NAME);
+      },
+      { timeout: 5000 }
+    );
 
     // إعادة تشغيل فعلية للتطبيق: إلغاء التركيب ثم تركيبه من جديد على نفس القاعدة
     cleanup();
@@ -135,7 +141,13 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
       timeout: 5000
     });
     expect(screen.queryByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeNull();
-    expect(screen.getByTitle(LONG_NAME).textContent).toBe(LONG_NAME);
+    // بعد إعادة التركيب أيضاً: ننتظر التخطيط بدل افتراض جهوزيته الفورية
+    await waitFor(
+      () => {
+        expect(screen.getByTitle(LONG_NAME).textContent).toBe(LONG_NAME);
+      },
+      { timeout: 5000 }
+    );
   });
 
   it('يظهر كاملاً في ترويسة الفاتورة والوصل وفي ملف النسخة الاحتياطية', async () => {

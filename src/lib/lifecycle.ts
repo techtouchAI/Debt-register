@@ -56,12 +56,32 @@ export function isAbortError(error: unknown): boolean {
  */
 export function isDatabaseClosedError(error: unknown): boolean {
   if (!error) return false;
-  const name = error instanceof Error ? error.name : '';
-  if (name === 'DatabaseClosedError' || name === 'InvalidStateError') return true;
-  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
-  return /DatabaseClosedError|Database has been closed|The database connection is closing|TransactionInactiveError/i.test(
-    text
-  );
+  // نفحص الخطأ و"سببَه الداخلي" (Dexie يلفّ الأخطاء في `inner`)، ونقرأ
+  // الاسم والرسالة من أي كائن لا من `instanceof Error` فقط، لأن أخطاء
+  // Dexie/stale-realm قد لا تكون نسخة من Error الحالية.
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current; depth += 1) {
+    const name = readErrorField(current, 'name');
+    const message = readErrorField(current, 'message');
+    if (name === 'DatabaseClosedError' || name === 'InvalidStateError') return true;
+    const text = `${name} ${message}`.trim() || String(current);
+    if (
+      /DatabaseClosedError|Database has been closed|The database connection is closing|TransactionInactiveError|SqliteError/i.test(
+        text
+      )
+    ) {
+      return true;
+    }
+    current = (current as { inner?: unknown }).inner;
+  }
+  return false;
+}
+
+/** قراءة حقل نصي من أي كائن خطأ (بدون افتراض `instanceof Error`). */
+function readErrorField(error: unknown, field: 'name' | 'message'): string {
+  if (!error || typeof error !== 'object') return '';
+  const value = (error as Record<string, unknown>)[field];
+  return typeof value === 'string' ? value : '';
 }
 
 /**
@@ -189,4 +209,17 @@ export function linkAbort(source: AbortSignal, scope: AbortScope, reason: AbortR
   const listener = () => scope.abort(reason);
   source.addEventListener('abort', listener, { once: true });
   return () => source.removeEventListener('abort', listener);
+}
+
+/**
+ * تسجيل فشل مهمة خلفية بعد نجاح العملية الأصلية (فحص مخزون، سجل نشاط، إشعار).
+ *
+ * هذه المهام تُشغَّل بعد انتهاء الحفظ، وقد يكون المستخدم أغلق التطبيق أو غادر
+ * الشاشة قبل انتهائها؛ في هذه الحالة لا معنى لرسالة خطأ (ليست عطلاً)، ولا
+ * تظهر أبداً كتحذير مزعج في الطرفية أو في الإنتاج.
+ * أما الفشل الحقيقي فيُسجَّل كتحذير ليبقى قابلاً للتشخيص.
+ */
+export function logBackgroundFailure(label: string, error: unknown): void {
+  if (isBenignLifecycleError(error) || isDatabaseClosedError(error)) return;
+  console.warn(`${label}:`, error);
 }

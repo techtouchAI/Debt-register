@@ -16,12 +16,14 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, checkLowStock } from '@/lib/db';
+import { db, checkLowStock } from '@/lib/db';
 import { getCustomerBalances } from '@/lib/debts';
+import { logBackgroundFailure } from '@/lib/lifecycle';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import { formatCurrency, formatLocalDateInput, getStockStatus, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
 export function Dashboard() {
-  const settings = useLiveQuery(() => getSettings(), []);
+  const settings = useOfficeSettings();
   const today = formatLocalDateInput();
 
   const recentInvoices = useLiveQuery(() => db.invoices.orderBy('createdAt').reverse().limit(5).toArray(), []);
@@ -90,7 +92,8 @@ export function Dashboard() {
   useEffect(() => {
     let cancelled = false;
     void checkLowStock().catch((error) => {
-      if (!cancelled) console.warn('تعذّر فحص المخزون:', error);
+      // الإلغاء الناتج عن إغلاق التطبيق أو مغادرة الشاشة ليس عطلاً
+      if (!cancelled) logBackgroundFailure('تعذّر فحص المخزون:', error);
     });
     return () => {
       cancelled = true;

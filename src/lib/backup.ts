@@ -1,4 +1,5 @@
-import { db, getSettings, getSettingsOrDefault, updateSettings } from './db';
+import { logBackgroundFailure } from './lifecycle';
+import { db, getSettings, getSettingsOrDefault, refreshSettings, updateSettings } from './db';
 import { normalizeBackup, readBackupFile } from './validate';
 import { reallocateCustomerInvoices } from './invoices';
 import { MAX_FILE_NAME_BYTES, sanitizeFileName, utf8ByteLength } from './utils';
@@ -80,7 +81,7 @@ export function importedBackupFileName(originalFileName: string, date: Date = ne
 async function recordBackupMeta(fileName: string, size: number, type: 'auto' | 'manual' | 'import') {
   await db.backups.add({ fileName, date: new Date().toISOString(), size, type });
   await updateSettings({ lastBackup: new Date().toISOString() }).catch((error) =>
-    console.warn('تعذّر تحديث تاريخ آخر نسخة:', error)
+    logBackgroundFailure('تعذّر تحديث تاريخ آخر نسخة:', error)
   );
 }
 
@@ -188,7 +189,7 @@ export async function saveSnapshot(type: 'auto' | 'manual' = 'auto'): Promise<Ba
   if (stale.length) await db.snapshots.bulkDelete(stale);
 
   await updateSettings({ lastBackup: new Date().toISOString() }).catch((error) =>
-    console.warn('تعذّر تحديث تاريخ آخر نسخة:', error)
+    logBackgroundFailure('تعذّر تحديث تاريخ آخر نسخة:', error)
   );
 
   return (await db.snapshots.get(snapshotId)) ?? null;
@@ -239,6 +240,32 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       db.activityLogs
     ],
     async () => {
+      /* حماية من ملف مبتور أو تالف: نسخة بلا أي سجل تجاري لا يجوز أن تمحو
+         بيانات مكتب قائم. (الاستيراد إلى مكتب جديد فارغ لا يزال مسموحاً.) */
+      const incomingRecords =
+        data.materials.length +
+        data.customers.length +
+        data.invoices.length +
+        data.invoiceItems.length +
+        data.payments.length +
+        (data.purchases?.length ?? 0) +
+        (data.purchaseItems?.length ?? 0);
+      if (incomingRecords === 0) {
+        const existingRecords =
+          (await db.materials.count()) +
+          (await db.customers.count()) +
+          (await db.invoices.count()) +
+          (await db.invoiceItems.count()) +
+          (await db.payments.count()) +
+          (await db.purchases.count()) +
+          (await db.purchaseItems.count());
+        if (existingRecords > 0) {
+          throw new Error(
+            'النسخة الاحتياطية لا تحتوي على أي سجلات بيانات؛ تم إلغاء الاستيراد لحماية بيانات المكتب الحالية'
+          );
+        }
+      }
+
       await db.settings.clear();
       await db.users.clear();
       await db.materials.clear();
@@ -272,6 +299,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
     await db.settings.add(fallback);
     allWarnings.push('لم تحتوي النسخة على إعدادات، تم إنشاء إعدادات افتراضية');
   }
+  // نشر الإعدادات المستعادة: التخطيط يعرض اسم المكتب من النسخة المستوردة فوراً
+  await refreshSettings();
 
   // مصالحة الأرصدة بعد الاستعادة حتى تتطابق حالة الفواتير مع التسديدات
   const customerIds = (await db.customers.toCollection().primaryKeys()) as number[];
@@ -312,7 +341,7 @@ export async function importBackup(file: File): Promise<RestoreResult> {
   });
 
   // نسخة أمان داخلية بعد الاستيراد مباشرة
-  await saveSnapshot('auto').catch((error) => console.warn('تعذّر إنشاء نسخة بعد الاستيراد:', error));
+  await saveSnapshot('auto').catch((error) => logBackgroundFailure('تعذّر إنشاء نسخة بعد الاستيراد:', error));
 
   return result;
 }

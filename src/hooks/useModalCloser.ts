@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { pushModalCloser, type ModalCloserOptions } from '@/lib/modalStack';
 
 /**
@@ -13,7 +13,9 @@ import { pushModalCloser, type ModalCloserOptions } from '@/lib/modalStack';
  */
 export function useModalCloser(open: boolean, onClose: () => void, options?: ModalCloserOptions): void {
   const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  useLayoutEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
 
   const escape = options?.escape !== false;
   const label = options?.label ?? 'طبقة';

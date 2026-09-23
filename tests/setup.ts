@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach } from 'vitest';
 import { db, closeDatabase, initializeDB, openDatabase } from '@/lib/db';
+import { resetSettingsStore } from '@/lib/settingsStore';
 import { resetModalStackForTests } from '@/lib/modalStack';
 import { resetHistoryTrapForTests } from '@/lib/historyTrap';
 import { setNativeBackSubscriber } from '@/lib/nativeBridge';
@@ -17,6 +18,8 @@ beforeEach(async () => {
   setNativeBackSubscriber(null);
   resetModalStackForTests();
   resetHistoryTrapForTests();
+  // مخزن الإعدادات ذاكرة وحدة، فيجب تصفيره بين الاختبارات كما تُفرَّغ القاعدة
+  resetSettingsStore();
   await db.delete();
   await openDatabase();
   await initializeDB();
@@ -25,6 +28,7 @@ beforeEach(async () => {
 afterEach(async () => {
   resetModalStackForTests();
   resetHistoryTrapForTests();
+  resetSettingsStore();
   setNativeBackSubscriber(null);
   await closeDatabase();
   // مهلة قصيرة تتيح لأي وعد متبقٍّ أن يُرفض قبل بدء الاختبار التالي،

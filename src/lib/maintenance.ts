@@ -1,3 +1,4 @@
+import { logBackgroundFailure } from './lifecycle';
 import { db, getMeta, setMeta } from './db'
 import { reallocateCustomerInvoices } from './invoices'
 import { hashPin, isHashedPin } from './security'
@@ -76,6 +77,6 @@ export async function runStartupMaintenance(): Promise<void> {
     }
   } catch (error) {
     // الصيانة تحسين وليست شرطاً لعمل التطبيق
-    console.warn('تعذّر إتمام صيانة قاعدة البيانات:', error)
+    logBackgroundFailure('تعذّر إتمام صيانة قاعدة البيانات:', error)
   }
 }

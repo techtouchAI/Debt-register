@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { BarChart3, DollarSign, Users, Package, TrendingUp, Download, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,18 @@ import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { OfficeSettings, Material, Customer } from '@/types';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useAsyncEffect } from '@/hooks/useAsyncScope';
 
 type ReportKey = 'cash' | 'debts' | 'materials' | 'profit' | 'inventory';
+
+/** أسماء التقارير المستخدمة في التصدير وإشعار المشاركة. */
+const REPORT_LABELS: Record<ReportKey, string> = {
+  cash: 'حركة الصندوق',
+  debts: 'الديون الشامل',
+  materials: 'حركة مادة',
+  profit: 'الأرباح',
+  inventory: 'قيمة المخزون'
+};
 
 interface MaterialSaleRow {
   invoiceId: number;
@@ -37,12 +47,18 @@ export function Reports() {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [dateFrom, setDateFrom] = useState(formatLocalDateInput());
   const [dateTo, setDateTo] = useState(formatLocalDateInput());
-  const [rangeError, setRangeError] = useState<string | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
   const [searchMaterial, setSearchMaterial] = useState('');
   const [activeReport, setActiveReport] = useState<ReportKey>('cash');
   const [isExporting, setIsExporting] = useState(false);
   const reportRequestRef = useRef(0);
+
+  /**
+   * نطاق التاريخ يُحسب محلياً. الحقل الفارغ كان يُنتج Invalid Date ثم
+   * RangeError: Invalid time value فيُعطّل تحميل كل التقارير بصمت.
+   * رسالة الخطأ مشتقّة من القيم الحالية بدل حالتها الخاصة + تأثير يكتبها.
+   */
+  const rangeError = localDayRangeISO(dateFrom, dateTo) ? null : 'يرجى اختيار تاريخ "من" و"إلى" صالحين';
 
   const materials = useLiveQuery(() => db.materials.toArray(), []);
 
@@ -52,183 +68,237 @@ export function Reports() {
   const [profitReport, setProfitReport] = useState({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
   const [inventoryReport, setInventoryReport] = useState({ totalValue: 0, totalItems: 0, lowStock: 0, outOfStock: 0 });
 
-  useEffect(() => {
-    let cancelled = false;
+  /**
+   * تحميل كل التقارير في تأثير واحد قابل للإلغاء.
+   *
+   * - `useAsyncEffect` ينفّذ التحميل خارج المسار المتزامن للتأثير، فلا
+   *   تحديثات حالة متزامنة تُسبب رسوماً متتالية، ويُلغى النطاق عند تغيّر
+   *   التاريخ أو المادة أو نوع التقرير أو مغادرة الشاشة.
+   * - كل تحميل يحمل رقم طلب (`requestId`): النتيجة القديمة تُهمَل إن سبقها
+   *   طلب أحدث، وهو ما يجعل تبديل نطاق التاريخ بسرعة لا يعرض أرقاماً مختلطة.
+   */
+  useAsyncEffect(async (signal) => {
     const requestId = ++reportRequestRef.current;
+    const isStale = () => signal.aborted || requestId !== reportRequestRef.current;
+    const range = localDayRangeISO(dateFrom, dateTo);
 
     const loadSettings = async () => {
       try {
-        const s = await getSettings();
-        if (!cancelled && requestId === reportRequestRef.current) setSettings(s || null);
+        const current = await getSettings();
+        if (!isStale()) setSettings(current || null);
       } catch (error) {
-        if (!cancelled && requestId === reportRequestRef.current) reportError('Reports.settings', error, 'تعذّر تحميل الإعدادات');
+        if (!isStale()) reportError('Reports.settings', error, 'تعذّر تحميل الإعدادات');
       }
     };
 
-    const range = localDayRangeISO(dateFrom, dateTo);
-    setRangeError(range ? null : 'يرجى اختيار تاريخ "من" و"إلى" صالحين');
-    if (!selectedMaterial) setMaterialMovement(null);
-
-    const loadReports = async () => {
-      try {
-        await Promise.all([
-          loadCashReport(requestId),
-          loadDebtsReport(requestId),
-          loadProfitReport(requestId),
-          loadInventoryReport(requestId),
-          selectedMaterial ? loadMaterialMovement(requestId) : Promise.resolve()
-        ]);
-      } catch (error) {
-        if (!cancelled && requestId === reportRequestRef.current) reportError('Reports.load', error, 'تعذّر تحميل التقارير');
-      }
+    /** نطاق تاريخ غير صالح: نُصفّر الأرقام بدل عرض نتائج نطاق سابق. */
+    const applyRangeFallback = () => {
+      if (isStale()) return;
+      setCashReport({ cashInvoices: 0, payments: 0, total: 0, count: 0 });
+      setProfitReport({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
+      setMaterialMovement(null);
     };
 
-    void loadSettings();
-    void loadReports();
+    const loadCashReport = async () => {
+      if (!range) return;
+      const [invoices, payments] = await Promise.all([
+        db.invoices.where('date').between(range.from, range.to, true, true).toArray(),
+        db.payments.where('date').between(range.from, range.to, true, true).toArray()
+      ]);
+      if (isStale()) return;
 
-    return () => {
-      cancelled = true;
+      const cashInvoices = invoices.filter((invoice) => invoice.type === 'cash');
+      const cashTotal = roundMoney(cashInvoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
+      const paymentsTotal = roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0));
+
+      setCashReport({
+        cashInvoices: cashTotal,
+        payments: paymentsTotal,
+        total: roundMoney(cashTotal + paymentsTotal),
+        count: cashInvoices.length + payments.length
+      });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    const loadDebtsReport = async () => {
+      const [customers, balances] = await Promise.all([db.customers.toArray(), getCustomerBalances()]);
+      if (isStale()) return;
+      const combined = customers
+        .map((customer) => ({ customer, debt: balances.get(customer.id as number)?.debt ?? 0 }))
+        .filter((entry) => entry.debt > 0)
+        .sort((a, b) => b.debt - a.debt);
+      setDebtsReport(combined);
+    };
+
+    const loadMaterialMovement = async () => {
+      if (!selectedMaterial?.id || !range) return;
+
+      const [items, latestMaterial] = await Promise.all([
+        db.invoiceItems.where('materialId').equals(selectedMaterial.id).toArray(),
+        db.materials.get(selectedMaterial.id)
+      ]);
+      const invoices = await db.invoices.bulkGet(items.map((item) => item.invoiceId));
+      if (isStale()) return;
+
+      const validRows = items.filter((item) => {
+        const invoice = invoices.find((entry) => entry?.id === item.invoiceId);
+        return Boolean(invoice && invoice.date >= range.from && invoice.date <= range.to);
+      });
+      const sales = validRows
+        .map((item) => {
+          const invoice = invoices.find((entry) => entry?.id === item.invoiceId);
+          return {
+            invoiceId: item.invoiceId,
+            customerName: invoice?.customerName || 'غير معروف',
+            quantity: item.quantity,
+            date: invoice?.date || '',
+            total: item.total,
+            invoiceNumber: invoice?.invoiceNumber || ''
+          };
+        })
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      const totalSold = validRows.reduce((sum, item) => sum + toFiniteNumber(item.quantity), 0);
+      const totalRevenue = validRows.reduce((sum, item) => sum + toFiniteNumber(item.total), 0);
+      const totalProfit = selectedMaterial.purchasePrice
+        ? validRows.reduce(
+            (sum, item) =>
+              sum +
+              (toFiniteNumber(item.unitPrice) - toFiniteNumber(selectedMaterial.purchasePrice)) *
+                toFiniteNumber(item.quantity),
+            0
+          )
+        : 0;
+
+      if (isStale()) return;
+      setMaterialMovement({
+        material: latestMaterial ?? selectedMaterial,
+        totalSold: roundMoney(totalSold),
+        totalRevenue: roundMoney(totalRevenue),
+        totalProfit: roundMoney(totalProfit),
+        sales,
+        currentStock: toFiniteNumber((latestMaterial ?? selectedMaterial).quantity)
+      });
+    };
+
+    const loadProfitReport = async () => {
+      if (!range) return;
+
+      const invoices = await db.invoices.where('date').between(range.from, range.to, true, true).toArray();
+      const invoiceIds = invoices.map((invoice) => invoice.id as number).filter((id) => typeof id === 'number');
+      const items = invoiceIds.length ? await db.invoiceItems.where('invoiceId').anyOf(invoiceIds).toArray() : [];
+      if (isStale()) return;
+
+      // الإيراد المحاسبي هو إجمالي الفاتورة بعد الخصم، لا مجموع البنود
+      // الخام؛ وإلا يظهر الربح أكبر من الواقع عند وجود خصومات.
+      const totalSales = roundMoney(invoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
+      const totalCost = roundMoney(
+        items.reduce((sum, item) => sum + roundMoney(toFiniteNumber(item.purchasePrice) * toFiniteNumber(item.quantity)), 0)
+      );
+      const profit = roundMoney(totalSales - totalCost);
+
+      setProfitReport({
+        totalSales,
+        totalCost,
+        profit,
+        margin: totalSales > 0 ? (profit / totalSales) * 100 : 0
+      });
+    };
+
+    const loadInventoryReport = async () => {
+      const mats = await db.materials.toArray();
+      if (isStale()) return;
+      const totalValue = roundMoney(
+        mats.reduce((sum, m) => sum + roundMoney(toFiniteNumber(m.quantity) * toFiniteNumber(m.salePrice)), 0)
+      );
+      const lowStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'low').length;
+      const outOfStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'out').length;
+
+      setInventoryReport({
+        totalValue,
+        totalItems: mats.length,
+        lowStock,
+        outOfStock
+      });
+    };
+
+    if (!range) {
+      // نطاق غير صالح: صفر الأرقام ثم تابع تحميل ما لا يعتمد على التاريخ
+      applyRangeFallback();
+    } else if (!selectedMaterial) {
+      setMaterialMovement(null);
+    }
+
+    try {
+      await Promise.all([
+        loadSettings(),
+        loadCashReport(),
+        loadDebtsReport(),
+        loadProfitReport(),
+        loadInventoryReport(),
+        selectedMaterial ? loadMaterialMovement() : Promise.resolve()
+      ]);
+    } catch (error) {
+      if (!isStale()) reportError('Reports.load', error, 'تعذّر تحميل التقارير');
+    }
   }, [dateFrom, dateTo, selectedMaterial, activeReport]);
-
-  /**
-   * نطاق التاريخ يُحسب محلياً. الحقل الفارغ كان يُنتج Invalid Date ثم
-   * RangeError: Invalid time value فيُعطّل تحميل كل التقارير بصمت.
-   */
-  const resolveRange = () => localDayRangeISO(dateFrom, dateTo);
-
-  const loadCashReport = async (requestId: number) => {
-    const range = resolveRange();
-    if (!range) {
-      if (requestId === reportRequestRef.current) setCashReport({ cashInvoices: 0, payments: 0, total: 0, count: 0 });
-      return;
-    }
-
-    const [invoices, payments] = await Promise.all([
-      db.invoices.where('date').between(range.from, range.to, true, true).toArray(),
-      db.payments.where('date').between(range.from, range.to, true, true).toArray()
-    ]);
-    if (requestId !== reportRequestRef.current) return;
-
-    const cashInvoices = invoices.filter((invoice) => invoice.type === 'cash');
-    const cashTotal = roundMoney(cashInvoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
-    const paymentsTotal = roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0));
-
-    setCashReport({
-      cashInvoices: cashTotal,
-      payments: paymentsTotal,
-      total: roundMoney(cashTotal + paymentsTotal),
-      count: cashInvoices.length + payments.length
-    });
-  };
-
-  const loadDebtsReport = async (requestId: number) => {
-    const [customers, balances] = await Promise.all([db.customers.toArray(), getCustomerBalances()]);
-    if (requestId !== reportRequestRef.current) return;
-    const combined = customers
-      .map((customer) => ({ customer, debt: balances.get(customer.id as number)?.debt ?? 0 }))
-      .filter((entry) => entry.debt > 0)
-      .sort((a, b) => b.debt - a.debt);
-    setDebtsReport(combined);
-  };
-
-  const loadMaterialMovement = async (requestId: number) => {
-    if (!selectedMaterial?.id) return;
-
-    const range = resolveRange();
-    if (!range) {
-      if (requestId === reportRequestRef.current) setMaterialMovement(null);
-      return;
-    }
-    const [items, latestMaterial] = await Promise.all([
-      db.invoiceItems.where('materialId').equals(selectedMaterial.id).toArray(),
-      db.materials.get(selectedMaterial.id)
-    ]);
-    const invoices = await db.invoices.bulkGet(items.map(i => i.invoiceId));
-    if (requestId !== reportRequestRef.current) return;
-
-    const validRows = items.filter((item) => {
-      const invoice = invoices.find((entry) => entry?.id === item.invoiceId);
-      return Boolean(invoice && invoice.date >= range.from && invoice.date <= range.to);
-    });
-    const sales = validRows.map(item => {
-      const inv = invoices.find(i => i?.id === item.invoiceId);
-      return {
-        invoiceId: item.invoiceId,
-        customerName: inv?.customerName || 'غير معروف',
-        quantity: item.quantity,
-        date: inv?.date || '',
-        total: item.total,
-        invoiceNumber: inv?.invoiceNumber || ''
-      };
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-    const totalSold = validRows.reduce((sum, i) => sum + toFiniteNumber(i.quantity), 0);
-    const totalRevenue = validRows.reduce((sum, i) => sum + toFiniteNumber(i.total), 0);
-    const totalProfit = selectedMaterial.purchasePrice
-      ? validRows.reduce((sum, i) => sum + (toFiniteNumber(i.unitPrice) - toFiniteNumber(selectedMaterial.purchasePrice)) * toFiniteNumber(i.quantity), 0)
-      : 0;
-
-    if (requestId !== reportRequestRef.current) return;
-    setMaterialMovement({
-      material: latestMaterial ?? selectedMaterial,
-      totalSold: roundMoney(totalSold),
-      totalRevenue: roundMoney(totalRevenue),
-      totalProfit: roundMoney(totalProfit),
-      sales,
-      currentStock: toFiniteNumber((latestMaterial ?? selectedMaterial).quantity)
-    });
-  };
-
-  const loadProfitReport = async (requestId: number) => {
-    const range = resolveRange();
-    if (!range) {
-      if (requestId === reportRequestRef.current) setProfitReport({ totalSales: 0, totalCost: 0, profit: 0, margin: 0 });
-      return;
-    }
-
-    const invoices = await db.invoices.where('date').between(range.from, range.to, true, true).toArray();
-    const invoiceIds = invoices.map((invoice) => invoice.id as number).filter((id) => typeof id === 'number');
-    const items = invoiceIds.length ? await db.invoiceItems.where('invoiceId').anyOf(invoiceIds).toArray() : [];
-    if (requestId !== reportRequestRef.current) return;
-
-    // الإيراد المحاسبي هو إجمالي الفاتورة بعد الخصم، لا مجموع البنود
-    // الخام؛ وإلا يظهر الربح أكبر من الواقع عند وجود خصومات.
-    const totalSales = roundMoney(invoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
-    const totalCost = roundMoney(
-      items.reduce((sum, item) => sum + roundMoney(toFiniteNumber(item.purchasePrice) * toFiniteNumber(item.quantity)), 0)
-    );
-    const profit = roundMoney(totalSales - totalCost);
-
-    setProfitReport({
-      totalSales,
-      totalCost,
-      profit,
-      margin: totalSales > 0 ? (profit / totalSales) * 100 : 0
-    });
-  };
-
-  const loadInventoryReport = async (requestId: number) => {
-    const mats = await db.materials.toArray();
-    if (requestId !== reportRequestRef.current) return;
-    const totalValue = roundMoney(mats.reduce((sum, m) => sum + roundMoney(toFiniteNumber(m.quantity) * toFiniteNumber(m.salePrice)), 0));
-    const lowStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'low').length;
-    const outOfStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'out').length;
-
-    setInventoryReport({
-      totalValue,
-      totalItems: mats.length,
-      lowStock,
-      outOfStock
-    });
-  };
 
   const filteredMaterials = materials?.filter(m => 
     m.name.toLowerCase().includes(searchMaterial.toLowerCase())
   ).slice(0, 10) || [];
 
   const totalDebt = debtsReport.reduce((sum, d) => sum + d.debt, 0);
+
+  /**
+   * حمولة التقرير واسم ملفه في مكان واحد: كل فرع يُعيد القيمة مباشرة بدل
+   * إسناد متغيّرات مبدئية لا تُقرأ (وهو نمط كان يخفي نسيان فرع جديد).
+   */
+  const buildReportPayload = (): { data: unknown; fileName: string } => {
+    const today = formatLocalDateInput();
+
+    switch (activeReport) {
+      case 'cash':
+        return {
+          data: { report: REPORT_LABELS.cash, from: dateFrom, to: dateTo, ...cashReport },
+          fileName: `Cash_Report_${dateFrom}_to_${dateTo}.json`
+        };
+      case 'debts':
+        return {
+          data: {
+            report: REPORT_LABELS.debts,
+            date: today,
+            totalDebt,
+            debtors: debtsReport.map(({ customer, debt }) => ({
+              name: customer.fullName,
+              phone: customer.phone || '',
+              debt
+            }))
+          },
+          fileName: `Debts_Report_${today}.json`
+        };
+      case 'materials':
+        return {
+          data: {
+            report: REPORT_LABELS.materials,
+            material: materialMovement?.material.name || '',
+            totalSold: materialMovement?.totalSold || 0,
+            totalRevenue: materialMovement?.totalRevenue || 0,
+            currentStock: materialMovement?.currentStock || 0,
+            sales: materialMovement?.sales || []
+          },
+          fileName: `Material_Movement_${today}.json`
+        };
+      case 'profit':
+        return {
+          data: { report: REPORT_LABELS.profit, from: dateFrom, to: dateTo, ...profitReport },
+          fileName: `Profit_Report_${dateFrom}_to_${dateTo}.json`
+        };
+      case 'inventory':
+        return {
+          data: { report: REPORT_LABELS.inventory, date: today, ...inventoryReport },
+          fileName: `Inventory_Report_${today}.json`
+        };
+    }
+  };
 
   const exportReport = async () => {
     if (isExporting) return;
@@ -237,58 +307,7 @@ export function Reports() {
       return;
     }
     setIsExporting(true);
-    let data: unknown = {};
-    let fileName = '';
-
-    const REPORT_LABELS: Record<ReportKey, string> = {
-      cash: 'حركة الصندوق',
-      debts: 'الديون الشامل',
-      materials: 'حركة مادة',
-      profit: 'الأرباح',
-      inventory: 'قيمة المخزون'
-    };
-
-    switch (activeReport) {
-      case 'cash':
-        data = { report: REPORT_LABELS.cash, from: dateFrom, to: dateTo, ...cashReport };
-        fileName = `Cash_Report_${dateFrom}_to_${dateTo}.json`;
-        break;
-      case 'debts':
-        data = {
-          report: REPORT_LABELS.debts,
-          date: formatLocalDateInput(),
-          totalDebt,
-          debtors: debtsReport.map(({ customer, debt }) => ({
-            name: customer.fullName,
-            phone: customer.phone || '',
-            debt
-          }))
-        };
-        fileName = `Debts_Report_${formatLocalDateInput()}.json`;
-        break;
-      case 'materials':
-        data = {
-          report: REPORT_LABELS.materials,
-          material: materialMovement?.material.name || '',
-          totalSold: materialMovement?.totalSold || 0,
-          totalRevenue: materialMovement?.totalRevenue || 0,
-          currentStock: materialMovement?.currentStock || 0,
-          sales: materialMovement?.sales || []
-        };
-        fileName = `Material_Movement_${formatLocalDateInput()}.json`;
-        break;
-      case 'profit':
-        data = { report: REPORT_LABELS.profit, from: dateFrom, to: dateTo, ...profitReport };
-        fileName = `Profit_Report_${dateFrom}_to_${dateTo}.json`;
-        break;
-      default:
-        data = {
-          report: REPORT_LABELS.inventory,
-          date: formatLocalDateInput(),
-          ...inventoryReport
-        };
-        fileName = `Inventory_Report_${formatLocalDateInput()}.json`;
-    }
+    const { data, fileName } = buildReportPayload();
 
     // الحفظ عبر الخدمة الموحّدة: يعمل على أندرويد (مستندات/مشاركة) بدل
     // تنزيل المتصفح الذي لا يفعل شيئاً داخل WebView.

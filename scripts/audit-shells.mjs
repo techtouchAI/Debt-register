@@ -1,194 +1,199 @@
 #!/usr/bin/env node
 /**
- * تدقيق أغلفة التشغيل (Android / Windows-Electron / Tauri) بشكل آلي.
+ * تدقيق أغلفة التشغيل (أندرويد/ويندوز/تيوري) قبل أي بناء.
  *
- * سبب وجود هذا السكربت: متطلبات أغلفة التشغيل (الصلاحيات، الأذونات، الروابط
- * الخارجية، حفظ الملفات، منع النوافذ المتعددة، مسار بيانات النسخة المحمولة)
- * كانت تُفحص يدوياً على أجهزة حقيقية، فيسقط بعضها من الإصدارات اللاحقة بلا
- * أن يلاحظه أحد. هنا تُحوَّل تلك المتطلبات إلى فحوص قابلة للتشغيل في كل
- * commit وفي CI، وما يبقى يدوياً فقط هو التشغيل الفعلي على الجهاز (موثّق في
- * docs/QA-CHECKLIST.md).
+ * الهدف: منع تسليم نسخة "تُبنى بنجاح" لكنها معطوبة على الجهاز:
+ *   - APK بلا صلاحية إشعارات ⇒ لا إشعارات أبداً.
+ *   - APK يمنع النص الصريح لكنه يشير لأيقونة غير موجودة ⇒ شريط حالة أبيض.
+ *   - NSIS/portable بإعداد ناقص ⇒ بيانات تُمسح عند كل تشغيل (نسخة محمولة).
+ *   - Tauri ناقص المعرّف/الأيقونات/الصلاحيات ⇒ فشل بناء أو تطبيق بلا إشعارات.
+ *   - واجهة مبنية بمسارات مطلقة ⇒ شاشة بيضاء تحت file:// داخل الأغلفة.
  *
- * الاستخدام: `npm run audit:shells`
+ * هذا فحص ثابت (لا يحتاج JDK/SDK/Wine) لذلك يعمل في أي بيئة، بينما الفحوص
+ * الديناميكية (تحليل APK، تشغيل المثبّت، بناء Tauri) تتم في CI على النواتج
+ * الفعلية.
  */
 
-import { readFile, access } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const checks = [];
+let checks = 0;
 let failures = 0;
+let warnings = 0;
 
-function check(name, condition, detail = '') {
-  const ok = Boolean(condition);
-  if (!ok) failures += 1;
-  checks.push({ name, ok, detail });
+function check(description, condition) {
+  checks += 1;
+  if (condition) {
+    console.log(`  ✔ ${description}`);
+  } else {
+    failures += 1;
+    console.log(`  ✖ ${description}`);
+  }
 }
 
-async function read(path) {
-  return readFile(join(root, path), 'utf8');
+function warn(description, condition) {
+  checks += 1;
+  if (condition) {
+    console.log(`  ✔ ${description}`);
+  } else {
+    warnings += 1;
+    console.log(`  ⚠ ${description}`);
+  }
 }
 
-async function readJson(path) {
-  return JSON.parse(await read(path));
+function section(title) {
+  console.log(`\n${title}`);
 }
 
-async function exists(path) {
+async function readJson(relativePath) {
+  return JSON.parse(await readFile(join(repoRoot, relativePath), 'utf8'));
+}
+
+async function readText(relativePath) {
+  return readFile(join(repoRoot, relativePath), 'utf8');
+}
+
+async function main() {
+  const pkg = await readJson('package.json');
+  const capacitor = await readJson('capacitor.config.json');
+  const builder = await readJson('electron-builder.json');
+  const tauri = await readJson('desktop/src-tauri/tauri.conf.json');
+  const mainCjs = await readText('electron/main.cjs');
+  const preloadCjs = await readText('electron/preload.cjs');
+  const prepareAndroid = await readText('scripts/prepare-android.mjs');
+  const workflow = await readText('.github/workflows/build.yml');
+
+  /* ---------------------------- عام ---------------------------- */
+  section('إعداد الحزمة');
+  check('سكربت بناء الويب موجود', typeof pkg.scripts?.build === 'string');
+  check('سكربت الاختبارات موجود', typeof pkg.scripts?.test === 'string');
+  check('اختبار الدخان لسطح المكتب موثّق', /--smoke-test/.test(mainCjs));
+
+  /* --------------------------- إلكترون --------------------------- */
+  section('إلكترون (ويندوز)');
+  const prefs = mainCjs.slice(mainCjs.indexOf('webPreferences'), mainCjs.indexOf('webPreferences') + 400);
+  check('contextIsolation مفعّل', /contextIsolation:\s*true/.test(prefs));
+  check('nodeIntegration معطّل', /nodeIntegration:\s*false/.test(prefs));
+  check('sandbox مفعّل', /sandbox:\s*true/.test(prefs));
+  check('preload محدّد', /preload:\s*path\.join/.test(prefs));
+  check('منع النوافذ الفرعية (setWindowOpenHandler)', /setWindowOpenHandler/.test(mainCjs));
+  check('تحويل الروابط الخارجية للمتصفح', /shell\.openExternal/.test(mainCjs));
+  check('منع <webview>', /will-attach-webview/.test(mainCjs));
+  check('مُعالج أذونات صريح (allowlist)', /setPermissionRequestHandler/.test(mainCjs));
+  check('نسخة وحيدة من التطبيق', /requestSingleInstanceLock/.test(mainCjs));
+  check('مجلد بيانات ثابت في النسخة المحمولة', /PORTABLE_EXECUTABLE_DIR/.test(mainCjs) && /setPath\('userData'/.test(mainCjs));
+  check('معرّف التطبيق على ويندوز (إشعارات)', /setAppUserModelId\('com\.agrioffice\.debtregister'\)/.test(mainCjs));
+  check('كتابة ذرّية للملفات (tmp ثم rename)', /\.tmp`/.test(mainCjs) && /fsp\.rename/.test(mainCjs));
+  check('حماية من اجتياز المسار في أسماء الملفات', /function safeFileName/.test(mainCjs));
+  check('جسر preload محدود بالدوال المعلنة', /contextBridge\.exposeInMainWorld/.test(preloadCjs));
+  check('لا استخدام ipcRenderer مباشر في الواجهة', !/ipcRenderer/.test(preloadCjs.split('contextBridge')[0] ?? ''));
+
+  check('appId صحيح', builder.appId === 'com.agrioffice.debtregister');
+  check('asar مفعّل', builder.asar === true);
+  check('مجلد النواتج release', builder.directories?.output === 'release');
+  check('حزمة البناء تتضمن dist و electron و public', ['dist/**/*', 'electron/**/*', 'public/**/*'].every((pattern) => builder.files?.includes(pattern)));
+  check('هدف nsis موجود', JSON.stringify(builder.win?.target ?? '').includes('nsis'));
+  check('هدف portable موجود', JSON.stringify(builder.win?.target ?? '').includes('portable'));
+  check('اسم ملف المثبّت واضح', /Setup/.test(JSON.stringify(builder.nsis?.artifactName ?? '')));
+  check('اسم ملف النسخة المحمولة واضح', /Portable/.test(JSON.stringify(builder.portable?.artifactName ?? '')));
+  check('لا يُحذف مجلد بيانات المستخدم عند إلغاء التثبيت', builder.nsis?.deleteAppDataOnUninstall === false);
+  check('أيقونة ويندوز موجودة', existsSync(join(repoRoot, builder.win?.icon ?? '')));
+  check('صفحة الخطأ العربية لتعذّر التحميل موجودة', /تعذّر تحميل واجهة التطبيق/.test(mainCjs));
+
+  /* --------------------------- أندرويد --------------------------- */
+  section('أندرويد (Capacitor)');
+  check('appId صحيح', capacitor.appId === 'com.agrioffice.debtregister');
+  check('webDir = dist', capacitor.webDir === 'dist');
+  check('androidScheme = https', capacitor.server?.androidScheme === 'https');
+  check('allowMixedContent معطّل', capacitor.android?.allowMixedContent === false);
+  check(
+    'أيقونة الإشعارات محدّدة ومتاحة',
+    capacitor.plugins?.LocalNotifications?.smallIcon === 'ic_stat_agri' &&
+      (await fileExists(join(repoRoot, 'resources/android/ic_stat_agri.xml')))
+  );
+  check('لا إشارة إلى ملف صوت غير موجود', !capacitor.plugins?.LocalNotifications?.sound);
+  check(
+    'صلاحية التخزين صريحة في إعداد Capacitor',
+    capacitor.plugins?.Filesystem?.androidRequestPermissions === true
+  );
+  check('سكربت التجهيز يضيف صلاحية الإشعارات', /POST_NOTIFICATIONS/.test(prepareAndroid));
+  check('سكربت التجهيز يمنع النص الصريح', /usesCleartextTraffic/.test(prepareAndroid));
+  check('سكربت التجهيز يكتب أيقونة الإشعارات', /ic_stat_agri/.test(prepareAndroid));
+  check('سكربت التجهيز متكرر بلا تكرار وسوم', /includes\(`android:name="\$\{permission\.name\}"`\)/.test(prepareAndroid));
+  check('سكربت التجهيز متاح من package.json', /prepare-android\.mjs/.test(pkg.scripts?.['cap:prepare'] ?? ''));
+
+  /* ---------------------------- Tauri ---------------------------- */
+  section('Tauri (سطح المكتب البديل)');
+  check('معرّف التطبيق محدّد', typeof tauri.identifier === 'string' && tauri.identifier.includes('.'));
+  check('frontendDist يشير إلى dist', (tauri.build?.frontendDist ?? '').includes('dist'));
+  check('CSP محدّد بلا unsafe-eval', Boolean(tauri.app?.security?.csp) && !/unsafe-eval/.test(tauri.app?.security?.csp ?? ''));
+  check('النافذة الرئيسية محدّدة', Boolean(tauri.app?.windows?.some((w) => w.label === 'main')));
+  check('قيود النافذة (minWidth/minHeight)', (tauri.app?.windows ?? []).every((w) => w.minWidth && w.minHeight));
+  const tauriIcons = tauri.bundle?.icon ?? [];
+  check('أيقونات Tauri مذكورة', tauriIcons.length > 0);
+  for (const icon of tauriIcons.slice(0, 6)) {
+    check(`أيقونة Tauri موجودة: ${icon}`, await fileExists(join(repoRoot, 'desktop/src-tauri', icon)));
+  }
+  check('صلاحية الإشعارات ممنوحة', await fileExists(join(repoRoot, 'desktop/src-tauri/capabilities/default.json')));
+  if (await fileExists(join(repoRoot, 'desktop/src-tauri/capabilities/default.json'))) {
+    const capabilities = await readJson('desktop/src-tauri/capabilities/default.json');
+    check('capability يحتوي notification:default', JSON.stringify(capabilities.permissions ?? []).includes('notification:default'));
+  }
+  check('نسخة وحيدة من تطبيق Tauri', /single_instance|single-instance/.test(await readText('desktop/src-tauri/Cargo.toml')));
+  check('إضافة النسخة الوحيدة مسجّلة في lib.rs', /single_instance/.test(await readText('desktop/src-tauri/src/lib.rs')));
+
+  /* ------------------------------ CI ------------------------------ */
+  section('خط البناء المستمر');
+  check('مهمة الجودة تشمل تدقيق الأغلفة', /audit:shells/.test(workflow));
+  check('مهمة أندرويد تبنى APK', /assembleRelease/.test(workflow));
+  check('مهمة أندرويد تتحقق من الصلاحيات داخل APK', /dump permissions/.test(workflow));
+  check('مهمة أندرويد تتحقق من موارد الأيقونة داخل APK', /dump resources/.test(workflow));
+  check('مهمة أندرويد تتحقق من مزوّد مشاركة الملفات', /fileprovider/.test(workflow));
+  check('مهمة أندرويد تتحقق من أيقونة الإشعارات داخل APK', /ic_stat_agri/.test(workflow));
+  check('مهمة ويندوز تبنى مثبّت + نسخة محمولة', /--win nsis portable/.test(workflow));
+  check('مهمة ويندوز تتحقق من محتوى asar', /@electron\/asar list/.test(workflow));
+  check('اختبار دخان إلكترون يعمل فعلياً', /electron \. --smoke-test/.test(workflow));
+  check('مهمة Tauri تبنى حزم أصلية (deb/AppImage على لينكس)', /--bundles deb,appimage/.test(workflow));
+  check('مهمة Tauri تبنى حزم أصلية (msi/nsis على ويندوز)', /--bundles msi,nsis/.test(workflow));
+  check('مهمة ويندوز تشغّل النسخة المحمولة فعلياً (اختبار دخان)', /AgriOffice-Portable-\*\.exe/.test(workflow) && /--smoke-test/.test(workflow));
+  check('مهمة ويندوز تثبّت المثبّت صامتاً وتتحقق من التثبيت', /Uninstall\*\.exe|\/S'/.test(workflow));
+  check('تدقيق أمني للاعتماديات', /npm audit --audit-level=high/.test(workflow));
+
+  /* -------------------------- نواتج البناء -------------------------- */
+  section('ناتج الويب (إن كان مبنياً)');
+  const distIndex = join(repoRoot, 'dist/index.html');
+  if (existsSync(distIndex)) {
+    const html = await readText('dist/index.html');
+    check('لا مسارات مطلقة للأصول (تعمل تحت file://)', !/(src|href)="\/assets/.test(html));
+    check('يوجد عنصر جذر #root', /id="root"/.test(html));
+    const stats = await stat(join(repoRoot, 'dist/sw.js')).catch(() => null);
+    warn('عامل الخدمة مُنتَج (PWA)', Boolean(stats));
+  } else {
+    warn('لم يُبنَ dist بعد — نفّذ npm run build قبل فحص الناتج', false);
+  }
+
+  console.log(`\nنتيجة التدقيق: ${checks - failures - warnings} ناجح، ${warnings} تحذير، ${failures} فشل (المجموع ${checks})`);
+  if (failures > 0) {
+    console.error('✖ فشل تدقيق الأغلفة');
+    process.exit(1);
+  }
+  console.log('✔ تدقيق الأغلفة ناجح');
+}
+
+async function fileExists(path) {
   try {
-    await access(join(root, path), constants.F_OK);
+    await stat(path);
     return true;
   } catch {
     return false;
   }
 }
 
-/** فحص نصي: كل النصوص المطلوبة موجودة في الملف. */
-function checkContainsAll(label, text, needles) {
-  const missing = needles.filter((needle) => !text.includes(needle));
-  check(label, missing.length === 0, missing.length ? `ناقص: ${missing.join(' ، ')}` : '');
-}
-
-async function auditElectron() {
-  const main = await read('electron/main.cjs');
-  const preload = await read('electron/preload.cjs');
-  const config = await readJson('electron-builder.json');
-
-  checkContainsAll('Electron: أمان النافذة', main, [
-    'contextIsolation: true',
-    'nodeIntegration: false',
-    'sandbox: true',
-    'webSecurity: true',
-    'allowRunningInsecureContent: false'
-  ]);
-  checkContainsAll('Electron: منع التنقل الخارجي وفتح الروابط في المتصفح', main, [
-    'setWindowOpenHandler',
-    'will-navigate',
-    'shell.openExternal',
-    'will-attach-webview'
-  ]);
-  checkContainsAll('Electron: نسخة وحيدة + أذونات صريحة', main, [
-    'requestSingleInstanceLock',
-    'setPermissionRequestHandler',
-    'setPermissionCheckHandler'
-  ]);
-  checkContainsAll('Electron: حفظ بيانات النسخة المحمولة', main, [
-    'PORTABLE_EXECUTABLE_DIR',
-    "app.setPath('userData'"
-  ]);
-  checkContainsAll('Electron: كتابة ذرّية ومنع اجتياز المسار', main, ['.tmp', 'safeFileName']);
-  checkContainsAll('Electron: جسر آمن محدود', preload, [
-    'contextBridge.exposeInMainWorld',
-    "ipcRenderer.invoke('save-file'",
-    "ipcRenderer.invoke('save-backup'",
-    "ipcRenderer.invoke('show-notification'"
-  ]);
-  check('Electron: لا يُعرّض ipcRenderer للواجهة', !/exposeInMainWorld\([^)]*ipcRenderer\s*[,}]/.test(preload));
-
-  const targets = (config?.win?.target ?? []).map((target) =>
-    typeof target === 'string' ? target : target.target
-  );
-  check('حزمة Windows: مُثبِّت nsis + نسخة محمولة', targets.includes('nsis') && targets.includes('portable'), targets.join(','));
-  check('حزمة Windows: اسم ملف المثبّت واضح', Boolean(config?.nsis?.artifactName));
-  check('حزمة Windows: اسم النسخة المحمولة', Boolean(config?.portable?.artifactName));
-  check('حزمة Windows: asar مفعّل', config?.asar === true);
-  check(
-    'حزمة Windows: ملفات البناء محددة',
-    (config?.files ?? []).some((pattern) => String(pattern).startsWith('dist/')) &&
-      (config?.files ?? []).some((pattern) => String(pattern).startsWith('electron/'))
-  );
-  check('حزمة Windows: مجلد الإخراج', config?.directories?.output === 'release');
-  check('حزمة Windows: عدم حذف بيانات المستخدم عند إلغاء التثبيت', config?.nsis?.deleteAppDataOnUninstall === false);
-}
-
-async function auditAndroid() {
-  const config = await readJson('capacitor.config.json');
-  check('أندرويد: معرّف التطبيق', config?.appId === 'com.agrioffice.debtregister', String(config?.appId));
-  check('أندرويد: مجلد بناء الويب', config?.webDir === 'dist', String(config?.webDir));
-  check('أندرويد: مخطط https فقط', config?.server?.androidScheme === 'https');
-  check('أندرويد: منع المحتوى المختلط', config?.android?.allowMixedContent === false);
-  check('أندرويد: تصحيح WebView معطّل في الإنتاج', config?.android?.webContentsDebuggingEnabled === false);
-  check('أندرويد: طلب صلاحيات الملفات', config?.plugins?.Filesystem?.androidRequestPermissions === true);
-
-  const iconName = config?.plugins?.LocalNotifications?.smallIcon;
-  check('أندرويد: اسم أيقونة الإشعارات مطابق للمورَد', iconName === 'ic_stat_agri', String(iconName));
-  check('أندرويد: مورَد أيقونة الإشعارات موجود', await exists('resources/android/ic_stat_agri.xml'));
-  check('أندرويد: لا صوت إشعار يشير إلى مورد غير موجود', config?.plugins?.LocalNotifications?.sound === undefined);
-
-  const prepare = await read('scripts/prepare-android.mjs');
-  checkContainsAll('أندرويد: سكربت التجهيز يُعلن الصلاحيات', prepare, [
-    'android.permission.POST_NOTIFICATIONS',
-    'android.permission.READ_EXTERNAL_STORAGE',
-    'android.permission.WRITE_EXTERNAL_STORAGE',
-    'maxSdkVersion',
-    'usesCleartextTraffic'
-  ]);
-  check('أندرويد: سكربت التجهيز قابل للتشغيل المتكرر', prep_isIdempotent(prepare));
-  check('أندرويد: سكربت التجهيز مولَّد أيقونات التطبيق', prepare.includes('ic_launcher.png'));
-}
-
-function prep_isIdempotent(prepareSource) {
-  // يعيد كتابة الوسوم بدل إضافتها بشكل تراكمي
-  return /normalizePermissionTags|replace\(/.test(prepareSource);
-}
-
-async function auditTauri() {
-  const config = await readJson('desktop/src-tauri/tauri.conf.json');
-  const capabilities = await readJson('desktop/src-tauri/capabilities/default.json');
-  const cargo = await read('desktop/src-tauri/Cargo.toml');
-  const lib = await read('desktop/src-tauri/src/lib.rs');
-
-  check('Tauri: المعرّف', config?.identifier === 'ai.techtouch.agrooffice', String(config?.identifier));
-  check('Tauri: مجلد الواجهة المبنيّة', config?.build?.frontendDist === './dist', String(config?.build?.frontendDist));
-  const csp = config?.app?.security?.csp ?? '';
-  check('Tauri: سياسة CSP محدَّدة', typeof csp === 'string' && csp.includes("default-src 'self'"));
-  check('Tauri: بلا unsafe-eval في CSP', !csp.includes('unsafe-eval'));
-  check('Tauri: نافذة بحد أدنى معقول', config?.app?.windows?.[0]?.minWidth >= 800);
-  check('Tauri: صلاحية الإشعارات', (capabilities?.permissions ?? []).includes('notification:default'));
-  check('Tauri: إضافة الإشعارات في Rust', lib.includes('tauri_plugin_notification::init'));
-  check('Tauri: منع تشغيل نسختين (قفل النسخة الوحيدة)', cargo.includes('single-instance') && lib.includes('single_instance'));
-  check('Tauri: نقل موارِد البناء إلى مجلد الواجهة', await exists('desktop/scripts/copy-assets.mjs'));
-
-  const icons = config?.bundle?.icon ?? [];
-  check('Tauri: أيقونات الحزمة موجودة', icons.length > 0);
-  for (const icon of icons) {
-    // eslint-disable-next-line no-await-in-loop
-    check(`Tauri: وجود الأيقونة ${icon}`, await exists(join('desktop/src-tauri', icon)));
-  }
-}
-
-async function auditCi() {
-  const ci = await read('.github/workflows/build.yml');
-  checkContainsAll('CI: يوظّف تجهيز أندرويد', ci, ['prepare-android', 'cap sync']);
-  checkContainsAll('CI: يتحقق من صلاحيات APK المبني', ci, ['aapt2', 'POST_NOTIFICATIONS']);
-  checkContainsAll('CI: يبني مثبّت ويندوز', ci, ['electron-builder', 'nsis']);
-  checkContainsAll('CI: يبني Tauri', ci, ['tauri']);
-  check('CI: تدقيق الأغلفة جزء من التحقق', ci.includes('audit:shells'));
-}
-
-async function main() {
-  await auditElectron();
-  await auditAndroid();
-  await auditTauri();
-  await auditCi();
-
-  const width = Math.max(...checks.map((entry) => entry.name.length));
-  console.log('تدقيق أغلفة التشغيل (Android / Windows / Tauri)\n');
-  for (const entry of checks) {
-    const mark = entry.ok ? '✅' : '❌';
-    const detail = entry.detail ? ` — ${entry.detail}` : '';
-    console.log(`${mark} ${entry.name.padEnd(width)}${detail}`);
-  }
-  console.log(`\n${checks.length - failures}/${checks.length} فحصاً ناجحاً`);
-  if (failures > 0) {
-    console.error(`\n❌ فشل ${failures} فحصاً — أصلح الأغلفة قبل البناء.`);
-    process.exit(1);
-  }
-}
-
 main().catch((error) => {
-  console.error('فشل تدقيق الأغلفة:', error);
+  console.error('✖ خطأ غير متوقع في تدقيق الأغلفة:', error);
   process.exit(1);
 });

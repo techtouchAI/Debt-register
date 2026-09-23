@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { subscribeNativeBack, type NativeBackEvent } from '@/lib/nativeBridge';
 import { closeTopModal, hasOpenModal, openModalCount, subscribeModalStack } from '@/lib/modalStack';
@@ -25,8 +25,12 @@ import { toast } from '@/lib/toast';
 export function BackNavigationHandler() {
   const navigate = useNavigate();
   const location = useLocation();
+  // يُحدَّث في useLayoutEffect لا أثناء الرسم: قراءة/كتابة ref داخل الرسم
+  // تكسر ضمانات React (قواعد react-hooks/immutability).
   const pathRef = useRef(location.pathname);
-  pathRef.current = location.pathname;
+  useLayoutEffect(() => {
+    pathRef.current = location.pathname;
+  }, [location.pathname]);
 
   // (1) مزامنة فخّ السجل مع عدد الطبقات المفتوحة (فتح/إغلاق/إغلاق الكل)
   useEffect(() => {

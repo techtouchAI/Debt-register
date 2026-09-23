@@ -1,3 +1,4 @@
+import { logBackgroundFailure } from './lifecycle';
 import { db, logActivity, createNotification, getSettingsOrDefault } from './db';
 import { nextReceiptNumber } from './sequence';
 import { reallocateCustomerInvoices } from './invoices';
@@ -66,14 +67,14 @@ export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResul
     `تم تسديد ${formatCurrency(amount, settings.currency)} من الزبون ${saved.payment.customerName} - وصل ${saved.receiptNumber}`,
     'payment',
     saved.payment.id
-  ).catch((error) => console.warn('تعذّر تسجيل النشاط:', error));
+  ).catch((error) => logBackgroundFailure('تعذّر تسجيل النشاط:', error));
 
   if (saved.debtBefore > 0 && saved.debtAfter <= 0) {
     await createNotification(
       'تم تسديد الدين بالكامل',
       `الزبون ${saved.payment.customerName} سدد جميع ديونه. المبلغ: ${formatCurrency(amount, settings.currency)}`,
       { type: 'success', relatedId: draft.customerId, relatedType: 'customer', code: 'debt-cleared' }
-    ).catch((error) => console.warn('تعذّر إنشاء الإشعار:', error));
+    ).catch((error) => logBackgroundFailure('تعذّر إنشاء الإشعار:', error));
   }
 
   return saved;
@@ -105,7 +106,7 @@ export async function deletePayment(paymentId: number): Promise<PaymentDeleteRes
     `تم حذف تسديد ${formatCurrency(deleted.payment.amount, settings.currency)} للزبون ${deleted.payment.customerName}`,
     'payment',
     paymentId
-  ).catch((error) => console.warn('تعذّر تسجيل النشاط:', error));
+  ).catch((error) => logBackgroundFailure('تعذّر تسجيل النشاط:', error));
 
   return { ok: true };
 }

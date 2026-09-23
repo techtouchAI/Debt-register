@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Loader2, Package } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,35 +22,28 @@ interface QuickAddPurchaseMaterialDialogProps {
 const UNITS = ['قطعة', 'كيس', 'علبة', 'لتر', 'كغم', 'متر', 'عبوة'];
 
 /** إنشاء مادة من داخل وصل الشراء برصيد ابتدائي صفر؛ الوصل نفسه يضيف الكمية. */
-export function QuickAddPurchaseMaterialDialog({
-  open,
+export function QuickAddPurchaseMaterialDialog(props: QuickAddPurchaseMaterialDialogProps) {
+  // الرجوع و Escape يُغلقان النافذة وحدها (المستمع مركزي في modalStack)
+  useModalCloser(props.open, props.onClose, { label: 'إضافة مادة للشراء' });
+
+  if (!props.open) return null;
+  // تركيب جديد مع كل فتح: تُهيَّأ الحقول من الخصائص بلا تأثير إعادة ضبط
+  return <QuickAddPurchaseMaterialForm {...props} />;
+}
+
+function QuickAddPurchaseMaterialForm({
   initialName = '',
   currency = 'د.ع',
   defaultMinQuantity = 5,
   onClose,
   onCreated
-}: QuickAddPurchaseMaterialDialogProps) {
+}: Omit<QuickAddPurchaseMaterialDialogProps, 'open'>) {
   const [name, setName] = useState(initialName);
   const [category, setCategory] = useState('');
   const [unit, setUnit] = useState('قطعة');
   const [salePrice, setSalePrice] = useState('');
   const [purchasePrice, setPurchasePrice] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setName(initialName);
-    setCategory('');
-    setUnit('قطعة');
-    setSalePrice('');
-    setPurchasePrice('');
-    setIsSaving(false);
-  }, [open, initialName]);
-
-  // الرجوع و Escape يُغلقان النافذة وحدها (المستمع مركزي في modalStack)
-  useModalCloser(open, onClose, { label: 'إضافة مادة للشراء' });
-
-  if (!open) return null;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();

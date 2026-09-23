@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -31,14 +31,23 @@ interface QuickAddMaterialDialogProps {
 
 const UNITS = ['قطعة', 'كيس', 'علبة', 'لتر', 'كغم', 'متر', 'عبوة'];
 
-export function QuickAddMaterialDialog({
-  open,
+export function QuickAddMaterialDialog(props: QuickAddMaterialDialogProps) {
+  // الرجوع و Escape يُغلقان النافذة وحدها (المستمع مركزي في modalStack)
+  useModalCloser(props.open, props.onClose, { label: 'إضافة مادة سريعة' });
+
+  if (!props.open) return null;
+  // النموذج يُركَّب من جديد مع كل فتح، فتُهيَّأ الحقول من الخصائص مباشرة
+  // بدل إعادة ضبطها بـ setState داخل تأثير (النمط الذي تمنعه قواعد React).
+  return <QuickAddMaterialForm {...props} />;
+}
+
+function QuickAddMaterialForm({
   initialName = '',
   currency = 'د.ع',
   defaultMinQuantity = 5,
   onClose,
-  onCreated,
-}: QuickAddMaterialDialogProps) {
+  onCreated
+}: Omit<QuickAddMaterialDialogProps, 'open'>) {
   const [name, setName] = useState(initialName);
   const [category, setCategory] = useState('');
   const [unit, setUnit] = useState('قطعة');
@@ -47,24 +56,6 @@ export function QuickAddMaterialDialog({
   const [purchasePrice, setPurchasePrice] = useState('');
   const [minQuantity, setMinQuantity] = useState('5');
   const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setName(initialName);
-      setCategory('');
-      setUnit('قطعة');
-      setQuantity('1');
-      setSalePrice('');
-      setPurchasePrice('');
-      setMinQuantity(String(defaultMinQuantity));
-      setIsSaving(false);
-    }
-  }, [open, initialName, defaultMinQuantity]);
-
-  // الرجوع و Escape يُغلقان النافذة وحدها (المستمع مركزي في modalStack)
-  useModalCloser(open, onClose, { label: 'إضافة مادة سريعة' });
-
-  if (!open) return null;
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();

@@ -3,7 +3,7 @@ import { Database, Download, Upload, HardDrive, Clock, FileJson, AlertTriangle, 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings } from '@/lib/db';
+import { db, getSettings, refreshSettings } from '@/lib/db';
 import {
   exportBackupToFile,
   importBackup,
@@ -20,11 +20,9 @@ import { useAsyncScope } from '@/hooks/useAsyncScope';
 import type { BackupSnapshot, OfficeSettings } from '@/types';
 
 export function Backup() {
-  const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState<number | null>(null);
-  const [stats, setStats] = useState({ materials: 0, customers: 0, invoices: 0, payments: 0, purchases: 0, totalSize: 0 });
   /* نطاق يُلغى عند مغادرة الشاشة: يمنع متابعة عمليات النسخ/الاستعادة على
      قاعدة بيانات أُغلقت، ويوقف مؤقت إعادة التحميل المعلّق. */
   const scope = useAsyncScope();
@@ -56,45 +54,35 @@ export function Backup() {
   const backups = useLiveQuery(() => db.backups.orderBy('date').reverse().toArray(), []);
   const snapshots = useLiveQuery(() => listSnapshots(), []);
 
-  const loadSettings = useCallback(async () => {
-    try {
-      const s = await getSettings();
-      setSettings(s || null);
-    } catch (error) {
-      reportError('Backup.settings', error, 'تعذّر تحميل الإعدادات');
-    }
-  }, []);
+  /**
+   * كل ما يعرضه هذا القسم يُقرأ عبر استعلامات حيّة مباشِرة من قاعدة
+   * البيانات بدل تحميل يدوي داخل تأثير مع حالة محلية:
+   *   - الأرقام تتحدّث تلقائياً بعد الاستيراد أو الاستعادة أو الحذف الكامل.
+   *   - لا تحديثات حالة متزامنة داخل تأثير (لا رسوم متتالية ولا نتائج قديمة).
+   */
+  const settings = (useLiveQuery(() => getSettings(), []) ?? null) as OfficeSettings | null;
 
-  const loadStats = useCallback(async () => {
+  const stats = useLiveQuery(async () => {
+    const [materials, customers, invoices, payments, purchases, invoiceItems, purchaseItems] = await Promise.all([
+      db.materials.count(),
+      db.customers.count(),
+      db.invoices.count(),
+      db.payments.count(),
+      db.purchases.count(),
+      db.invoiceItems.count(),
+      db.purchaseItems.count()
+    ]);
+    // تقدير الحجم من عدد السجلات بدل تصدير القاعدة كاملة في كل فتح للصفحة
+    const estimatedRows = materials + customers + invoices + payments + purchases + invoiceItems + purchaseItems;
+    let totalSize = estimatedRows * 220;
     try {
-      const [materials, customers, invoices, payments, purchases, invoiceItems, purchaseItems] = await Promise.all([
-        db.materials.count(),
-        db.customers.count(),
-        db.invoices.count(),
-        db.payments.count(),
-        db.purchases.count(),
-        db.invoiceItems.count(),
-        db.purchaseItems.count()
-      ]);
-      // تقدير الحجم من عدد السجلات بدل تصدير القاعدة كاملة في كل فتح للصفحة
-      const estimatedRows = materials + customers + invoices + payments + purchases + invoiceItems + purchaseItems;
-      let totalSize = estimatedRows * 220;
-      try {
-        const estimate = await navigator.storage?.estimate?.();
-        if (estimate?.usage) totalSize = estimate.usage;
-      } catch {
-        /* التقدير غير مدعوم — نستخدم الحساب التقريبي */
-      }
-      setStats({ materials, customers, invoices, payments, purchases, totalSize });
-    } catch (error) {
-      reportError('Backup.stats', error, 'تعذّر حساب حجم البيانات');
+      const estimate = await navigator.storage?.estimate?.();
+      if (estimate?.usage) totalSize = estimate.usage;
+    } catch {
+      /* التقدير غير مدعوم — نستخدم الحساب التقريبي */
     }
-  }, []);
-
-  useEffect(() => {
-    void loadSettings();
-    void loadStats();
-  }, [loadSettings, loadStats]);
+    return { materials, customers, invoices, payments, purchases, totalSize };
+  }, []) ?? { materials: 0, customers: 0, invoices: 0, payments: 0, purchases: 0, totalSize: 0 };
 
   const handleExport = async () => {
     if (isExporting) return;
@@ -102,8 +90,8 @@ export function Backup() {
     try {
       const fileName = await scope.run(() => exportBackupToFile('manual'));
       if (scope.aborted) return; // غادر المستخدم الشاشة: لا رسائل ولا تحديث حجم
+      // لا حاجة لتحديث يدوي للأرقام: استعلام الحجم حيّ ويُحدَّث تلقائياً
       toast.success('تم إنشاء النسخة الاحتياطية', `${fileName} — حُفظت في مجلد التنزيلات`);
-      void loadStats();
     } catch (error) {
       if (error instanceof Error && error.message === 'BACKUP_CANCELLED') {
         toast.info('أُلغي الحفظ', 'لم يتم اختيار مكان للحفظ');
@@ -122,7 +110,6 @@ export function Backup() {
         snapshot ? 'تم إنشاء نسخة داخلية' : 'لا توجد تغييرات',
         snapshot ? 'يمكن استعادتها من قائمة النسخ الداخلية' : 'البيانات لم تتغير منذ آخر نسخة'
       );
-      void loadStats();
     } catch (error) {
       reportError('Backup.snapshot', error, 'تعذّر إنشاء نسخة داخلية');
     }
@@ -237,6 +224,7 @@ export function Backup() {
           await db.meta.clear();
         }
       );
+      await refreshSettings(); // المخزن المشترك يعود فارغاً ⇒ يظهر معالج الإعداد
       toast.success('تم حذف جميع بيانات التطبيق', 'سيُعاد تشغيل معالج إعداد المكتب');
       scheduleReload(600);
     } catch (error) {
@@ -390,13 +378,15 @@ export function Backup() {
                         >
                           {backup.fileName}
                         </p>
-                        <p className="text-xs text-gray-500 flex items-center gap-2">
-                          {new Date(backup.date).toLocaleString('ar-EG')} 
+                        {/* div لا p: الشارة عنصر div، ووضعها داخل p يُنتج HTML غير صالح
+                            ويجعل المتصفح يعيد ترتيب الشجرة (تحذير React DOM nesting) */}
+                        <div className="text-xs text-gray-500 flex items-center gap-2">
+                          {new Date(backup.date).toLocaleString('ar-EG')}
                           <Badge variant={backup.type === 'auto' ? 'secondary' : backup.type === 'import' ? 'warning' : 'success'} className="text-[9px]">
                             {backup.type === 'auto' ? 'تلقائي' : backup.type === 'import' ? 'استيراد' : 'يدوي'}
                           </Badge>
                           {backup.size && <span>{(backup.size / 1024).toFixed(1)} KB</span>}
-                        </p>
+                        </div>
                       </div>
                     </div>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-red-600" onClick={() => handleDeleteBackupMeta(backup.id!)}><Trash2 className="w-4 h-4" /></Button>

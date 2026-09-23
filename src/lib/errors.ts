@@ -53,8 +53,9 @@ function isSuppressedError(error: unknown): boolean {
 /** تسجيل الخطأ وإظهاره للمستخدم، وإرجاع رسالة عربية جاهزة. */
 export function reportError(scope: string, error: unknown, title = 'تعذّر إتمام العملية'): string {
   if (isSuppressedError(error)) {
-    // لا تنبيه: العملية أُلغيت/انتهى عمر الشاشة. نكتفي بأثر تشخيصي هادئ.
-    console.warn(`[${scope}] أُلغيت العملية (إغلاق أو انتهاء عمر الشاشة)`, error)
+    // لا تنبيه ولا أثر في الطرفية: هذا حدث متوقع (إغلاق التطبيق أو مغادرة
+    // الشاشة) وليس عطلاً. طباعته كانت تملأ مخرجات الاختبارات وتشوّش تشخيص
+    // الأعطال الحقيقية. (المهام الخلفية تستخدم `logBackgroundFailure`.)
     return ''
   }
   const message = logError(scope, error)

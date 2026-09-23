@@ -1,3 +1,4 @@
+import { logBackgroundFailure } from './lifecycle';
 import { db, logActivity, createNotification, checkLowStock, getSettingsOrDefault } from './db';
 import { nextInvoiceNumber, nextReceiptNumber } from './sequence';
 import { formatCurrency, roundMoney, toFiniteNumber } from './utils';
@@ -338,17 +339,17 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
       `تم ${verb} الفاتورة ${result.invoiceNumber} للزبون ${customerName} بمبلغ ${formatCurrency(total, settings.currency)}`,
       'invoice',
       result.invoiceId
-    ).catch((error) => console.warn('تعذّر تسجيل النشاط:', error));
+    ).catch((error) => logBackgroundFailure('تعذّر تسجيل النشاط:', error));
 
     if (draft.type === 'credit' && total > 500000) {
       await createNotification(
         'فاتورة آجلة كبيرة',
         `فاتورة ${result.invoiceNumber} بمبلغ ${formatCurrency(total, settings.currency)} للزبون ${customerName}`,
         { type: 'info', relatedId: result.invoiceId, relatedType: 'invoice', code: 'large-credit-invoice' }
-      ).catch((error) => console.warn('تعذّر إنشاء الإشعار:', error));
+      ).catch((error) => logBackgroundFailure('تعذّر إنشاء الإشعار:', error));
     }
 
-    await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+    await checkLowStock().catch((error) => logBackgroundFailure('تعذّر فحص المخزون:', error));
   }
 
   return result;
@@ -486,9 +487,9 @@ export async function deleteInvoice(invoiceId: number): Promise<InvoiceDeleteRes
   }
 
   await logActivity('حذف فاتورة', `تم حذف الفاتورة: ${invoiceNumber}`, 'invoice', invoiceId).catch((error) =>
-    console.warn('تعذّر تسجيل النشاط:', error)
+    logBackgroundFailure('تعذّر تسجيل النشاط:', error)
   );
-  await checkLowStock().catch((error) => console.warn('تعذّر فحص المخزون:', error));
+  await checkLowStock().catch((error) => logBackgroundFailure('تعذّر فحص المخزون:', error));
 
   return { ok: true };
 }

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { isNativePlatform, getElectronAPI } from '@/lib/platform'
+import { initTheme } from '@/hooks/useTheme'
 import './index.css'
 
 /**
@@ -33,6 +34,9 @@ function registerServiceWorker(): void {
       console.warn('تعذّر تحميل مُسجِّل عامل الخدمة — سيكمل التطبيق العمل بشكل طبيعي.', error)
     })
 }
+
+// السمة تُطبَّق قبل أول رسم (كانت تُقرأ داخل تأثير فتُسبب وميضاً عند الإقلاع)
+initTheme()
 
 registerServiceWorker()
 

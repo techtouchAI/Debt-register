@@ -5,16 +5,24 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, logActivity } from '@/lib/db';
+import { db, getSettings } from '@/lib/db';
 import { getCustomerBalances } from '@/lib/debts';
+import {
+  checkCustomerDeletion,
+  deleteCustomer,
+  saveCustomer,
+  type CustomerDeletionBlock
+} from '@/lib/customers';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useAsyncScope } from '@/hooks/useAsyncScope';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, roundMoney } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { reportError } from '@/lib/errors';
+import { guard } from '@/lib/errors';
 import { Customer } from '@/types';
 
 export function Customers() {
+  const scope = useAsyncScope();
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
@@ -45,47 +53,47 @@ export function Customers() {
 
   // الأرصدة تُحسب بمرور واحد وتتحدث تلقائياً مع أي فاتورة أو تسديد جديد
   const balances = useLiveQuery(() => getCustomerBalances(), []);
+  const currency = settings?.currency || 'د.ع';
   const debts: Record<number, number> = {};
   if (balances) {
     for (const [customerId, balance] of balances) debts[customerId] = balance.debt;
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.fullName?.trim()) {
-      toast.warning('اسم الزبون مطلوب', 'أدخل الاسم الكامل قبل الحفظ');
-      return;
-    }
+  /**
+   * الحفظ يمرّ عبر `saveCustomer` (التحقق والقواعد في مكان واحد) وداخل نطاق
+   * الشاشة؛ فإن غادر المستخدم الشاشة قبل انتهاء الكتابة أُلغيت العملية بدل
+   * تحديث واجهة لم تعد موجودة.
+   */
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const editingId = editing?.id;
 
-    const now = new Date().toISOString();
-    const customerData: Customer = {
-      fullName: formData.fullName.trim(),
-      phone: formData.phone?.trim(),
-      address: formData.address?.trim(),
-      notes: formData.notes?.trim(),
-      createdAt: editing?.createdAt || now,
-      updatedAt: now
-    };
+    await guard(
+      'Customers.save',
+      async () => {
+        const result = await scope.run(() =>
+          saveCustomer(
+            {
+              fullName: formData.fullName ?? '',
+              phone: formData.phone,
+              address: formData.address,
+              notes: formData.notes
+            },
+            editingId
+          )
+        );
 
-    try {
-      if (editing?.id) {
-        await db.customers.update(editing.id, customerData);
-        await logActivity('تعديل زبون', `تم تعديل بيانات الزبون: ${customerData.fullName}`, 'customer', editing.id).catch((error) =>
-          console.warn('تعذّر تسجيل نشاط الزبون:', error)
-        );
-        toast.success('تم تحديث بيانات الزبون', customerData.fullName);
-      } else {
-        const id = (await db.customers.add(customerData)) as number;
-        await logActivity('إضافة زبون', `تمت إضافة زبون جديد: ${customerData.fullName}`, 'customer', id).catch((error) =>
-          console.warn('تعذّر تسجيل نشاط الزبون:', error)
-        );
-        toast.success('تمت إضافة الزبون', customerData.fullName);
-      }
-      closeForm();
-      setFormData({ fullName: '', phone: '', address: '', notes: '' });
-    } catch (error) {
-      reportError('Customers.save', error, 'حدث خطأ أثناء الحفظ');
-    }
+        if (!result.ok) {
+          toast.warning('تحقّق من البيانات', result.error);
+          return;
+        }
+
+        toast.success(editingId ? 'تم تحديث بيانات الزبون' : 'تمت إضافة الزبون', result.customer.fullName);
+        closeForm();
+        setFormData({ fullName: '', phone: '', address: '', notes: '' });
+      },
+      'حدث خطأ أثناء الحفظ'
+    );
   };
 
   const handleEdit = (customer: Customer) => {
@@ -94,34 +102,48 @@ export function Customers() {
     setShowForm(true);
   };
 
+  /** صياغة رسالة المنع انطلاقاً من سبب القادم من طبقة العمل. */
+  const describeBlock = (block: CustomerDeletionBlock): [string, string] => {
+    if (block.reason === 'has-debt') {
+      return ['لا يمكن الحذف', `الزبون مدين بمبلغ ${formatCurrency(block.debt, currency)}. يجب تسديد الدين أولاً.`];
+    }
+    if (block.reason === 'has-records') {
+      return [
+        'لا يمكن حذف الزبون',
+        `لديه ${block.invoices} فاتورة و${block.payments} تسديد. إبقاء السجل يحافظ على سلامة كشف الحساب.`
+      ];
+    }
+    return ['الزبون غير موجود', 'ربما حُذف من نافذة أخرى؛ أعد تحميل القائمة.'];
+  };
+
   const handleDelete = async (customer: Customer) => {
-    if (!customer.id) return;
-    const debt = debts[customer.id] || 0;
-    if (debt > 0) {
-      toast.warning('لا يمكن الحذف', `الزبون "${customer.fullName}" مدين بمبلغ ${formatCurrency(debt, settings?.currency)}. يجب تسديد الدين أولاً.`);
-      return;
-    }
+    const customerId = customer.id;
+    if (!customerId) return;
 
-    try {
-      const invoicesCount = await db.invoices.where('customerId').equals(customer.id).count();
-      const paymentsCount = await db.payments.where('customerId').equals(customer.id).count();
-      if (invoicesCount > 0 || paymentsCount > 0) {
-        toast.warning(
-          'لا يمكن حذف الزبون',
-          `لديه ${invoicesCount} فاتورة و${paymentsCount} تسديد. إبقاء السجل يحافظ على سلامة كشف الحساب.`
-        );
-        return;
-      }
-      if (!confirm(`هل أنت متأكد من حذف الزبون "${customer.fullName}" نهائياً؟`)) return;
+    await guard(
+      'Customers.delete',
+      async () => {
+        // فحص أولي لعرض السبب قبل سؤال المستخدم، ثم حذف يعيد الفحص داخل
+        // معاملة واحدة، فلا توجد فجوة زمنية بين الفحص والحذف.
+        const check = await scope.run(() => checkCustomerDeletion(customerId));
+        if (!check.ok) {
+          const [title, body] = describeBlock(check);
+          toast.warning(title, body);
+          return;
+        }
 
-      await db.customers.delete(customer.id);
-      await logActivity('حذف زبون', `تم حذف الزبون: ${customer.fullName}`, 'customer', customer.id).catch((error) =>
-        console.warn('تعذّر تسجيل نشاط الزبون:', error)
-      );
-      toast.success('تم حذف الزبون', customer.fullName);
-    } catch (error) {
-      reportError('Customers.delete', error, 'حدث خطأ أثناء الحذف');
-    }
+        if (!confirm(`هل أنت متأكد من حذف الزبون "${check.customer.fullName}" نهائياً؟`)) return;
+
+        const result = await scope.run(() => deleteCustomer(customerId));
+        if (!result.ok) {
+          const [title, body] = describeBlock(result);
+          toast.warning(title, body);
+          return;
+        }
+        toast.success('تم حذف الزبون', result.customer.fullName);
+      },
+      'حدث خطأ أثناء الحذف'
+    );
   };
 
   const totalDebt = roundMoney(Object.values(debts).reduce((sum, debt) => sum + (debt > 0 ? debt : 0), 0));
