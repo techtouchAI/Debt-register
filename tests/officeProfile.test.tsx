@@ -31,7 +31,7 @@ beforeEach(() => {
 });
 
 async function waitForSetup() {
-  await waitFor(() => expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeTruthy(), {
+  await waitFor(() => expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب/)).toBeTruthy(), {
     timeout: 5000
   });
 }
@@ -100,7 +100,7 @@ describe('معالج التشغيل الأول لا يمكن تخطيه', () => 
     expect(document.activeElement).toBe(byId('setup-phone'));
     // لم يُحفظ شيء والمعالج ما زال ظاهراً
     expect((await getSettings())?.officeName).toBe('');
-    expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeTruthy();
+    expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب/)).toBeTruthy();
     // النص المكتوب لم يُمس
     expect(byId('setup-officeName').value).toBe('مكتب الرافدين');
   });
@@ -126,7 +126,7 @@ describe('معالج التشغيل الأول لا يمكن تخطيه', () => 
     change(byId('setup-address'), 'الأنبار - الكرمة');
     fireEvent.click(screen.getByText(/حفظ وبدء استخدام النظام/));
 
-    await waitFor(() => expect(screen.getByText('مرحباً بك في مكتب الكرمة الزراعي 🌾')).toBeTruthy(), {
+    await waitFor(() => expect(screen.getByText('مرحباً بك في مكتب الكرمة الزراعي')).toBeTruthy(), {
       timeout: 5000
     });
     const saved = await getSettings();

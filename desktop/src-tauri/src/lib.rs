@@ -16,5 +16,5 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_notification::init())
         .run(tauri::generate_context!())
-        .expect("error while running the agricultural office application");
+        .expect("error while running the office manager application");
 }

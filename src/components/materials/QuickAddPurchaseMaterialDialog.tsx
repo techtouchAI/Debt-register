@@ -104,12 +104,12 @@ function QuickAddPurchaseMaterialForm({
           <form onSubmit={submit} className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-1 block">اسم المادة *</label>
-              <Input value={name} onChange={(event) => setName(event.target.value)} autoFocus required placeholder="مثلاً: سماد يوريا" />
+              <Input value={name} onChange={(event) => setName(event.target.value)} autoFocus required placeholder="اكتب اسم المادة" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">الفئة</label>
-                <Input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="أسمدة، مبيدات..." />
+                <Input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="اكتب الفئة" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">الوحدة</label>

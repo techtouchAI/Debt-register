@@ -15,7 +15,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,6 +55,34 @@ async function readJson(relativePath) {
 
 async function readText(relativePath) {
   return readFile(join(repoRoot, relativePath), 'utf8');
+}
+
+/**
+ * كل حِزم `@capacitor/*` التي تستوردها شيفرة التطبيق.
+ *
+ * أداة Capacitor تسجّل الإضافات الأصلية في مشروع أندرويد انطلاقاً من
+ * `dependencies` و`devDependencies` فقط (getDependencies في @capacitor/cli).
+ * أي إضافة أصلية خارج هاتين القائمتين — ولو كانت في `optionalDependencies` —
+ * لا يراها `cap sync`، فلا تُبنى داخل الـ APK، وينفّذ النظام سلوكه الافتراضي.
+ * هذا بالضبط ما جعل زر الرجوع يُنهي التطبيق فوراً: بلا `AppPlugin` لا يوجد
+ * `OnBackPressedCallback` مسجَّل، فيستدعي النظام `finish()`.
+ */
+async function capacitorPackagesImportedBySource() {
+  const found = new Set();
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+      const text = await readFile(full, 'utf8');
+      for (const match of text.matchAll(/from '(@capacitor\/[a-z-]+)'/g)) found.add(match[1]);
+    }
+  };
+  await walk(join(repoRoot, 'src'));
+  return [...found].sort();
 }
 
 async function main() {
@@ -134,6 +162,57 @@ async function main() {
     'صلاحية التخزين صريحة في إعداد Capacitor',
     capacitor.plugins?.Filesystem?.androidRequestPermissions === true
   );
+  const capacitorImports = await capacitorPackagesImportedBySource();
+  const capSyncVisible = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.devDependencies ?? {})
+  ]);
+  const optionalDeps = new Set(Object.keys(pkg.optionalDependencies ?? {}));
+  check(
+    'كل إضافة @capacitor يستوردها الكود مُعلنة في dependencies/devDependencies (يرى cap sync الإضافات هناك فقط)',
+    capacitorImports.length > 0 && capacitorImports.every((name) => capSyncVisible.has(name))
+  );
+  check(
+    'إضافات الرجوع والملفات والإشعارات ليست في optionalDependencies (كانت تُسقط تسجيل الإضافات كلياً)',
+    ['@capacitor/app', '@capacitor/core', '@capacitor/android', '@capacitor/filesystem', '@capacitor/local-notifications', '@capacitor/share'].every(
+      (name) => !optionalDeps.has(name)
+    )
+  );
+  const mainTsx = await readText('src/main.tsx');
+  const nativeBridge = await readText('src/lib/nativeBridge.ts');
+  const backHandlers = await readText('src/components/BackNavigationHandler.tsx');
+  check(
+    'حارس الرجوع الأصلي مثبَّت قبل رسم الواجهة (لا خروج أثناء الإقلاع)',
+    /installNativeBackGuard\(\)/.test(mainTsx) && /export function installNativeBackGuard/.test(nativeBridge)
+  );
+  check(
+    'الرجوع الأصلي يستخدم واجهة @capacitor/app الرسمية (backButton)',
+    /App\.addListener\('backButton'/.test(nativeBridge) && /Capacitor\.isNativePlatform\(\)/.test(nativeBridge)
+  );
+  check(
+    'معالج الرجوع قبل الموجّه موجود (شاشة الإقلاع/التشغيل الأول)',
+    /export function BootBackHandler/.test(backHandlers) && /BootBackHandler/.test(appTsx)
+  );
+  // مشروع أندرويد مولَّد محلياً (بعد cap sync): يجب أن تكون الإضافات مسجَّلة فعلاً
+  const generatedPlugins = await readText('android/app/src/main/assets/capacitor.plugins.json');
+  if (generatedPlugins !== null) {
+    let plugins = [];
+    try {
+      plugins = JSON.parse(generatedPlugins);
+    } catch {
+      plugins = [];
+    }
+    const registered = new Set(plugins.map((entry) => entry?.classpath ?? ''));
+    check(
+      'مشروع أندرويد المولَّد يسجّل AppPlugin (زر الرجوع) وليس قائمة فارغة',
+      plugins.length > 0 && registered.has('com.capacitorjs.plugins.app.AppPlugin')
+    );
+    const buildGradle = (await readText('android/app/capacitor.build.gradle')) ?? '';
+    check(
+      'Gradle يبني إضافة الرجوع داخل الـ APK (:capacitor-app)',
+      /implementation project\(':capacitor-app'\)/.test(buildGradle)
+    );
+  }
   check('سكربت التجهيز يضيف صلاحية الإشعارات', /POST_NOTIFICATIONS/.test(prepareAndroid));
   check('سكربت التجهيز يمنع النص الصريح', /usesCleartextTraffic/.test(prepareAndroid));
   check('سكربت التجهيز يكتب أيقونة الإشعارات', /ic_stat_agri/.test(prepareAndroid));
@@ -212,7 +291,15 @@ async function main() {
   check('اختبار دخان إلكترون يعمل فعلياً', /electron \. --smoke-test/.test(workflow));
   check('مهمة Tauri تبنى حزم أصلية (deb/AppImage على لينكس)', /--bundles deb,appimage/.test(workflow));
   check('مهمة Tauri تبنى حزم أصلية (msi/nsis على ويندوز)', /--bundles msi,nsis/.test(workflow));
-  check('مهمة ويندوز تشغّل النسخة المحمولة فعلياً (اختبار دخان)', /AgriOffice-Portable-\*\.exe/.test(workflow) && /--smoke-test/.test(workflow));
+  check(
+    'مهمة أندرويد تتحقق من تسجيل الإضافات الأصلية بعد cap sync (AppPlugin لزر الرجوع)',
+    /capacitor\.plugins\.json/.test(workflow) && /com\.capacitorjs\.plugins\.app\.AppPlugin/.test(workflow)
+  );
+  check(
+    'مهمة أندرويد تتحقق من وجود AppPlugin داخل الـ APK المبني',
+    /capacitor\.plugins\.json/.test(workflow) && /AppPlugin/.test(workflow)
+  );
+  check('مهمة ويندوز تشغّل النسخة المحمولة فعلياً (اختبار دخان)', /OfficeManager-Portable-\*\.exe/.test(workflow) && /--smoke-test/.test(workflow));
   check('مهمة ويندوز تثبّت المثبّت صامتاً وتتحقق من التثبيت', /Uninstall\*\.exe|\/S'/.test(workflow));
   check('تدقيق أمني للاعتماديات', /npm audit --audit-level=high/.test(workflow));
 

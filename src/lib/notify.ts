@@ -15,6 +15,13 @@ import { getElectronAPI } from './platform';
  *  - المتصفح: Web Notifications API عند توفرها والإذن ممنوح.
  */
 
+/**
+ * اسم التطبيق الظاهر في الإشعارات التي لا تحمل عنواناً صريحاً.
+ * اسم عام لا يرتبط بنشاط بعينه (مكتب/سوبر ماركت/أي نشاط) — والمستخدم هو من
+ * يختار اسم مكتبه في الإعدادات، وهذا يظهر فقط كعنوان احتياطي للإشعارات.
+ */
+const APP_NAME = 'إدارة المكتب';
+
 const CHANNEL_ID = 'agri-office-default';
 
 let channelReady = false;
@@ -40,7 +47,7 @@ async function ensureAndroidChannel(): Promise<void> {
   try {
     await LocalNotifications.createChannel({
       id: CHANNEL_ID,
-      name: 'تنبيهات المكتب الزراعي',
+      name: 'تنبيهات المكتب',
       description: 'تنبيهات المخزون والديون والنسخ الاحتياطي',
       importance: 4, // HIGH: صوت + ظهور في الشريط
       visibility: 1, // PUBLIC
@@ -142,7 +149,7 @@ function nextNotificationId(): number {
  * تحسين إضافي وليس جزءاً حرجاً من حفظ البيانات.
  */
 export async function sendSystemNotification(title: string, message: string): Promise<boolean> {
-  const safeTitle = String(title || 'المكتب الزراعي').slice(0, 100);
+  const safeTitle = String(title || APP_NAME).slice(0, 100);
   const safeBody = String(message || '').slice(0, 300);
 
   // 1) أندرويد أصلي

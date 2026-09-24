@@ -119,7 +119,7 @@ export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
             <div className="w-16 h-16 rounded-2xl bg-white/15 backdrop-blur flex items-center justify-center mx-auto mb-4">
               <Store className="w-8 h-8" />
             </div>
-            <h1 className="text-2xl font-bold mb-2">مرحباً بك في نظام إدارة المكتب الزراعي 🌾</h1>
+            <h1 className="text-2xl font-bold mb-2">مرحباً بك في نظام إدارة المكتب</h1>
             <p className="text-white/80 text-sm leading-relaxed max-w-lg mx-auto">
               قبل البدء، أدخل بيانات مكتبك (جميع الحقول المعلَّمة بـ * إلزامية) — ستظهر هذه البيانات في ترويسة كل فاتورة ووصل قبض.
               يمكنك تعديلها لاحقاً من صفحة الإعدادات.

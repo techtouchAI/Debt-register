@@ -46,7 +46,7 @@ export function Notifications() {
     try {
       await createNotification(
         'إشعار تجريبي',
-        'هذا إشعار تجريبي من نظام المكتب الزراعي — يظهر داخل التطبيق وفي شريط النظام',
+        'هذا إشعار تجريبي من التطبيق — يظهر داخل التطبيق وفي شريط النظام',
         { type: 'info', relatedType: 'system', code: 'test-notification' }
       );
       toast.success('تم إرسال إشعار تجريبي');

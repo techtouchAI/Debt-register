@@ -1,6 +1,6 @@
 {
   "appId": "com.agrioffice.debtregister",
-  "appName": "إدارة المكتب الزراعي",
+  "appName": "إدارة المكتب",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"

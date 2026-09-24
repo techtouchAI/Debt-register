@@ -101,7 +101,7 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
   it('يُحفظ كاملاً ويظهر كاملاً في التخطيط بعد إعادة تشغيل التطبيق', async () => {
     // التشغيل الأول: لا يوجد اسم مكتب بعد
     render(<App />);
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeTruthy(), {
+    await waitFor(() => expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب/)).toBeTruthy(), {
       timeout: 5000
     });
 
@@ -119,7 +119,7 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     // يظهر الاسم كاملاً في الترحيب
     await waitFor(
       () => {
-        expect(screen.getByText(`مرحباً بك في ${LONG_NAME} 🌾`)).toBeTruthy();
+        expect(screen.getByText(`مرحباً بك في ${LONG_NAME}`)).toBeTruthy();
       },
       { timeout: 5000 }
     );
@@ -141,10 +141,10 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     cleanup();
     await new Promise((resolve) => setTimeout(resolve, 0));
     render(<App />);
-    await waitFor(() => expect(screen.getByText(`مرحباً بك في ${LONG_NAME} 🌾`)).toBeTruthy(), {
+    await waitFor(() => expect(screen.getByText(`مرحباً بك في ${LONG_NAME}`)).toBeTruthy(), {
       timeout: 5000
     });
-    expect(screen.queryByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeNull();
+    expect(screen.queryByText(/مرحباً بك في نظام إدارة المكتب/)).toBeNull();
     // بعد إعادة التركيب أيضاً: ننتظر التخطيط بدل افتراض جهوزيته الفورية
     await waitFor(
       () => {
@@ -208,7 +208,7 @@ describe('اسم ملف النسخة الاحتياطية مع اسم مكتب �
     expect(fileName).toMatch(/_Backup_2026-05-03_09-08-07\.json$/);
     // يبدأ ببداية اسم المكتب الحقيقي (لا اسم عام)
     expect(fileName.startsWith('مكتب الرافدين')).toBe(true);
-    expect(fileName).not.toContain('AgriOffice_Backup');
+    expect(fileName).not.toContain('Office_Backup');
 
     // الاسم الكامل يبقى في محتوى الملف ولو طال
     expect(backupFileName(LONG_NAME_200, date).endsWith('_Backup_2026-05-03_09-08-07.json')).toBe(true);
@@ -220,7 +220,7 @@ describe('اسم ملف النسخة الاحتياطية مع اسم مكتب �
     expect(backupFileName('مكتب الرافدين الزراعي', date)).toBe(
       'مكتب الرافدين الزراعي_Backup_2026-05-03_09-08-07.json'
     );
-    expect(backupFileName('', date)).toBe('AgriOffice_Backup_2026-05-03_09-08-07.json');
+    expect(backupFileName('', date)).toBe('Office_Backup_2026-05-03_09-08-07.json');
   });
 
   it('اسم ملف الاستيراد محدود أيضاً بالبايتات', () => {

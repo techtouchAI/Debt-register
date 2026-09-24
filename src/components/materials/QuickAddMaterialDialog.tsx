@@ -118,13 +118,13 @@ function QuickAddMaterialForm({
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-1 block">اسم المادة *</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثلاً: مبيد عناكب، سماد يوريا..." required autoFocus />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="اكتب اسم المادة" required autoFocus />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">الفئة</label>
-                <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="مبيدات، أسمدة..." />
+                <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="اكتب الفئة" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">الوحدة</label>

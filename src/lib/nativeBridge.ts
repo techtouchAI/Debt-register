@@ -87,3 +87,60 @@ export async function subscribeNativeBack(
     return undefined;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * المعالج النشط + الحارس المبكر
+ * ------------------------------------------------------------------ */
+
+/**
+ * آلية القرار الواحد (Single Source of Back Handling):
+ *
+ *   - `setActiveNativeBackHandler` يسجّله المعالج الكامل (المدرك للمسار
+ *     والطبقات) عند تركيبه.
+ *   - `installNativeBackGuard` يشترك في حدث الرجوع **من أول لحظة في عمر
+ *     التطبيق** (قبل رسم React)، فلا تبقى هناك لحظة يستطيع فيها زر الرجوع
+ *     أن ينفّذ السلوك الافتراضي للمنصة (إنهاء النشاط على أندرويد).
+ *
+ * لماذا الحارس المبكر؟ على أندرويد يتصرّف `AppPlugin` هكذا: إن وُجد مستمع
+ * JS واحد على الأقل لحدث `backButton` مرّر الضغطة إليه ولم يُنهِ التطبيق؛
+ * وإن لم يوجد أي مستمع، تصرّف بنفسه (رجوع WebView أو إنهاء). فوجود مستمع
+ * مبكر = لا إنهاء للتطبيق قبل أن تصبح الواجهة جاهزة للقرار.
+ *
+ * لا تكرار في المعالجة: الحارس لا يتصرّف إطلاقاً عندما يكون المعالج النشط
+ * مسجّلاً — القرار يبقى في مكان واحد دائماً.
+ */
+export type NativeBackHandler = () => void;
+
+let activeHandler: NativeBackHandler | null = null;
+let guardInstalled = false;
+
+/** يسجّل المعالج الكامل للرجوع (أو `null` عند إلغاء تركيبه). */
+export function setActiveNativeBackHandler(handler: NativeBackHandler | null): void {
+  activeHandler = handler;
+}
+
+/** هل المعالج الكامل مدرك للتركيب حالياً؟ */
+export function hasActiveNativeBackHandler(): boolean {
+  return activeHandler !== null;
+}
+
+/**
+ * يثبّت حارساً مبكراً على حدث الرجوع الأصلي (يُستدعى مرة واحدة عند الإقلاع).
+ * وجوده وحده يمنع المنصة من إنهاء التطبيق؛ ويتفوّض للمعالج النشط إن وُجد.
+ */
+export function installNativeBackGuard(): void {
+  if (guardInstalled) return;
+  guardInstalled = true;
+  void subscribeNativeBack(() => {
+    // المعالج النشط يتولّى القرار (وهو أيضاً مستمع مسجّل لدى المنصة).
+    if (activeHandler) return;
+    // لا معالج بعد (شاشة الإقلاع/معالج التشغيل الأول): نستهلك الضغطة
+    // بلا إنهاء — لا يخرج التطبيق إلا بقرار صريح من المستخدم.
+  });
+}
+
+/** إعادة حالة الحارس والمعالج النشط — للاختبارات فقط. */
+export function resetNativeBackGuardForTests(): void {
+  activeHandler = null;
+  guardInstalled = false;
+}

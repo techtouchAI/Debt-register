@@ -257,7 +257,7 @@ export function Backup() {
                   <h3 className="font-bold text-primary-800 dark:text-primary-300 flex items-center gap-2"><Download className="w-4 h-4" />تصدير نسخة احتياطية</h3>
                   <p className="text-xs text-primary-700 dark:text-primary-400 mt-2 leading-relaxed">
                     يتم حفظ ملف JSON يحتوي على جميع بياناتك في مجلد التحميلات مع اسم المكتب والتاريخ:<br/>
-                    <code className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded text-[11px] mt-1 inline-block">المكتب_الزراعي_Backup_2024-01-15_14-30-00.json</code>
+                    <code className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded text-[11px] mt-1 inline-block">اسم_المكتب_Backup_2024-01-15_14-30-00.json</code>
                   </p>
                   <Button onClick={handleExport} disabled={isExporting} className="w-full mt-4 bg-primary-600 hover:bg-primary-700">
                     {isExporting ? 'جاري التصدير...' : <><Download className="w-4 h-4 ml-2" />تصدير الآن إلى التحميلات</>}
