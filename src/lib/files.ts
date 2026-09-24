@@ -12,7 +12,7 @@ import { sendSystemNotification } from './notify';
  * أندرويد — فيضغط المستخدم زر الحفظ/التخزين ولا يحدث شيء إطلاقاً.
  *
  * التصميم الجديد لكل منصة:
- *  - أندرويد: كتابة الملف عبر Filesystem الرسمية (مجلد AgriOffice داخل
+ *  - أندرويد: كتابة الملف عبر Filesystem الرسمية (مجلد OfficeManager داخل
  *    المستندات، ثم بدائل آمنة)، وبعدها فتح نافذة المشاركة الأصلية ليحفظ
  *    المستخدم الملف في التنزيلات أو يرسله واتساب/إيميل، مع إشعار نظام يوضح
  *    مكان الملف. هذا هو السلوك المعتمد لأندرويد 10+ (Scoped Storage).
@@ -44,7 +44,7 @@ export interface SaveFileResult {
   error?: string;
 }
 
-const APP_FOLDER = 'AgriOffice';
+const APP_FOLDER = 'OfficeManager';
 
 function isNative(): boolean {
   try {

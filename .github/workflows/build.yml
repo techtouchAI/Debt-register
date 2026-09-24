@@ -75,11 +75,11 @@ jobs:
             exit 1
           fi
       - name: Package web artifact
-        run: (cd dist && zip -qr ../AgriOffice-Web-PWA.zip .)
+        run: (cd dist && zip -qr ../OfficeManager-Web-PWA.zip .)
       - uses: actions/upload-artifact@v4
         with:
-          name: AgriOffice-Web-PWA
-          path: AgriOffice-Web-PWA.zip
+          name: OfficeManager-Web-PWA
+          path: OfficeManager-Web-PWA.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -212,13 +212,13 @@ jobs:
           "$ZIPALIGN" -f 4 "$UNSIGNED" artifacts/android/aligned.apk
           "$APKSIGNER" sign --ks release.jks --ks-key-alias "$ALIAS" \
             --ks-pass "pass:$STOREPASS" --key-pass "pass:$KEYPASS" \
-            --out artifacts/android/AgriOffice-Android.apk artifacts/android/aligned.apk
-          "$APKSIGNER" verify --verbose artifacts/android/AgriOffice-Android.apk
+            --out artifacts/android/OfficeManager-Android.apk artifacts/android/aligned.apk
+          "$APKSIGNER" verify --verbose artifacts/android/OfficeManager-Android.apk
           echo "signed with: $KEYMODE" >> "$GITHUB_STEP_SUMMARY"
       - name: التحقق من الصلاحيات والأيقونة والمزوّد داخل APK المبني
         run: |
           set -euo pipefail
-          APK=artifacts/android/AgriOffice-Android.apk
+          APK=artifacts/android/OfficeManager-Android.apk
           AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)"
 
           # تحقق صريح يطبع ما يبحث عنه عند الفشل، بدل grep صامت يفشل بلا سبب واضح
@@ -268,8 +268,8 @@ jobs:
           require apk-entries.txt 'assets/public/index\.html' 'واجهة الويب داخل الحزمة'
       - uses: actions/upload-artifact@v4
         with:
-          name: AgriOffice-Android
-          path: artifacts/android/AgriOffice-Android.apk
+          name: OfficeManager-Android
+          path: artifacts/android/OfficeManager-Android.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -354,7 +354,7 @@ jobs:
           Write-Host '✔ مثبّت ويتعامل مع البيانات كما هو متوقع (تبقى بعد إلغاء التثبيت)'
       - uses: actions/upload-artifact@v4
         with:
-          name: AgriOffice-Windows
+          name: OfficeManager-Windows
           path: artifacts/windows/*.exe
           if-no-files-found: error
           retention-days: 30
@@ -422,7 +422,9 @@ jobs:
 
           TMP="$(mktemp -d)"
           dpkg-deb -x "$DEB" "$TMP"
-          BIN="$(find "$TMP" -type f -perm -u+x -name 'agro-office*' -print -quit)"
+          # اسم الثنائي يأتي من productName في tauri.conf.json؛ نقبل الاسمين حتى لا
+          # يتعلق التحقق باسم العرض (قد يتغيّر مستقبلاً بلا علاقة بالبناء).
+          BIN="$(find "$TMP" -type f -perm -u+x \( -name 'agro-office*' -o -name 'office-manager*' \) -print -quit)"
           test -n "$BIN"
           echo "binary=$BIN size=$(stat -c%s "$BIN")"
           for ASSET in "$ASSET_JS" "$ASSET_CSS" index.html; do
@@ -445,7 +447,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: AgriOffice-Tauri-Linux
+          name: OfficeManager-Tauri-Linux
           path: |
             desktop/src-tauri/target/release/bundle/deb/*.deb
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage
@@ -480,7 +482,7 @@ jobs:
           if (-not ($bundles | Where-Object { $_.Extension -eq '.exe' })) { Write-Error 'لم يُنتج Tauri حزمة nsis' }
       - uses: actions/upload-artifact@v4
         with:
-          name: AgriOffice-Tauri-Windows
+          name: OfficeManager-Tauri-Windows
           path: |
             desktop/src-tauri/target/release/bundle/msi/*.msi
             desktop/src-tauri/target/release/bundle/nsis/*.exe
