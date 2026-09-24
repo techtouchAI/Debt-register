@@ -14,23 +14,55 @@ const FRIENDLY_MESSAGES: { test: RegExp | ((error: Error) => boolean); message: 
   { test: /QuotaExceededError|quota/i, message: 'مساحة التخزين ممتلئة. احذف بعض النسخ الاحتياطية أو بيانات المتصفح ثم أعد المحاولة.' },
   { test: /ConstraintError/i, message: 'البيانات المكررة غير مسموحة (رقم أو اسم مستخدم مسجّل مسبقاً).' },
   { test: /DataError/i, message: 'قيمة غير صالحة في أحد الحقول.' },
-  { test: /NotFoundError|no such object store|One of the specified object stores was not found/i, message: 'بنية قاعدة البيانات غير مكتملة. أعد تحميل التطبيق ليتم تحديثها.' },
+  { test: /NotFoundError|no such object store|One of the specified object stores was not found|not found|404/i, message: 'العنصر أو بنية قاعدة البيانات غير موجودة.' },
   { test: /VersionError|upgrade/i, message: 'تعذّر ترقية قاعدة البيانات. أغلق بقية نوافذ التطبيق وأعد تشغيله.' },
   { test: /InvalidAccessError|The database connection is closing|database is closed/i, message: 'انقطع الاتصال بقاعدة البيانات. أعد تحميل الصفحة.' },
-  { test: /TransactionInactiveError|TimeoutError/i, message: 'انتهت مهلة العملية. أعد المحاولة.' },
-  { test: /NetworkError|Failed to fetch/i, message: 'تعذّر إتمام العملية. التطبيق يعمل دون إنترنت، تحقق من التخزين المحلي.' }
+  { test: /TransactionInactiveError|TimeoutError|timeout/i, message: 'انتهت مهلة العملية. أعد المحاولة.' },
+  { test: /NetworkError|Failed to fetch|network/i, message: 'لا يوجد اتصال بالشبكة أو تعذّر إتمام العملية محلياً.' },
+  { test: /unauthorized|401|forbidden|403/i, message: 'غير مصرح لك بإجراء هذه العملية.' }
 ]
 
-export function describeError(error: unknown): string {
-  if (error instanceof Error) {
-    const matched = FRIENDLY_MESSAGES.find((entry) =>
-      typeof entry.test === 'function' ? entry.test(error) : entry.test.test(`${error.name} ${error.message}`)
-    )
-    if (matched) return matched.message
-    return error.message || 'حدث خطأ غير متوقع'
+/**
+ * فلتر وترجمة الرسائل والأخطاء الإنجليزية إلى رسائل عربية واضحة ومباشرة.
+ */
+export function getArabicErrorMessage(error: unknown): string {
+  if (!error) return 'حدث خطأ غير متوقع';
+
+  const raw =
+    error instanceof Error
+      ? `${error.name} ${error.message}`
+      : typeof error === 'string'
+        ? error
+        : String((error as { message?: string })?.message || error);
+
+  const matched = FRIENDLY_MESSAGES.find((entry) =>
+    entry.test instanceof RegExp
+      ? entry.test.test(raw)
+      : error instanceof Error
+        ? entry.test(error)
+        : false
+  );
+
+  if (matched) return matched.message;
+
+  const lower = raw.toLowerCase().trim();
+  if (lower.includes('network') || lower.includes('fetch')) return 'لا يوجد اتصال بالشبكة';
+  if (lower.includes('timeout')) return 'انتهى وقت الاتصال';
+  if (lower.includes('unauthorized') || lower.includes('401')) return 'غير مصرح لك بإجراء هذه العملية';
+  if (lower.includes('not found') || lower.includes('404')) return 'العنصر غير موجود';
+  if (lower === 'cancelled') return 'تم إلغاء العملية';
+  if (lower.includes('success')) return 'تمت العملية بنجاح';
+
+  // إذا كانت الرسالة بالإنجليزية (أغلبها أحرف لاتينية قياسية)، استبدالها برسالة عربية
+  if (/^[a-z0-9_\-\s:.,!?()]+$/i.test(lower)) {
+    return 'حدث خطأ غير متوقع، يرجى المحاولة لاحقاً';
   }
-  if (typeof error === 'string' && error.trim()) return error
-  return 'حدث خطأ غير متوقع'
+
+  return raw || 'حدث خطأ غير متوقع';
+}
+
+export function describeError(error: unknown): string {
+  return getArabicErrorMessage(error)
 }
 
 export function logError(scope: string, error: unknown): string {

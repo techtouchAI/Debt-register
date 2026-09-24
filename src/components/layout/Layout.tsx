@@ -204,8 +204,16 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
               <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
 
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-sm">
-                  م
+                <div className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-sm shrink-0 border border-primary-600/30">
+                  {settings?.logo ? (
+                    <img
+                      src={settings.logo}
+                      alt={settings.officeName || 'شعار المكتب'}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span>{settings?.officeName ? settings.officeName.trim().charAt(0) : 'م'}</span>
+                  )}
                 </div>
                 <div className="hidden md:block text-right">
                   <p className="text-sm font-medium text-gray-900 dark:text-white leading-none">المدير</p>
