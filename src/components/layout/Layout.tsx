@@ -60,6 +60,9 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
   // القيمة المحفوظة في أول رسم بلا انتظار استعلام حيّ (سبب ظهور الاسم
   // الافتراضي لحظةً بعد الإعداد في النسخة السابقة).
   const settings = useOfficeSettings(initialSettings);
+  const officeName = settings?.officeName?.trim() || '';
+  const officeInitial = officeName.charAt(0) || 'م';
+  const logo = settings?.logo?.trim() || '';
 
   const unreadNotifications = useLiveQuery(() => countUnreadNotifications(), []) || 0;
   const lowStockCount = useLiveQuery(async () => {
@@ -87,21 +90,21 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
           {/* Logo */}
           <div className="flex-none flex items-center justify-between h-20 px-6 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center gap-3">
-              {settings?.logo ? (
-                <img src={settings.logo} alt="Logo" className="w-10 h-10 rounded-lg object-cover" />
+              {logo ? (
+                <img src={logo} alt="شعار المكتب" className="w-10 h-10 rounded-lg object-cover" />
               ) : (
                 <div className="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-bold text-xl">
-                  م
+                  {officeInitial}
                 </div>
               )}
               <div className="min-w-0">
                 {/* الاسم الكامل يظهر دائماً: يلتف على سطرين بدل أن يُقتطع،
                     ويُعرض كاملاً في التلميح عند تجاوز الطول المتاح */}
                 <h1
-                  className={`font-bold text-gray-900 dark:text-white text-sm leading-tight office-name ${officeNameLengthClass(settings?.officeName)}`}
-                  title={settings?.officeName || undefined}
+                  className={`font-bold text-gray-900 dark:text-white text-sm leading-tight office-name ${officeNameLengthClass(officeName)}`}
+                  title={officeName || undefined}
                 >
-                  {settings?.officeName || 'إعداد المكتب مطلوب'}
+                  {officeName || 'إعداد المكتب مطلوب'}
                 </h1>
                 <p className="text-xs text-gray-500 dark:text-gray-400">إدارة متكاملة</p>
               </div>
@@ -205,14 +208,14 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
 
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white font-bold text-sm shrink-0 border border-primary-600/30">
-                  {settings?.logo ? (
+                  {logo ? (
                     <img
-                      src={settings.logo}
-                      alt={settings.officeName || 'شعار المكتب'}
+                      src={logo}
+                      alt={officeName || 'شعار المكتب'}
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <span>{settings?.officeName ? settings.officeName.trim().charAt(0) : 'م'}</span>
+                    <span>{officeInitial}</span>
                   )}
                 </div>
                 <div className="hidden md:block text-right">

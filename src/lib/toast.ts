@@ -1,8 +1,8 @@
-import { getArabicErrorMessage } from './errors'
+import { formatErrorMessage, isLikelyEnglishError, UNKNOWN_ERROR_MESSAGE } from './errors'
 
 /**
  * نظام تنبيهات خفيف داخل التطبيق (بدون مكتبات خارجية).
- * يُستخدم لإظهار الأخطاء للبدل من الصمت التام أو alert() الذي يحجب الواجهة.
+ * يُستخدم لإظهار الأخطاء بدلاً من الصمت التام أو alert() الذي يحجب الواجهة.
  */
 
 export type ToastKind = 'error' | 'success' | 'info' | 'warning'
@@ -40,31 +40,29 @@ export function subscribeToasts(listener: Listener): () => void {
   }
 }
 
-/** تنظيف وترجمة أي نص أو عنوان بالإنجليزية قبل إرساله إلى التوست */
-function sanitizeToastText(text: string | undefined): string | undefined {
+/**
+ * بوابة موحّدة قبل تخزين أي نص في التوست.
+ *
+ * الرسائل الإنجليزية المعروفة (Network Error و timeout و Ok و Cancel وغيرها)
+ * تُترجم عبر المهيّئ المركزي في `errors.ts`. أما النصوص التي ليست أخطاء،
+ * مثل اسم ملف أو اسم عميل إنجليزي، فتبقى كما هي في رسائل النجاح والمعلومات.
+ */
+export function formatToastText(text: string | undefined, kind: ToastKind): string | undefined {
   if (!text) return undefined
   const trimmed = text.trim()
-  const lower = trimmed.toLowerCase()
+  if (!trimmed) return undefined
 
-  if (lower === 'error') return 'خطأ'
-  if (lower === 'success') return 'نجاح'
-  if (lower === 'info') return 'معلومات'
-  if (lower === 'warning') return 'تنبيه'
-  if (lower === 'ok') return 'موافق'
-  if (lower === 'cancel') return 'إلغاء'
-
-  // إذا كان النص يحتوي على خطأ إنجليزي أو كود
-  if (/^[a-z0-9_\-\s:.,!?()]+$/i.test(trimmed) && !trimmed.includes('PDF') && !trimmed.includes('JSON')) {
-    return getArabicErrorMessage(trimmed)
+  const formatted = formatErrorMessage(trimmed)
+  if (formatted === UNKNOWN_ERROR_MESSAGE && kind !== 'error' && !isLikelyEnglishError(trimmed)) {
+    return trimmed
   }
-
-  return trimmed
+  return formatted
 }
 
 export function pushToast(kind: ToastKind, title: string, message?: string): number {
   const id = nextId++
-  const cleanTitle = sanitizeToastText(title) || 'تنبيه'
-  const cleanMessage = sanitizeToastText(message)
+  const cleanTitle = formatToastText(title, kind) || 'تنبيه'
+  const cleanMessage = formatToastText(message, kind)
 
   toasts = [...toasts, { id, kind, title: cleanTitle, message: cleanMessage }].slice(-MAX_VISIBLE)
   emit()

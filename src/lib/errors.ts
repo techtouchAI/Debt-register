@@ -1,68 +1,154 @@
 import { toast } from './toast'
 import { isBenignLifecycleError } from './lifecycle'
 
-/**
- * معالجة مركزية للأخطاء.
- *
- * المشكلة السابقة: معظم استدعاءات قاعدة البيانات داخل useEffect لم تكن
- * محاطة بـ try/catch، فكان أي فشل (امتلاء التخزين، قاعدة مقفلة، نسخة ترقية
- * فاشلة) يظهر كـ unhandled rejection في الطرفية بينما تبقى الواجهة فارغة
- * بلا أي رسالة للمستخدم.
- */
+/** رسالة موحّدة لأي خطأ إنجليزي لا نملك له ترجمة أدق. */
+export const UNKNOWN_ERROR_MESSAGE = 'حدث خطأ غير متوقع، يرجى المحاولة لاحقاً'
 
-const FRIENDLY_MESSAGES: { test: RegExp | ((error: Error) => boolean); message: string }[] = [
-  { test: /QuotaExceededError|quota/i, message: 'مساحة التخزين ممتلئة. احذف بعض النسخ الاحتياطية أو بيانات المتصفح ثم أعد المحاولة.' },
-  { test: /ConstraintError/i, message: 'البيانات المكررة غير مسموحة (رقم أو اسم مستخدم مسجّل مسبقاً).' },
-  { test: /DataError/i, message: 'قيمة غير صالحة في أحد الحقول.' },
-  { test: /NotFoundError|no such object store|One of the specified object stores was not found|not found|404/i, message: 'العنصر أو بنية قاعدة البيانات غير موجودة.' },
-  { test: /VersionError|upgrade/i, message: 'تعذّر ترقية قاعدة البيانات. أغلق بقية نوافذ التطبيق وأعد تشغيله.' },
-  { test: /InvalidAccessError|The database connection is closing|database is closed/i, message: 'انقطع الاتصال بقاعدة البيانات. أعد تحميل الصفحة.' },
-  { test: /TransactionInactiveError|TimeoutError|timeout/i, message: 'انتهت مهلة العملية. أعد المحاولة.' },
-  { test: /NetworkError|Failed to fetch|network/i, message: 'لا يوجد اتصال بالشبكة أو تعذّر إتمام العملية محلياً.' },
-  { test: /unauthorized|401|forbidden|403/i, message: 'غير مصرح لك بإجراء هذه العملية.' }
+type ErrorRecord = Record<string, unknown>
+
+/**
+ * رسائل الأخطاء التي تظهر عادةً من المتصفح أو IndexedDB أو طبقة الشبكة.
+ * تُطبّق قبل القاعدة العامة حتى لا يرى المستخدم أي مصطلح تقني إنجليزي.
+ */
+const FRIENDLY_MESSAGES: ReadonlyArray<{ test: RegExp; message: string }> = [
+  {
+    test: /QuotaExceededError|quota|storage quota|disk full/i,
+    message: 'مساحة التخزين ممتلئة. احذف بعض النسخ الاحتياطية أو بيانات المتصفح ثم أعد المحاولة.'
+  },
+  {
+    test: /ConstraintError|unique constraint|duplicate|already exists/i,
+    message: 'البيانات المكررة غير مسموحة (رقم أو اسم مستخدم مسجّل مسبقاً).'
+  },
+  { test: /DataError|invalid data/i, message: 'قيمة غير صالحة في أحد الحقول.' },
+  {
+    test: /NotFoundError|no such object store|one of the specified object stores was not found|\bnot found\b|\b404\b/i,
+    message: 'العنصر أو بنية قاعدة البيانات غير موجودة.'
+  },
+  {
+    test: /VersionError|version change|upgrade(?: needed|required| failed)?/i,
+    message: 'تعذّر ترقية قاعدة البيانات. أغلق بقية نوافذ التطبيق وأعد تشغيله.'
+  },
+  {
+    test: /InvalidAccessError|database(?: connection)? is closing|database is closed|DatabaseClosedError|invalid state/i,
+    message: 'انقطع الاتصال بقاعدة البيانات. أعد تحميل الصفحة.'
+  },
+  {
+    test: /TransactionInactiveError|TimeoutError|\btimeout\b|timed out|time limit/i,
+    message: 'انتهت مهلة العملية. أعد المحاولة.'
+  },
+  {
+    test: /NetworkError|network error|failed to fetch|fetch failed|offline|connection (?:lost|failed|refused)|ERR_NETWORK|ERR_INTERNET_DISCONNECTED/i,
+    message: 'لا يوجد اتصال بالشبكة أو تعذّر إتمام العملية محلياً.'
+  },
+  { test: /unauthorized|\b401\b/i, message: 'غير مصرح لك بإجراء هذه العملية.' },
+  { test: /forbidden|access denied|permission denied|\b403\b/i, message: 'لا تملك صلاحية تنفيذ هذه العملية.' },
+  { test: /bad request|invalid request|\b400\b/i, message: 'الطلب غير صالح. راجع البيانات ثم أعد المحاولة.' },
+  { test: /internal server error|server error|\b5\d{2}\b/i, message: 'حدث خطأ في الخادم. أعد المحاولة لاحقاً.' },
+  { test: /cancelled|canceled|abort(?:ed)?/i, message: 'تم إلغاء العملية.' }
 ]
 
-/**
- * فلتر وترجمة الرسائل والأخطاء الإنجليزية إلى رسائل عربية واضحة ومباشرة.
- */
-export function getArabicErrorMessage(error: unknown): string {
-  if (!error) return 'حدث خطأ غير متوقع';
+const BASIC_TRANSLATIONS: Readonly<Record<string, string>> = {
+  error: 'خطأ',
+  success: 'نجاح',
+  warning: 'تنبيه',
+  info: 'معلومات',
+  ok: 'موافق',
+  cancel: 'إلغاء',
+  cancelled: 'تم إلغاء العملية',
+  canceled: 'تم إلغاء العملية',
+  timeout: 'انتهى وقت الاتصال',
+  'network error': 'خطأ في الاتصال بالشبكة',
+  'failed to fetch': 'تعذّر الاتصال بالشبكة',
+  'not found': 'العنصر غير موجود',
+  unauthorized: 'غير مصرح لك بإجراء هذه العملية',
+  forbidden: 'لا تملك صلاحية تنفيذ هذه العملية'
+}
 
-  const raw =
-    error instanceof Error
-      ? `${error.name} ${error.message}`
-      : typeof error === 'string'
-        ? error
-        : String((error as { message?: string })?.message || error);
+/** استخراج رسالة مفيدة من Error أو DOMException أو كائن استجابة غير قياسي. */
+function readErrorMessage(value: unknown, depth = 0): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value)
+  if (value instanceof Error) return value.message || value.name
 
-  const matched = FRIENDLY_MESSAGES.find((entry) =>
-    entry.test instanceof RegExp
-      ? entry.test.test(raw)
-      : error instanceof Error
-        ? entry.test(error)
-        : false
-  );
+  if (value && typeof value === 'object' && depth < 3) {
+    const record = value as ErrorRecord
+    for (const key of ['message', 'error', 'reason', 'detail', 'description', 'statusText']) {
+      const candidate = record[key]
+      if (candidate === undefined || candidate === null) continue
+      const message = readErrorMessage(candidate, depth + 1).trim()
+      if (message) return message
+    }
 
-  if (matched) return matched.message;
+    if (typeof record.status === 'number' || typeof record.status === 'string') {
+      return `HTTP ${String(record.status)}`
+    }
 
-  const lower = raw.toLowerCase().trim();
-  if (lower.includes('network') || lower.includes('fetch')) return 'لا يوجد اتصال بالشبكة';
-  if (lower.includes('timeout')) return 'انتهى وقت الاتصال';
-  if (lower.includes('unauthorized') || lower.includes('401')) return 'غير مصرح لك بإجراء هذه العملية';
-  if (lower.includes('not found') || lower.includes('404')) return 'العنصر غير موجود';
-  if (lower === 'cancelled') return 'تم إلغاء العملية';
-  if (lower.includes('success')) return 'تمت العملية بنجاح';
-
-  // إذا كانت الرسالة بالإنجليزية (أغلبها أحرف لاتينية قياسية)، استبدالها برسالة عربية
-  if (/^[a-z0-9_\-\s:.,!?()]+$/i.test(lower)) {
-    return 'حدث خطأ غير متوقع، يرجى المحاولة لاحقاً';
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return Object.prototype.toString.call(value)
+    }
   }
 
-  return raw || 'حدث خطأ غير متوقع';
+  return value == null ? '' : String(value)
+}
+
+function isAsciiEnglishText(value: string): boolean {
+  return [...value].every((character) => character.charCodeAt(0) <= 0x7f) && /[A-Za-z]/.test(value)
+}
+
+const ENGLISH_ERROR_HINTS = /\b(?:error|exception|failed?|failure|timeout|timed out|network|fetch|unable|cannot|could not|not found|invalid|denied|forbidden|unauthorized|unavailable|quota|offline|cancel(?:led|ed)?)\b/i
+
+/**
+ * هل يبدو النص رسالة خطأ إنجليزية؟ تستعملها طبقة التوست حتى تترجم الأخطاء
+ * القادمة من الخدمات، مع إبقاء أسماء الملفات أو أسماء العملاء الإنجليزية كما
+ * هي عندما تُعرض في رسالة نجاح.
+ */
+export function isLikelyEnglishError(value: unknown): boolean {
+  const text = readErrorMessage(value).trim()
+  return ENGLISH_ERROR_HINTS.test(text) || (isAsciiEnglishText(text) && /\b(?:unexpected|operation|request|problem|issue|please|retry|try again)\b/i.test(text))
+}
+
+/**
+ * المهيّئ المركزي للرسائل الظاهرة للمستخدم.
+ *
+ * لا تعتمد هذه الدالة على `instanceof Error` فقط؛ أخطاء Dexie و WebView قد
+ * تأتي من realm آخر أو ككائن يحوي `message`. لذلك تُستخرج الرسالة أولاً، ثم
+ * تُترجم الأنماط المعروفة، ويُستبدل أي نص إنجليزي غير معروف برسالة عربية
+ * عامة بدلاً من تسريبه إلى واجهة التطبيق.
+ */
+export function formatErrorMessage(error: unknown): string {
+  const raw = readErrorMessage(error).trim()
+  if (!raw) return UNKNOWN_ERROR_MESSAGE
+
+  const normalized = raw.toLowerCase().replace(/\s+/g, ' ').trim()
+  const exactTranslation = BASIC_TRANSLATIONS[normalized]
+  if (exactTranslation) return exactTranslation
+
+  const matched = FRIENDLY_MESSAGES.find((entry) => entry.test.test(raw))
+  if (matched) return matched.message
+
+  if (normalized.includes('success')) return 'تمت العملية بنجاح'
+  if (normalized.includes('cancel')) return 'تم إلغاء العملية'
+
+  // إذا كانت الرسالة لاتينية بالكامل فهي رسالة تقنية/إنجليزية غير مترجمة.
+  // إخفاؤها أفضل من عرض نص إنجليزي للمستخدم العربي.
+  if (isAsciiEnglishText(raw)) return UNKNOWN_ERROR_MESSAGE
+
+  // يغطي رسائل مختلطة مثل: "Error: تعذّر الحفظ" دون العبث بأسماء الملفات
+  // أو البيانات العربية التي قد تحتوي على كلمات لاتينية عابرة.
+  if (ENGLISH_ERROR_HINTS.test(raw)) return UNKNOWN_ERROR_MESSAGE
+
+  return raw
+}
+
+/** اسم قديم مستخدم في أجزاء التطبيق — يبقى كواجهة توافقية للمهيّئ المركزي. */
+export function getArabicErrorMessage(error: unknown): string {
+  return formatErrorMessage(error)
 }
 
 export function describeError(error: unknown): string {
-  return getArabicErrorMessage(error)
+  return formatErrorMessage(error)
 }
 
 export function logError(scope: string, error: unknown): string {
@@ -76,7 +162,7 @@ export function logError(scope: string, error: unknown): string {
  *   - إلغاء مقصود (انتهى عمر الشاشة، أُغلق التطبيق) — ليس عطلاً.
  *   - خطأ قاعدة بيانات وقع **بعد** بدء الإغلاق — أثر متأخر لعملية كانت جارية
  *     أثناء إغلاق النافذة أو إعادة التحميل، ولا معنى لإظهاره.
- * تُسجَّل في الطرفية للتشخيص، ويُمنع منها التنبيه الأحمر فقط.
+ * تُسجّل في الطرفية للتشخيص، ويُمنع منها التنبيه الأحمر فقط.
  */
 function isSuppressedError(error: unknown): boolean {
   return isBenignLifecycleError(error)
