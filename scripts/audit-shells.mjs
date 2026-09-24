@@ -193,8 +193,10 @@ async function main() {
     'معالج الرجوع قبل الموجّه موجود (شاشة الإقلاع/التشغيل الأول)',
     /export function BootBackHandler/.test(backHandlers) && /BootBackHandler/.test(appTsx)
   );
-  // مشروع أندرويد مولَّد محلياً (بعد cap sync): يجب أن تكون الإضافات مسجَّلة فعلاً
-  const generatedPlugins = await readText('android/app/src/main/assets/capacitor.plugins.json');
+  // مشروع أندرويد مولَّد محلياً (بعد cap sync): يجب أن تكون الإضافات مسجَّلة فعلاً.
+  // الملف غير موجود في CI وقت هذا الفحص (يُولَّد في مهمة أندرويد لاحقاً) فلا
+  // يجوز أن يفشل الغياب هنا — وجوده يُفحص فقط عندما يكون المشروع مولَّداً.
+  const generatedPlugins = await fileText(join(repoRoot, 'android/app/src/main/assets/capacitor.plugins.json'));
   if (generatedPlugins !== null) {
     let plugins = [];
     try {
@@ -207,7 +209,7 @@ async function main() {
       'مشروع أندرويد المولَّد يسجّل AppPlugin (زر الرجوع) وليس قائمة فارغة',
       plugins.length > 0 && registered.has('com.capacitorjs.plugins.app.AppPlugin')
     );
-    const buildGradle = (await readText('android/app/capacitor.build.gradle')) ?? '';
+    const buildGradle = (await fileText(join(repoRoot, 'android/app/capacitor.build.gradle'))) ?? '';
     check(
       'Gradle يبني إضافة الرجوع داخل الـ APK (:capacitor-app)',
       /implementation project\(':capacitor-app'\)/.test(buildGradle)
