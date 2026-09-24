@@ -147,6 +147,9 @@ export interface ActivityLog {
   timestamp: string;
   entityType?: string;
   entityId?: number;
+  /** المستخدم الذي نفّذ الإجراء (من جلسة الدخول) */
+  userId?: number;
+  userName?: string;
 }
 
 export interface BackupMeta {
@@ -177,11 +180,26 @@ export interface AppMeta {
   value: unknown;
 }
 
+/** عدد السجلات لكل جدول في النسخة (يُتحقق منه عند الاستيراد). */
+export type BackupCounts = Partial<Record<keyof BackupData['data'], number>>;
+
+/** بصمة سلامة محتوى النسخة (تكشف الملف المبتور أو المعدَّل يدوياً). */
+export interface BackupIntegrity {
+  algorithm: 'SHA-256';
+  hash: string;
+}
+
 /** بنية ملف النسخة الاحتياطية (JSON). */
 export interface BackupData {
   version: string;
   date: string;
   officeName?: string;
+  /** إصدار التطبيق الذي أنشأ النسخة */
+  appVersion?: string;
+  /** عدد السجلات لكل جدول وقت الإنشاء */
+  counts?: BackupCounts;
+  /** بصمة محتوى قسم البيانات */
+  integrity?: BackupIntegrity;
   data: {
     settings: OfficeSettings[];
     users: User[];
@@ -194,6 +212,12 @@ export interface BackupData {
     purchaseItems?: PurchaseItem[];
     notifications: Notification[];
     activityLogs: ActivityLog[];
+    /**
+     * بيانات تشغيلية يجب أن تنتقل مع المكتب: علامات تسلسل أرقام المستندات
+     * (حتى لا يُعاد استخدام رقم فاتورة محذوفة بعد الاستعادة)، ورمز استرداد
+     * المدير، وعلامة اكتمال الإعداد. (اختياري للتوافق مع النسخ القديمة)
+     */
+    meta?: AppMeta[];
   };
 }
 

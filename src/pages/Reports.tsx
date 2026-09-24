@@ -5,9 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
-import { saveFile } from '@/lib/files';
+import { describeSavedLocation, saveFile } from '@/lib/files';
+import { toCsv, type CsvCell } from '@/lib/csv';
+import { formatDocumentNumber } from '@/lib/labels';
 import { getCustomerBalances } from '@/lib/debts';
-import { formatCurrency, formatDate, formatLocalDateInput, getStockStatus, localDayRangeISO, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { formatCurrency, formatDate, formatLocalDateInput, getStockStatus, getStockStatusText, localDayRangeISO, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { OfficeSettings, Material, Customer } from '@/types';
@@ -249,53 +251,104 @@ export function Reports() {
   const totalDebt = debtsReport.reduce((sum, d) => sum + d.debt, 0);
 
   /**
-   * حمولة التقرير واسم ملفه في مكان واحد: كل فرع يُعيد القيمة مباشرة بدل
-   * إسناد متغيّرات مبدئية لا تُقرأ (وهو نمط كان يخفي نسيان فرع جديد).
+   * جدول التقرير (عناوين عربية) واسم ملفه في مكان واحد: كل فرع يُعيد القيمة
+   * مباشرة، فلا يُنسى فرع جديد. الأرقام تُكتب أرقاماً (قابلة للجمع في إكسل).
    */
-  const buildReportPayload = (): { data: unknown; fileName: string } => {
+  const buildReportTable = (): { rows: CsvCell[][]; fileName: string } => {
     const today = formatLocalDateInput();
+    const currency = settings?.currency || '';
+    const title = (label: string): CsvCell[] => [`تقرير ${label}`, settings?.officeName || ''];
 
     switch (activeReport) {
       case 'cash':
         return {
-          data: { report: REPORT_LABELS.cash, from: dateFrom, to: dateTo, ...cashReport },
-          fileName: `Cash_Report_${dateFrom}_to_${dateTo}.json`
+          rows: [
+            title(REPORT_LABELS.cash),
+            ['من تاريخ', dateFrom],
+            ['إلى تاريخ', dateTo],
+            [],
+            ['البيان', `المبلغ (${currency})`],
+            ['المبيعات النقدية', cashReport.cashInvoices],
+            ['تسديدات الديون', cashReport.payments],
+            ['إجمالي الصندوق', cashReport.total],
+            ['عدد العمليات', cashReport.count]
+          ],
+          fileName: `تقرير_حركة_الصندوق_من_${dateFrom}_إلى_${dateTo}.csv`
         };
       case 'debts':
         return {
-          data: {
-            report: REPORT_LABELS.debts,
-            date: today,
-            totalDebt,
-            debtors: debtsReport.map(({ customer, debt }) => ({
-              name: customer.fullName,
-              phone: customer.phone || '',
-              debt
-            }))
-          },
-          fileName: `Debts_Report_${today}.json`
+          rows: [
+            title(REPORT_LABELS.debts),
+            ['التاريخ', today],
+            [],
+            ['#', 'الزبون', 'الهاتف', `الدين (${currency})`],
+            ...debtsReport.map(({ customer, debt }, index): CsvCell[] => [index + 1, customer.fullName, customer.phone || '', debt]),
+            [],
+            ['', 'إجمالي الديون', '', roundMoney(totalDebt)]
+          ],
+          fileName: `تقرير_الديون_${today}.csv`
         };
-      case 'materials':
-        return {
-          data: {
-            report: REPORT_LABELS.materials,
-            material: materialMovement?.material.name || '',
-            totalSold: materialMovement?.totalSold || 0,
-            totalRevenue: materialMovement?.totalRevenue || 0,
-            currentStock: materialMovement?.currentStock || 0,
-            sales: materialMovement?.sales || []
-          },
-          fileName: `Material_Movement_${today}.json`
-        };
+      case 'materials': {
+        const movement = materialMovement;
+        const rows: CsvCell[][] = [
+          title(REPORT_LABELS.materials),
+          ['المادة', movement?.material.name || ''],
+          ['من تاريخ', dateFrom],
+          ['إلى تاريخ', dateTo],
+          ['إجمالي المباع', movement?.totalSold ?? 0],
+          [`إجمالي الإيراد (${currency})`, movement?.totalRevenue ?? 0],
+          ['المتبقي في المخزن', movement?.currentStock ?? 0],
+          [],
+          ['التاريخ', 'رقم الفاتورة', 'الزبون', 'الكمية', `المبلغ (${currency})`],
+          ...(movement?.sales ?? []).map((sale): CsvCell[] => [
+            formatDate(sale.date, true),
+            formatDocumentNumber(sale.invoiceNumber),
+            sale.customerName,
+            sale.quantity,
+            sale.total
+          ])
+        ];
+        return { rows, fileName: `تقرير_حركة_مادة_${movement?.material.name || 'مادة'}_${today}.csv` };
+      }
       case 'profit':
         return {
-          data: { report: REPORT_LABELS.profit, from: dateFrom, to: dateTo, ...profitReport },
-          fileName: `Profit_Report_${dateFrom}_to_${dateTo}.json`
+          rows: [
+            title(REPORT_LABELS.profit),
+            ['من تاريخ', dateFrom],
+            ['إلى تاريخ', dateTo],
+            [],
+            ['البيان', `القيمة (${currency})`],
+            ['إجمالي المبيعات', profitReport.totalSales],
+            ['إجمالي التكلفة', profitReport.totalCost],
+            ['صافي الربح', profitReport.profit],
+            ['هامش الربح (٪)', roundMoney(profitReport.margin)]
+          ],
+          fileName: `تقرير_الأرباح_من_${dateFrom}_إلى_${dateTo}.csv`
         };
       case 'inventory':
         return {
-          data: { report: REPORT_LABELS.inventory, date: today, ...inventoryReport },
-          fileName: `Inventory_Report_${today}.json`
+          rows: [
+            title(REPORT_LABELS.inventory),
+            ['التاريخ', today],
+            ['عدد المواد', inventoryReport.totalItems],
+            [`قيمة المخزون (${currency})`, inventoryReport.totalValue],
+            ['مواد منخفضة', inventoryReport.lowStock],
+            ['مواد نافدة', inventoryReport.outOfStock],
+            [],
+            ['#', 'المادة', 'الفئة', 'الوحدة', 'الكمية', `سعر البيع (${currency})`, `سعر الشراء (${currency})`, `القيمة (${currency})`, 'الحالة'],
+            ...(materials ?? []).map((material, index): CsvCell[] => [
+              index + 1,
+              material.name,
+              material.category || 'عام',
+              material.unit || 'قطعة',
+              toFiniteNumber(material.quantity),
+              toFiniteNumber(material.salePrice),
+              material.purchasePrice ?? '',
+              roundMoney(toFiniteNumber(material.quantity) * toFiniteNumber(material.salePrice)),
+              getStockStatusText(getStockStatus(material.quantity, material.minQuantity))
+            ])
+          ],
+          fileName: `تقرير_قيمة_المخزون_${today}.csv`
         };
     }
   };
@@ -307,17 +360,17 @@ export function Reports() {
       return;
     }
     setIsExporting(true);
-    const { data, fileName } = buildReportPayload();
+    const { rows, fileName } = buildReportTable();
 
     // الحفظ عبر الخدمة الموحّدة: يعمل على أندرويد (مستندات/مشاركة) بدل
-    // تنزيل المتصفح الذي لا يفعل شيئاً داخل WebView.
+    // تنزيل المتصفح الذي لا يفعل شيئاً داخل WebView، وصندوق حفظ على ويندوز.
     try {
       const result = await saveFile({
         fileName,
-        mimeType: 'application/json',
-        data: JSON.stringify(data, null, 2),
+        mimeType: 'text/csv',
+        data: toCsv(rows),
         encoding: 'utf8',
-        subDir: 'Reports',
+        subDir: 'التقارير',
         shareTitle: `تقرير ${REPORT_LABELS[activeReport]}`
       });
       if (!result.ok) {
@@ -325,7 +378,7 @@ export function Reports() {
         toast.error('تعذّر تصدير التقرير', result.error);
         return;
       }
-      toast.success('تم تصدير التقرير', result.path || fileName);
+      toast.success('تم تصدير التقرير كجدول بيانات', describeSavedLocation(result, fileName));
     } catch (error) {
       reportError('Reports.export', error, 'تعذّر تصدير التقرير');
     } finally {
@@ -555,7 +608,7 @@ export function Reports() {
                       <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl text-sm">
                         <div>
                           <p className="font-medium">{sale.customerName}</p>
-                          <p className="text-xs text-gray-500">{formatDate(sale.date)} • {sale.invoiceNumber}</p>
+                          <p className="text-xs text-gray-500">{formatDate(sale.date)} • {formatDocumentNumber(sale.invoiceNumber)}</p>
                         </div>
                         <div className="text-left">
                           <p className="font-bold">{sale.quantity} {materialMovement.material.unit}</p>

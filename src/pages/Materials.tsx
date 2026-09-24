@@ -14,6 +14,8 @@ import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
+import { confirmDialog } from '@/lib/confirm';
+import { usePermission } from '@/hooks/useSession';
 import { Material } from '@/types';
 
 /** نموذج مادة فارغ. سعر الشراء غير محدد (اختياري) بدل صفر يُحفظ دون قصد. */
@@ -38,7 +40,11 @@ export function Materials() {
   // الإضافة السريعة تأتي من رابط `/materials?action=new`. المسار في هذا
   // التطبيق HashRouter، فالمعامل موجود داخل الهاش ولا يظهر في
   // `window.location.search` — وكان ذلك يجعل الزر لا يفتح النموذج أبداً.
-  const quickAddRequested = searchParams.get('action') === 'new';
+  const can = usePermission();
+  const canManage = can('materials.manage');
+  // أسعار الشراء والأرباح للمدير فقط (موظف المبيعات يرى الكمية وسعر البيع)
+  const canSeeCosts = can('profits.view');
+  const quickAddRequested = canManage && searchParams.get('action') === 'new';
   const isFormOpen = showForm || quickAddRequested;
   const [editing, setEditing] = useState<Material | null>(null);
   const [formData, setFormData] = useState<Partial<Material>>(() => emptyMaterialForm());
@@ -134,7 +140,13 @@ export function Materials() {
 
   const handleDelete = async (material: Material) => {
     if (!material.id) return;
-    if (!confirm(`هل أنت متأكد من حذف المادة "${material.name}"؟\nسيتم حذفها نهائياً ولا يمكن التراجع.`)) return;
+    const confirmed = await confirmDialog({
+      title: `حذف المادة "${material.name}"؟`,
+      message: 'سيتم حذفها نهائياً ولا يمكن التراجع.',
+      confirmText: 'حذف المادة',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
 
     try {
       const result = await deleteMaterial(material.id);
@@ -168,14 +180,16 @@ export function Materials() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدارة المواد والأصناف والمخزون</p>
         </div>
-        <Button onClick={() => { setEditing(null); setFormData(emptyMaterialForm(settings?.lowStockThreshold)); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
-          <Plus className="w-4 h-4 ml-2" />
-          إضافة مادة جديدة
-        </Button>
+        {canManage && (
+          <Button onClick={() => { setEditing(null); setFormData(emptyMaterialForm(settings?.lowStockThreshold)); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
+            <Plus className="w-4 h-4 ml-2" />
+            إضافة مادة جديدة
+          </Button>
+        )}
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-1 gap-4 ${canSeeCosts ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
         <Card className="border-0 shadow-md">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -202,7 +216,7 @@ export function Materials() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-0 shadow-md">
+        {canSeeCosts && <Card className="border-0 shadow-md">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -214,7 +228,7 @@ export function Materials() {
               </div>
             </div>
           </CardContent>
-        </Card>
+        </Card>}
         <Card className="border-0 shadow-md">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -237,7 +251,7 @@ export function Materials() {
             <div className="flex-1 relative">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <Input
-                placeholder="بحث باسم المادة أو الفئة أو الباركود..."
+                placeholder="بحث باسم المادة أو الفئة أو رمز المادة..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pr-10"
@@ -260,18 +274,18 @@ export function Materials() {
       {(materials?.length ?? 0) > 0 && (
         <Card className="border-0 shadow-md overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[960px]">
+            <table className={`w-full text-sm ${canSeeCosts ? 'min-w-[960px]' : 'min-w-[720px]'}`}>
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-800/60 text-[12px] text-gray-600 dark:text-gray-300">
                   <th className="p-3 text-center font-bold w-10">#</th>
                   <th className="p-3 text-right font-bold">المادة</th>
                   <th className="p-3 text-right font-bold whitespace-nowrap">الفئة</th>
                   <th className="p-3 text-center font-bold whitespace-nowrap">الكمية</th>
-                  <th className="p-3 text-center font-bold whitespace-nowrap">سعر الشراء</th>
+                  {canSeeCosts && <th className="p-3 text-center font-bold whitespace-nowrap">سعر الشراء</th>}
                   <th className="p-3 text-center font-bold whitespace-nowrap">سعر البيع</th>
-                  <th className="p-3 text-center font-bold whitespace-nowrap">الربح/وحدة</th>
+                  {canSeeCosts && <th className="p-3 text-center font-bold whitespace-nowrap">الربح/وحدة</th>}
                   <th className="p-3 text-center font-bold whitespace-nowrap">الحالة</th>
-                  <th className="p-3 text-center font-bold whitespace-nowrap w-28">إجراءات</th>
+                  {canManage && <th className="p-3 text-center font-bold whitespace-nowrap w-28">إجراءات</th>}
                 </tr>
               </thead>
               <tbody>
@@ -287,43 +301,50 @@ export function Materials() {
                         <p className="font-bold text-gray-900 dark:text-white leading-tight">{material.name}</p>
                         <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
                           {material.unit || 'قطعة'}
-                          {material.barcode ? ` • باركود: ${material.barcode}` : ''}
+                          {material.barcode ? ` • الرمز: ${material.barcode}` : ''}
                           {material.description ? ` • ${material.description}` : ''}
                         </p>
                       </td>
                       <td className="p-3 whitespace-nowrap text-gray-600 dark:text-gray-300">{material.category || 'عام'}</td>
                       <td className="p-3 text-center font-bold whitespace-nowrap">{material.quantity}</td>
-                      <td className="p-3 text-center whitespace-nowrap text-gray-600 dark:text-gray-300">
-                        {material.purchasePrice ? formatCurrency(material.purchasePrice, settings?.currency) : '—'}
-                      </td>
+                      {canSeeCosts && (
+                        <td className="p-3 text-center whitespace-nowrap text-gray-600 dark:text-gray-300">
+                          {material.purchasePrice ? formatCurrency(material.purchasePrice, settings?.currency) : '—'}
+                        </td>
+                      )}
                       <td className="p-3 text-center font-bold whitespace-nowrap text-green-600">
                         {formatCurrency(material.salePrice, settings?.currency)}
                       </td>
-                      <td className="p-3 text-center whitespace-nowrap text-purple-600">
-                        {material.purchasePrice ? formatCurrency(material.salePrice - material.purchasePrice, settings?.currency) : '—'}
-                      </td>
+                      {canSeeCosts && (
+                        <td className="p-3 text-center whitespace-nowrap text-purple-600">
+                          {material.purchasePrice ? formatCurrency(material.salePrice - material.purchasePrice, settings?.currency) : '—'}
+                        </td>
+                      )}
                       <td className="p-3 text-center">
                         <Badge className={`${getStockStatusColor(status)} border text-[10px] whitespace-nowrap`}>
                           {getStockStatusText(status)}
                         </Badge>
                       </td>
-                      <td className="p-3">
-                        <div className="flex items-center justify-center gap-1">
-                          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleEdit(material)}>
-                            <Edit className="w-3.5 h-3.5 ml-1" />
-                            تعديل
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
-                            aria-label={`حذف ${material.name}`}
-                            onClick={() => handleDelete(material)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </td>
+                      {canManage && (
+                        <td className="p-3">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleEdit(material)}>
+                              <Edit className="w-3.5 h-3.5 ml-1" />
+                              تعديل
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                              aria-label={`حذف ${material.name}`}
+                              title="حذف المادة"
+                              onClick={() => handleDelete(material)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -339,7 +360,7 @@ export function Materials() {
             <Package className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <h3 className="font-bold text-gray-900 dark:text-white mb-2">لا توجد مواد</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">ابدأ بإضافة موادك إلى المخزن</p>
-            <Button onClick={() => openForm()}><Plus className="w-4 h-4 ml-2" />إضافة مادة</Button>
+            {canManage && <Button onClick={() => openForm()}><Plus className="w-4 h-4 ml-2" />إضافة مادة</Button>}
           </CardContent>
         </Card>
       )}
@@ -353,7 +374,8 @@ export function Materials() {
               <p className="text-sm text-gray-500 dark:text-gray-400">جميع الحقول المميزة بـ * مطلوبة</p>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              {/* noValidate: التحقق عربي في validateMaterialInput بدل فقاعات المتصفح */}
+              <form onSubmit={handleSubmit} noValidate className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <label className="text-sm font-medium mb-1 block">اسم المادة *</label>
@@ -361,7 +383,8 @@ export function Materials() {
                       placeholder="اكتب اسم المادة"
                       value={formData.name}
                       onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
-                      required
+                      aria-required="true"
+                      autoFocus
                     />
                   </div>
                   <div>
@@ -390,7 +413,7 @@ export function Materials() {
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الكمية الحالية *</label>
-                    <NumberInput value={formData.quantity} onValueChange={(value) => setFormData((prev) => ({ ...prev, quantity: value ?? undefined }))} required />
+                    <NumberInput value={formData.quantity} onValueChange={(value) => setFormData((prev) => ({ ...prev, quantity: value ?? undefined }))} aria-required="true" />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه</label>
@@ -398,14 +421,14 @@ export function Materials() {
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">سعر البيع * ({settings?.currency})</label>
-                    <NumberInput value={formData.salePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, salePrice: value ?? undefined }))} required />
+                    <NumberInput value={formData.salePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, salePrice: value ?? undefined }))} aria-required="true" />
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">سعر الشراء (اختياري - لحساب الأرباح)</label>
                     <NumberInput value={formData.purchasePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, purchasePrice: value ?? undefined }))} />
                   </div>
                   <div>
-                    <label className="text-sm font-medium mb-1 block">الباركود (اختياري)</label>
+                    <label className="text-sm font-medium mb-1 block">رمز المادة (اختياري)</label>
                     <Input placeholder="رمز المادة" value={formData.barcode || ''} onChange={(e) => setFormData((prev) => ({ ...prev, barcode: e.target.value }))} />
                   </div>
                   <div className="md:col-span-2">

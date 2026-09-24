@@ -1,7 +1,10 @@
 import type {
   ActivityLog,
+  AppMeta,
   Notification as AppNotification,
+  BackupCounts,
   BackupData,
+  BackupIntegrity,
   Customer,
   Invoice,
   InvoiceItem,
@@ -14,6 +17,8 @@ import type {
 } from '@/types';
 import { DEFAULT_SETTINGS } from './db';
 import { toFiniteNumber } from './utils';
+import { DOCUMENT_PREFIX } from './labels';
+import { isPortableMetaKey } from './metaKeys';
 
 /**
  * التحقق من صحة ملف النسخة الاحتياطية قبل الكتابة في قاعدة البيانات.
@@ -180,7 +185,7 @@ function sanitizeInvoices(rows: unknown[], now: string, warnings: string[]): Inv
 
     invoices.push({
       id: asId(row.id),
-      invoiceNumber: asString(row.invoiceNumber) || `INV-RESTORED-${invoices.length + 1}`,
+      invoiceNumber: asString(row.invoiceNumber) || `${DOCUMENT_PREFIX.invoice}-مستعاد-${invoices.length + 1}`,
       type,
       customerId: asId(row.customerId),
       customerName: asString(row.customerName, 'زبون غير معروف'),
@@ -194,6 +199,7 @@ function sanitizeInvoices(rows: unknown[], now: string, warnings: string[]): Inv
       createdAt: asDate(row.createdAt, date),
       notes: asString(row.notes) || undefined,
       status,
+      updatedAt: typeof row.updatedAt === 'string' && row.updatedAt ? asDate(row.updatedAt, date) : undefined,
       downPaymentId: asId(row.downPaymentId)
     });
   }
@@ -249,7 +255,7 @@ function sanitizePayments(rows: unknown[], now: string, warnings: string[]): Pay
       amount: asNumber(row.amount),
       date,
       method: row.method === 'transfer' || row.method === 'other' ? row.method : 'cash',
-      receiptNumber: asString(row.receiptNumber) || `REC-RESTORED-${payments.length + 1}`,
+      receiptNumber: asString(row.receiptNumber) || `${DOCUMENT_PREFIX.receipt}-مستعاد-${payments.length + 1}`,
       remainingAfter: row.remainingAfter === undefined ? undefined : asNumber(row.remainingAfter),
       notes: asString(row.notes) || undefined,
       createdAt: asDate(row.createdAt, date),
@@ -276,7 +282,7 @@ function sanitizePurchases(rows: unknown[], now: string, warnings: string[]): Pu
     const method: Purchase['paymentMethod'] = row.paymentMethod === 'credit' ? 'credit' : 'cash';
     purchases.push({
       id: asId(row.id),
-      purchaseNumber: asString(row.purchaseNumber) || `PUR-RESTORED-${purchases.length + 1}`,
+      purchaseNumber: asString(row.purchaseNumber) || `${DOCUMENT_PREFIX.purchase}-مستعاد-${purchases.length + 1}`,
       supplierName: asString(row.supplierName, 'مورد غير معروف'),
       itemsCount: asNumber(row.itemsCount),
       subtotal,
@@ -360,10 +366,39 @@ function sanitizeActivityLogs(rows: unknown[], now: string): ActivityLog[] {
       details: asString(row.details),
       timestamp: asDate(row.timestamp, now),
       entityType: asString(row.entityType) || undefined,
-      entityId: asId(row.entityId)
+      entityId: asId(row.entityId),
+      userId: asId(row.userId),
+      userName: asString(row.userName) || undefined
     });
   }
   return logs;
+}
+
+/** القيم التشغيلية المحمولة فقط (تسلسل الأرقام، بيانات الدخول، اكتمال الإعداد). */
+function sanitizeMeta(rows: unknown[]): AppMeta[] {
+  const seen = new Set<string>();
+  const meta: AppMeta[] = [];
+  for (const row of rows) {
+    if (!isRecord(row) || !isPortableMetaKey(row.key) || seen.has(row.key)) continue;
+    seen.add(row.key);
+    meta.push({ key: row.key, value: row.value });
+  }
+  return meta;
+}
+
+function sanitizeCounts(value: unknown): BackupCounts | undefined {
+  if (!isRecord(value)) return undefined;
+  const counts: BackupCounts = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const count = asNumber(raw, NaN);
+    if (Number.isFinite(count) && count >= 0) (counts as Record<string, number>)[key] = Math.trunc(count);
+  }
+  return Object.keys(counts).length ? counts : undefined;
+}
+
+function sanitizeIntegrity(value: unknown): BackupIntegrity | undefined {
+  if (!isRecord(value) || value.algorithm !== 'SHA-256' || typeof value.hash !== 'string') return undefined;
+  return /^[0-9a-f]{64}$/i.test(value.hash) ? { algorithm: 'SHA-256', hash: value.hash.toLowerCase() } : undefined;
 }
 
 function reconcileBackupReferences(backup: BackupData, warnings: string[]): void {
@@ -421,12 +456,12 @@ function reconcileBackupReferences(backup: BackupData, warnings: string[]): void
 
 export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
   if (!isRecord(input)) {
-    return { ok: false, error: 'الملف ليس نسخة احتياطية صالحة (بنية JSON غير متوقعة)' };
+    return { ok: false, error: 'الملف ليس نسخة احتياطية صالحة (بنية الملف غير متوقعة)' };
   }
 
   const data = isRecord(input.data) ? input.data : null;
   if (!data) {
-    return { ok: false, error: 'الملف لا يحتوي على قسم البيانات (data)' };
+    return { ok: false, error: 'الملف لا يحتوي على قسم البيانات؛ ليس نسخة احتياطية من هذا التطبيق' };
   }
 
   const warnings: string[] = [];
@@ -441,6 +476,9 @@ export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
     version: asString(input.version, '1.0.0'),
     date: asDate(input.date, now),
     officeName: asString(input.officeName) || undefined,
+    appVersion: asString(input.appVersion) || undefined,
+    counts: sanitizeCounts(input.counts),
+    integrity: sanitizeIntegrity(input.integrity),
     data: {
       settings: sanitizeSettings(settingsRows),
       users: sanitizeUsers(toArray(data.users), now, warnings),
@@ -452,7 +490,8 @@ export function normalizeBackup(input: unknown): ValidationResult<BackupData> {
       purchases: sanitizePurchases(toArray(data.purchases), now, warnings),
       purchaseItems: sanitizePurchaseItems(toArray(data.purchaseItems), warnings),
       notifications: sanitizeNotifications(toArray(data.notifications), now),
-      activityLogs: sanitizeActivityLogs(toArray(data.activityLogs), now)
+      activityLogs: sanitizeActivityLogs(toArray(data.activityLogs), now),
+      meta: sanitizeMeta(toArray(data.meta))
     }
   };
 
@@ -485,7 +524,7 @@ export function readBackupFile(file: File, maxBytes = 200 * 1024 * 1024): Promis
       try {
         resolve(JSON.parse(String(reader.result)));
       } catch {
-        reject(new Error('الملف ليس بصيغة JSON صالحة'));
+        reject(new Error('الملف ليس نسخة احتياطية صالحة أو أنه تالف'));
       }
     };
     reader.readAsText(file);

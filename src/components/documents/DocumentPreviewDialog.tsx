@@ -21,7 +21,7 @@ interface DocumentPreviewDialogProps {
   title: string;
   /** جسم المستند من قوالب print.ts */
   bodyHtml: string;
-  /** اسم الملف عند تنزيل PDF (بدون لاحقة) */
+  /** اسم ملف المستند عند الحفظ (بدون لاحقة) */
   fileNameBase: string;
   pdfFormat?: 'a4' | 'receipt80';
   shareTitle?: string;
@@ -54,9 +54,9 @@ export function DocumentPreviewDialog({
     try {
       const printed = await printHtmlDocument(title, bodyHtml);
       if (!printed) {
-        // أندرويد أصلي بلا حوار طباعة: نولّد PDF قابلاً للحفظ/المشاركة بدل لا شيء
-        await generatePdfFromBodyHtml(bodyHtml, fileNameBase, shareTitle || title, pdfFormat);
-        toast.success('تم تجهيز الملف', 'احفظه أو شاركه من نافذة المشاركة');
+        // أندرويد أصلي بلا حوار طباعة: نولّد مستنداً قابلاً للحفظ/المشاركة بدل لا شيء
+        const saved = await generatePdfFromBodyHtml(bodyHtml, fileNameBase, shareTitle || title, pdfFormat);
+        if (saved) toast.success('تم تجهيز المستند للطباعة', 'احفظه أو شاركه من نافذة المشاركة ثم اطبعه');
       }
     } catch (error) {
       reportError('Preview.print', error, 'تعذّر الطباعة');
@@ -69,10 +69,10 @@ export function DocumentPreviewDialog({
     if (isExporting) return;
     setIsExporting(true);
     try {
-      const fileName = await generatePdfFromBodyHtml(bodyHtml, fileNameBase, shareTitle || title, pdfFormat);
-      toast.success('تم إنشاء ملف PDF', fileName);
+      const saved = await generatePdfFromBodyHtml(bodyHtml, fileNameBase, shareTitle || title, pdfFormat);
+      if (saved) toast.success('تم حفظ المستند', saved.message);
     } catch (error) {
-      reportError('Preview.pdf', error, 'تعذّر إنشاء ملف PDF');
+      reportError('Preview.pdf', error, 'تعذّر حفظ المستند');
     } finally {
       setIsExporting(false);
     }
@@ -111,7 +111,7 @@ export function DocumentPreviewDialog({
           </Button>
           <Button variant="outline" onClick={handleExportPdf} disabled={busy} className="flex-1 sm:flex-none">
             {isExporting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Download className="w-4 h-4 ml-2" />}
-            تحميل PDF
+            حفظ كمستند
           </Button>
           <Button variant="ghost" onClick={onClose} disabled={busy} className="mr-auto">
             إغلاق

@@ -100,19 +100,19 @@ describe('زر الرجوع في أندرويد (Capacitor)', () => {
     await bootApp('#/customers');
     act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name')).toBeTruthy(), { timeout: 5000 });
   });
 
   it('لا يخرج التطبيق بضغطة واحدة من الصفحة الرئيسية (تظهر رسالة في الويب)', async () => {
     await bootApp('#/');
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name')).toBeTruthy());
 
     const exitApp = vi.fn();
     act(() => lastBackListener?.({ canGoBack: false, exitApp }));
 
     await waitFor(() => expect(screen.getByText('أنت في الصفحة الرئيسية')).toBeTruthy());
     expect(exitApp).not.toHaveBeenCalled();
-    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
     expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull();
   });
 
@@ -182,7 +182,7 @@ describe('القائمة الجانبية (الدرج الجوال)', () => {
 
     // التنقل يجب أن يصل: لا رجوع خفي يُلغي نقرة المستخدم
     await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name')).toBeTruthy());
     expect(hasOpenModal()).toBe(false);
   });
 
@@ -201,7 +201,7 @@ describe('القائمة الجانبية (الدرج الجوال)', () => {
     // تغيّر hash يسبق أحياناً اكتمال رسم الصفحة التالية، لذلك ننتظر
     // الإشارة المرئية نفسها بدلاً من القراءة المتزامنة بعد حدث السجل.
     await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name')).toBeTruthy(), { timeout: 2000 });
   });
 
   it('الدرج الجانبي في الجوال يُغلق بزر الرجوع', async () => {
@@ -212,7 +212,7 @@ describe('القائمة الجانبية (الدرج الجوال)', () => {
 
     act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
     await waitFor(() => expect(hasOpenModal()).toBe(false));
-    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
   });
 });
 
@@ -230,7 +230,7 @@ describe('تأكيد الخروج النهائي من التطبيق', () => {
 
   it('زر الرجوع في الرئيسية يعرض حوار التأكيد ولا يخرج مباشرة', async () => {
     await bootApp('#/');
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name')).toBeTruthy());
 
     const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => undefined);
     act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
@@ -242,7 +242,7 @@ describe('تأكيد الخروج النهائي من التطبيق', () => {
     fireEvent.click(screen.getByText('متابعة الاستخدام'));
     await waitFor(() => expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull());
     expect(closeSpy).not.toHaveBeenCalled();
-    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
     closeSpy.mockRestore();
   });
 
@@ -269,7 +269,7 @@ describe('تأكيد الخروج النهائي من التطبيق', () => {
     act(() => lastBackListener?.({ canGoBack: false, exitApp: vi.fn() }));
     await waitFor(() => expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull());
     expect(closeSpy).not.toHaveBeenCalled();
-    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
     closeSpy.mockRestore();
   });
 });

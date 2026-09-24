@@ -20,6 +20,8 @@ import { getStockStatus, toFiniteNumber } from './utils';
 import { validateOfficeName } from './officeName';
 import { sendSystemNotification as dispatchSystemNotification } from './notify';
 import { assertNotShuttingDown, beginShutdown, endShutdown } from './lifecycle';
+import { getSessionUser } from './session';
+import { formatErrorMessage } from './errors';
 
 export class AgriOfficeDB extends Dexie {
   settings!: Table<OfficeSettings>;
@@ -121,7 +123,7 @@ export class AgriOfficeDB extends Dexie {
             if (!payment.createdAt) payment.createdAt = date;
             payment.amount = toFiniteNumber(payment.amount);
             if (typeof payment.receiptNumber !== 'string' || !payment.receiptNumber) {
-              payment.receiptNumber = `REC-${String(payment.id ?? Date.now())}`;
+              payment.receiptNumber = `ق-${String(payment.id ?? Date.now())}`;
             }
           });
 
@@ -264,7 +266,7 @@ export interface StorageStatus {
  */
 export async function checkStorageAvailable(): Promise<StorageStatus> {
   if (typeof indexedDB === 'undefined') {
-    return { ok: false, error: 'المتصفح لا يدعم التخزين المحلي (IndexedDB)' };
+    return { ok: false, error: 'هذا الجهاز لا يدعم التخزين المحلي اللازم لحفظ البيانات' };
   }
   try {
     await db.open();
@@ -278,7 +280,8 @@ export async function checkStorageAvailable(): Promise<StorageStatus> {
       name === 'QuotaExceededError'
         ? 'مساحة التخزين ممتلئة أو محظورة في هذا المتصفح'
         : error instanceof Error
-          ? error.message
+          ? // رسالة المتصفح إنجليزية تقنية: تُعرض عربيةً عبر المهيّئ الموحّد
+            formatErrorMessage(error)
           : 'تعذّر فتح قاعدة البيانات';
     return { ok: false, error: message };
   }
@@ -317,10 +320,13 @@ export async function initializeDB() {
       }
     }
 
-    const usersCount = await db.users.count();
-    if (usersCount === 0) {
+    // لا بد من مدير واحد على الأقل: في التثبيت الجديد، أو بعد استعادة نسخة
+    // تالفة لم يبقَ فيها مدير — وإلا تعذّر الوصول إلى الإعدادات والمستخدمين.
+    // الرمز الافتراضي (1234) يُحوَّل لبصمة في صيانة الإقلاع، ويُطلب تغييره.
+    const users = await db.users.toArray();
+    if (!users.some((user) => user.role === 'admin')) {
       await db.users.add({
-        name: 'المدير',
+        name: users.some((user) => user.name === 'المدير') ? 'مدير النظام' : 'المدير',
         role: 'admin',
         pin: '1234',
         createdAt: new Date().toISOString()
@@ -400,18 +406,24 @@ export async function updateSettings(updates: Partial<OfficeSettings>): Promise<
  * سجل النشاط
  * ------------------------------------------------------------------ */
 
+/**
+ * تسجيل نشاط في السجل، منسوباً تلقائياً إلى المستخدم المسجّل حالياً (إن وُجد)
+ * — فيعرف المدير من أضاف الفاتورة أو حذف التسديد.
+ */
 export async function logActivity(
   action: string,
   details: string,
   entityType?: string,
   entityId?: number
 ): Promise<void> {
+  const user = getSessionUser();
   await db.activityLogs.add({
     action,
     details,
     timestamp: new Date().toISOString(),
     entityType,
-    entityId
+    entityId,
+    ...(user ? { userId: user.id, userName: user.name } : {})
   });
 }
 

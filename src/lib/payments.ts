@@ -1,4 +1,5 @@
 import { logBackgroundFailure } from './lifecycle';
+import { assertPermission } from './session';
 import { db, logActivity, createNotification, getSettingsOrDefault } from './db';
 import { nextReceiptNumber } from './sequence';
 import { reallocateCustomerInvoices } from './invoices';
@@ -20,6 +21,7 @@ export type PaymentSaveResult =
   | { ok: false; error: string };
 
 export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResult> {
+  assertPermission('payments.create');
   if (!Number.isInteger(draft.customerId) || draft.customerId <= 0) return { ok: false, error: 'يرجى اختيار زبون' };
   if (draft.method !== 'cash' && draft.method !== 'transfer' && draft.method !== 'other') {
     return { ok: false, error: 'طريقة الدفع غير صالحة' };
@@ -83,6 +85,7 @@ export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResul
 export type PaymentDeleteResult = { ok: true } | { ok: false; error: string };
 
 export async function deletePayment(paymentId: number): Promise<PaymentDeleteResult> {
+  assertPermission('payments.delete');
   const deleted = await db.transaction('rw', [db.payments, db.invoices], async () => {
     const payment = await db.payments.get(paymentId);
     if (!payment) return { ok: false as const, error: 'وصل القبض غير موجود' };

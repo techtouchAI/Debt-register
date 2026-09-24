@@ -14,7 +14,8 @@ import {
   X,
   Sun,
   Moon,
-  Database
+  Database,
+  Lock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +27,13 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { useTheme } from '@/hooks/useTheme';
+import { useSession } from '@/hooks/useSession';
+import { isLoginRequired, signOut } from '@/lib/auth';
+import { roleCan, routePermission } from '@/lib/permissions';
+import { roleLabel } from '@/lib/labels';
+import { saveThemePreference } from '@/lib/themePreference';
+import { APP_VERSION } from '@/lib/appInfo';
+import { reportError } from '@/lib/errors';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -54,7 +62,23 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
   const location = useLocation();
   // السمة مصدرها مخزن واحد مشترك: أي تبديل من الإعدادات أو التخطيط يظهر
   // فوراً في كل مكان بلا رسم متتالٍ داخل تأثير.
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark } = useTheme();
+  // التبديل يُحفظ في إعدادات المكتب أيضاً (ينتقل مع النسخة الاحتياطية)
+  const toggleTheme = () => saveThemePreference(isDark ? 'light' : 'dark');
+  const session = useSession();
+  // زر "قفل / تبديل المستخدم" يظهر فقط حين يكون الدخول برمز مفعّلاً
+  // (أكثر من مستخدم أو رمز غير افتراضي) — وإلا لكان القفل بلا معنى.
+  const canLock = useLiveQuery(() => isLoginRequired(), []) ?? false;
+  const visibleNavigation = navigation.filter((item) => roleCan(session?.role, routePermission(item.href)));
+
+  const handleLock = async () => {
+    setSidebarOpen(false);
+    try {
+      await signOut();
+    } catch (error) {
+      reportError('Layout.lock', error, 'تعذّر قفل التطبيق');
+    }
+  };
 
   // الإعدادات تأتي من المخزن المشترك: تُنشَر عند الحفظ وعند كل قراءة، فتظهر
   // القيمة المحفوظة في أول رسم بلا انتظار استعلام حيّ (سبب ظهور الاسم
@@ -131,7 +155,7 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
             className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-6 space-y-1"
             aria-label="التنقل الرئيسي"
           >
-            {navigation.map((item) => {
+            {visibleNavigation.map((item) => {
               const isActive = location.pathname === item.href || (item.href !== '/' && location.pathname.startsWith(item.href));
               return (
                 <Link
@@ -159,8 +183,8 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
           {/* Footer */}
           <div className="flex-none p-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
             <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-2">
-              <span>الإصدار 1.0.0</span>
-              <span>© 2024</span>
+              <span>الإصدار {APP_VERSION}</span>
+              <span>© {new Date().getFullYear()}</span>
             </div>
           </div>
         </div>
@@ -183,18 +207,25 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
               </Button>
               <div className="hidden lg:block">
                 <h2 className="font-bold text-gray-900 dark:text-white">
-                  {navigation.find(n => n.href === location.pathname || (n.href !== '/' && location.pathname.startsWith(n.href)))?.name || 'لوحة التحكم'}
+                  {navigation.find(n => n.href === location.pathname || (n.href !== '/' && location.pathname.startsWith(n.href)))?.name || (location.pathname.startsWith('/notifications') ? 'الإشعارات' : 'لوحة التحكم')}
                 </h2>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={toggleTheme} className="rounded-full">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                className="rounded-full"
+                aria-label={isDark ? 'الوضع النهاري' : 'الوضع الليلي'}
+                title={isDark ? 'الوضع النهاري' : 'الوضع الليلي'}
+              >
                 {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </Button>
-              
-              <Link to="/notifications">
-                <Button variant="ghost" size="icon" className="rounded-full relative">
+
+              <Link to="/notifications" aria-label="الإشعارات" title="الإشعارات">
+                <Button variant="ghost" size="icon" className="rounded-full relative" tabIndex={-1}>
                   <Bell className="w-5 h-5" />
                   {unreadNotifications > 0 && (
                     <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center font-bold">
@@ -218,10 +249,24 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
                     <span>{officeInitial}</span>
                   )}
                 </div>
-                <div className="hidden md:block text-right">
-                  <p className="text-sm font-medium text-gray-900 dark:text-white leading-none">المدير</p>
-                  <p className="text-[11px] text-gray-500 dark:text-gray-400">مدير النظام</p>
+                <div className="hidden md:block text-right max-w-[10rem]">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white leading-none truncate" data-testid="session-user-name">
+                    {session?.name ?? ''}
+                  </p>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">{roleLabel(session?.role)}</p>
                 </div>
+                {canLock && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full"
+                    onClick={() => void handleLock()}
+                    aria-label="قفل التطبيق وتبديل المستخدم"
+                    title="قفل التطبيق وتبديل المستخدم"
+                  >
+                    <Lock className="w-5 h-5" />
+                  </Button>
+                )}
               </div>
             </div>
           </div>

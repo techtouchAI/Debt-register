@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 // HashRouter: يعمل تحت file:// و WebView دون كسر pushState (سبب الشاشة السوداء السابق)
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Database, RefreshCw } from 'lucide-react';
 import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/Toaster';
+import { ConfirmDialogHost } from '@/components/ui/ConfirmDialogHost';
+import { AuthGate, RouteGuard, SessionSync } from '@/components/auth/AuthGate';
+import { ScrollManager } from '@/components/ScrollManager';
 import { Button } from '@/components/ui/button';
 import { FirstRunSetup } from '@/components/setup/FirstRunSetup';
 import { BackNavigationHandler, BootBackHandler } from '@/components/BackNavigationHandler';
@@ -13,13 +16,7 @@ import { Customers } from '@/pages/Customers';
 import { Invoices } from '@/pages/Invoices';
 import { InvoiceForm } from '@/pages/InvoiceForm';
 import { InvoiceView } from '@/pages/InvoiceView';
-import { Purchases } from '@/pages/Purchases';
-import { PurchaseForm } from '@/pages/PurchaseForm';
-import { PurchaseView } from '@/pages/PurchaseView';
 import { Payments } from '@/pages/Payments';
-import { Reports } from '@/pages/Reports';
-import { Settings } from '@/pages/Settings';
-import { Backup } from '@/pages/Backup';
 import { Notifications } from '@/pages/Notifications';
 import { CustomerStatement } from '@/pages/CustomerStatement';
 import { checkStorageAvailable, getSettings, initializeDB } from '@/lib/db';
@@ -28,7 +25,29 @@ import { runStartupMaintenance } from '@/lib/maintenance';
 import { installGlobalErrorHandlers, reportError } from '@/lib/errors';
 import { initSystemNotifications } from '@/lib/notify';
 import { isOfficeProfileComplete } from '@/lib/officeProfile';
+import { tryAutoSignIn } from '@/lib/auth';
 import type { OfficeSettings } from '@/types';
+
+/**
+ * صفحات المدير الثقيلة تُحمَّل عند فتحها فقط (تقسيم الحزمة حسب المسار):
+ * الملف الرئيسي يبقى صغيراً فيقلع التطبيق أسرع على الأجهزة الضعيفة، وموظف
+ * المبيعات لا يحمّل صفحات لا يملك صلاحيتها أصلاً. الملفات محلية داخل التطبيق
+ * (ومخزّنة مسبقاً في نسخة الويب) فلا تحتاج إنترنت.
+ */
+const Purchases = lazy(() => import('@/pages/Purchases').then((module) => ({ default: module.Purchases })));
+const PurchaseForm = lazy(() => import('@/pages/PurchaseForm').then((module) => ({ default: module.PurchaseForm })));
+const PurchaseView = lazy(() => import('@/pages/PurchaseView').then((module) => ({ default: module.PurchaseView })));
+const Reports = lazy(() => import('@/pages/Reports').then((module) => ({ default: module.Reports })));
+const Settings = lazy(() => import('@/pages/Settings').then((module) => ({ default: module.Settings })));
+const Backup = lazy(() => import('@/pages/Backup').then((module) => ({ default: module.Backup })));
+
+function PageLoading() {
+  return (
+    <div className="flex items-center justify-center py-24" role="status" aria-label="جاري تحميل الصفحة">
+      <div className="w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
 
 type BootState =
   | { status: 'loading' }
@@ -45,7 +64,7 @@ function StorageErrorScreen({ error }: { error: string }) {
         <Database className="w-12 h-12 text-red-500 mx-auto mb-4" />
         <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">تعذّر فتح قاعدة البيانات المحلية</h1>
         <p className="text-sm text-gray-600 dark:text-gray-300 mb-4 leading-relaxed">
-          يحتاج التطبيق إلى التخزين المحلي (IndexedDB) لحفظ الفواتير والديون. لم نتمكن من الكتابة فيه الآن.
+          يحتاج التطبيق إلى التخزين المحلي في الجهاز لحفظ الفواتير والديون. لم نتمكن من الكتابة فيه الآن.
         </p>
         <p className="text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg p-3 mb-4">
           {error}
@@ -98,6 +117,10 @@ function App() {
         if (!cancelled && !isOfficeProfileComplete(settings)) {
           setSetupSettings(settings || null);
           setNeedsSetup(true);
+        } else if (!cancelled) {
+          // قفل الدخول غير مفعّل (مدير واحد برمز افتراضي): دخول تلقائي ضمن
+          // الإقلاع نفسه فتظهر الواجهة مباشرة بلا شاشة انتظار إضافية
+          await tryAutoSignIn().catch((error) => console.warn('تعذّر الدخول التلقائي:', error));
         }
       } catch (error) {
         if (!cancelled) {
@@ -161,39 +184,51 @@ function App() {
         }
         <BootBackHandler />
         <FirstRunSetup initial={setupSettings} onDone={(saved) => { setSetupSettings(saved); setNeedsSetup(false); }} />
+        <ConfirmDialogHost />
         <Toaster />
       </div>
     );
   }
 
+  // الدخول برمز المستخدم (عند تفعيل القفل) قبل أي صفحة — انظر AuthGate
   return (
-    <Router>
-      <BackNavigationHandler />
-      <Layout initialSettings={setupSettings}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/materials" element={<Materials />} />
-          <Route path="/customers" element={<Customers />} />
-          <Route path="/customers/:id" element={<CustomerStatement />} />
-          <Route path="/invoices" element={<Invoices />} />
-          <Route path="/invoices/new" element={<InvoiceForm />} />
-          <Route path="/invoices/:id" element={<InvoiceView />} />
-          <Route path="/invoices/:id/edit" element={<InvoiceForm />} />
-          <Route path="/purchases" element={<Purchases />} />
-          <Route path="/purchases/new" element={<PurchaseForm />} />
-          <Route path="/purchases/:id" element={<PurchaseView />} />
-          <Route path="/purchases/:id/edit" element={<PurchaseForm />} />
-          <Route path="/payments" element={<Payments />} />
-          <Route path="/payments/new" element={<Payments />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/backup" element={<Backup />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/notifications" element={<Notifications />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
-      <Toaster />
-    </Router>
+    <AuthGate>
+      <Router>
+        <BackNavigationHandler />
+        <ScrollManager />
+        <SessionSync />
+        <Layout initialSettings={setupSettings}>
+          {/* كل مسار محروس بصلاحية المستخدم (lib/permissions.ts) */}
+          <RouteGuard>
+            <Suspense fallback={<PageLoading />}>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/materials" element={<Materials />} />
+                <Route path="/customers" element={<Customers />} />
+                <Route path="/customers/:id" element={<CustomerStatement />} />
+                <Route path="/invoices" element={<Invoices />} />
+                <Route path="/invoices/new" element={<InvoiceForm />} />
+                <Route path="/invoices/:id" element={<InvoiceView />} />
+                <Route path="/invoices/:id/edit" element={<InvoiceForm />} />
+                <Route path="/purchases" element={<Purchases />} />
+                <Route path="/purchases/new" element={<PurchaseForm />} />
+                <Route path="/purchases/:id" element={<PurchaseView />} />
+                <Route path="/purchases/:id/edit" element={<PurchaseForm />} />
+                <Route path="/payments" element={<Payments />} />
+                <Route path="/payments/new" element={<Payments />} />
+                <Route path="/reports" element={<Reports />} />
+                <Route path="/backup" element={<Backup />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </RouteGuard>
+        </Layout>
+        <ConfirmDialogHost />
+        <Toaster />
+      </Router>
+    </AuthGate>
   );
 }
 

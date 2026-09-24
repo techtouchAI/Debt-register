@@ -51,10 +51,37 @@ export interface ElectronAPI {
   isElectron?: boolean;
 }
 
+/**
+ * واجهات Tauri العامة (`app.withGlobalTauri` في tauri.conf.json).
+ * نعرّف ما نستخدمه فقط — لا حاجة لحزمة @tauri-apps/api داخل الواجهة المشتركة.
+ */
+export interface TauriDialogFilter {
+  name: string;
+  extensions: string[];
+}
+
+export interface TauriGlobal {
+  dialog?: {
+    save(options?: { title?: string; defaultPath?: string; filters?: TauriDialogFilter[] }): Promise<string | null>;
+  };
+  fs?: {
+    writeFile(path: string, data: Uint8Array): Promise<void>;
+  };
+  path?: {
+    downloadDir(): Promise<string>;
+    join(...paths: string[]): Promise<string>;
+  };
+  window?: {
+    getCurrentWindow(): { close(): Promise<void> };
+  };
+}
+
 declare global {
   interface Window {
     Capacitor?: CapacitorGlobal;
     electronAPI?: ElectronAPI;
+    __TAURI__?: TauriGlobal;
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
@@ -66,6 +93,23 @@ export function getCapacitor(): CapacitorGlobal | undefined {
 export function getElectronAPI(): ElectronAPI | undefined {
   if (typeof window === 'undefined') return undefined;
   return window.electronAPI;
+}
+
+/** هل نعمل داخل غلاف Tauri (ويندوز/لينكس)؟ */
+export function isTauri(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+}
+
+/** واجهات Tauri العامة إن كانت متاحة. */
+export function getTauri(): TauriGlobal | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return window.__TAURI__;
+}
+
+/** هل نعمل داخل غلاف سطح مكتب (Electron أو Tauri)؟ */
+export function isDesktopShell(): boolean {
+  return Boolean(getElectronAPI()) || isTauri();
 }
 
 export function isNativePlatform(): boolean {

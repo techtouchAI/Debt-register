@@ -18,9 +18,13 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate, formatLocalDateInput, formatLocalDateTimeInput, isSameLocalDay, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
+import { confirmDialog } from '@/lib/confirm';
+import { documentNumberMatches, formatDocumentNumber, paymentMethodLabel } from '@/lib/labels';
+import { usePermission } from '@/hooks/useSession';
 import { Customer, Payment } from '@/types';
 
 export function Payments() {
+  const can = usePermission();
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -51,8 +55,7 @@ export function Payments() {
     const query = search.trim().toLowerCase();
     if (!query) return all;
     return all.filter(
-      (payment) =>
-        payment.customerName.toLowerCase().includes(query) || payment.receiptNumber.toLowerCase().includes(query)
+      (payment) => payment.customerName.toLowerCase().includes(query) || documentNumberMatches(payment.receiptNumber, query)
     );
   }, [search]);
 
@@ -133,9 +136,12 @@ export function Payments() {
       return;
     }
     if (value > customerDebt) {
-      const confirmed = confirm(
-        `المبلغ المدخل (${formatCurrency(value, currency)}) أكبر من دين الزبون (${formatCurrency(customerDebt, currency)}).\nهل تريد المتابعة؟`
-      );
+      const confirmed = await confirmDialog({
+        title: 'المبلغ أكبر من الدين',
+        message: `المبلغ المدخل (${formatCurrency(value, currency)}) أكبر من دين الزبون (${formatCurrency(Math.max(0, customerDebt), currency)}). سيُسجَّل الفرق رصيداً للزبون.`,
+        confirmText: 'متابعة التسديد',
+        tone: 'warning'
+      });
       if (!confirmed) return;
     }
 
@@ -162,18 +168,15 @@ export function Payments() {
 
       toast.success(
         `تم تسديد ${formatCurrency(result.payment.amount, currency)}`,
-        `رقم الوصل: ${result.receiptNumber} • المتبقي: ${formatCurrency(Math.max(0, result.debtAfter), currency)}`
+        `رقم الوصل: ${formatDocumentNumber(result.receiptNumber)} • المتبقي: ${formatCurrency(Math.max(0, result.debtAfter), currency)}`
       );
 
-      // الحفظ هو العملية الأساسية؛ فشل تجهيز PDF لا يعني أن التسديد
-      // فشل ولا ينبغي أن يترك النموذج يوحي بعكس ذلك.
+      // الحفظ هو العملية الأساسية. بعده يُعرض الوصل في المعاينة ليختار
+      // المستخدم الطباعة أو الحفظ/المشاركة — نفس السلوك على أندرويد وويندوز
+      // (كان يفتح صندوق حفظ ملف تلقائياً بعد كل تسديد على ويندوز).
       closeForm();
-      try {
-        const s = await getSettingsOrDefault();
-        await generateReceiptPDF(result.payment, s, Math.max(0, result.debtAfter));
-      } catch (pdfError) {
-        reportError('Payments.pdfAfterSave', pdfError, 'تم حفظ التسديد لكن تعذّر تجهيز الوصل');
-      }
+      setPreviewDebt(Math.max(0, roundMoney(result.debtAfter)));
+      setPreviewPayment(result.payment);
     } catch (error) {
       reportError('Payments.save', error, 'حدث خطأ أثناء حفظ التسديد');
     } finally {
@@ -183,7 +186,13 @@ export function Payments() {
 
   const handleDelete = async (payment: Payment) => {
     if (busyId !== null || !payment.id) return;
-    if (!confirm(`هل أنت متأكد من حذف وصل القبض ${payment.receiptNumber} بمبلغ ${formatCurrency(payment.amount, currency)}؟\nسيعود المبلغ لدين الزبون.`)) return;
+    const confirmed = await confirmDialog({
+      title: `حذف وصل القبض ${formatDocumentNumber(payment.receiptNumber)}؟`,
+      message: `المبلغ ${formatCurrency(payment.amount, currency)} سيعود لدين الزبون.`,
+      confirmText: 'حذف الوصل',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
 
     setBusyId(payment.id);
     try {
@@ -208,7 +217,7 @@ export function Payments() {
       const balance = await getCustomerBalance(payment.customerId);
       const opened = await printReceipt(payment, s, Math.max(0, balance.debt));
       if (!opened) {
-        // لا حوار طباعة (أندرويد أصلي): نفتح المعاينة مع زر PDF بدل لا شيء
+        // لا حوار طباعة (أندرويد أصلي): نفتح المعاينة مع زر حفظ المستند بدل لا شيء
         setPreviewDebt(Math.max(0, roundMoney(balance.debt)));
         setPreviewPayment(payment);
       }
@@ -225,10 +234,10 @@ export function Payments() {
     try {
       const s = await getSettingsOrDefault();
       const balance = await getCustomerBalance(payment.customerId);
-      const fileName = await generateReceiptPDF(payment, s, Math.max(0, roundMoney(balance.debt)));
-      toast.success('تم إنشاء ملف PDF', fileName);
+      const saved = await generateReceiptPDF(payment, s, Math.max(0, roundMoney(balance.debt)));
+      if (saved) toast.success('تم حفظ الوصل كمستند', saved.message);
     } catch (error) {
-      reportError('Payments.pdf', error, 'تعذّر إنشاء ملف PDF');
+      reportError('Payments.pdf', error, 'تعذّر حفظ الوصل كمستند');
     } finally {
       setBusyId(null);
     }
@@ -258,10 +267,12 @@ export function Payments() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">متابعة تسديدات الزبائن وطباعة وصولات القبض</p>
         </div>
-        <Button onClick={() => setShowForm(true)} className="bg-green-600 hover:bg-green-700">
-          <Plus className="w-4 h-4 ml-2" />
-          تسديد دين جديد
-        </Button>
+        {can('payments.create') && (
+          <Button onClick={() => setShowForm(true)} className="bg-green-600 hover:bg-green-700">
+            <Plus className="w-4 h-4 ml-2" />
+            تسديد دين جديد
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -310,9 +321,9 @@ export function Payments() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-bold">{payment.receiptNumber}</p>
+                      <p className="font-bold">{formatDocumentNumber(payment.receiptNumber)}</p>
                       <Badge variant={payment.method === 'cash' ? 'success' : 'secondary'} className="text-[10px]">
-                        {payment.method === 'cash' ? 'نقدي' : payment.method === 'transfer' ? 'تحويل' : 'أخرى'}
+                        {paymentMethodLabel(payment.method)}
                       </Badge>
                       {payment.source === 'downpayment' && (
                         <Badge variant="outline" className="text-[10px] flex items-center gap-1">
@@ -334,20 +345,22 @@ export function Payments() {
                     )}
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="معاينة الوصل" onClick={() => handlePreview(payment)}><Eye className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="طباعة الوصل" onClick={() => handlePrintReceipt(payment)}><Printer className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="تنزيل PDF" onClick={() => handleDownloadPdf(payment)}><Download className="w-4 h-4" /></Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-red-600"
-                      aria-label="حذف الوصل"
-                      disabled={busyId === payment.id || payment.source === 'downpayment'}
-                      title={payment.source === 'downpayment' ? 'دفعة مقدمة مرتبطة بفاتورة' : undefined}
-                      onClick={() => handleDelete(payment)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="معاينة الوصل" title="معاينة الوصل" onClick={() => handlePreview(payment)}><Eye className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="طباعة الوصل" title="طباعة الوصل" onClick={() => handlePrintReceipt(payment)}><Printer className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="حفظ الوصل كمستند" title="حفظ الوصل كمستند" onClick={() => handleDownloadPdf(payment)}><Download className="w-4 h-4" /></Button>
+                    {can('payments.delete') && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-red-600"
+                        aria-label="حذف الوصل"
+                        disabled={busyId === payment.id || payment.source === 'downpayment'}
+                        title={payment.source === 'downpayment' ? 'دفعة مقدمة مرتبطة بفاتورة — تُحذف مع الفاتورة' : 'حذف الوصل'}
+                        onClick={() => handleDelete(payment)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -362,17 +375,18 @@ export function Payments() {
             <CreditCard className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <h3 className="font-bold mb-2">لا توجد تسديدات</h3>
             <p className="text-sm text-gray-500 mb-4">ابدأ بتسجيل تسديد جديد</p>
-            <Button onClick={() => setShowForm(true)}><Plus className="w-4 h-4 ml-2" />تسديد جديد</Button>
+            {can('payments.create') && <Button onClick={() => setShowForm(true)}><Plus className="w-4 h-4 ml-2" />تسديد جديد</Button>}
           </CardContent>
         </Card>
       )}
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain">
+          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain" role="dialog" aria-modal="true" aria-label="نافذة القبض - تسديد دين">
             <CardContent className="p-6">
               <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5 text-green-600" />نافذة القبض - تسديد دين</h2>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              {/* noValidate: التحقق العربي في handleSubmit بدل فقاعات المتصفح */}
+              <form onSubmit={handleSubmit} noValidate className="space-y-4">
                 <div className="relative">
                   <label className="text-sm font-medium mb-1 block">الزبون *</label>
                   <div className="relative">
@@ -416,7 +430,7 @@ export function Payments() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-sm font-medium mb-1 block">المبلغ المسدد * ({currency})</label>
-                    <NumericTextInput value={amount} onValueChange={setAmount} required className="text-lg font-bold" placeholder="مثلاً: 1000000" />
+                    <NumericTextInput value={amount} onValueChange={setAmount} aria-required="true" className="text-lg font-bold" placeholder="مثلاً: 1000000" />
                     {selectedCustomer && customerDebt > 0 && (
                       <div className="flex gap-1 mt-2">
                         <Button type="button" variant="outline" size="sm" className="text-[11px] flex-1" onClick={() => setAmount(String(roundMoney(customerDebt)))}>كامل الدين</Button>
@@ -461,7 +475,7 @@ export function Payments() {
                 <div className="flex gap-2 pt-2">
                   <Button type="submit" className="flex-1 bg-green-600 hover:bg-green-700 h-11 font-bold" disabled={!selectedCustomer || isSaving}>
                     <DollarSign className="w-4 h-4 ml-2" />
-                    {isSaving ? 'جاري الحفظ…' : 'تأكيد التسديد وطباعة الوصل'}
+                    {isSaving ? 'جاري الحفظ…' : 'تأكيد التسديد وعرض الوصل'}
                   </Button>
                   <Button type="button" variant="outline" onClick={closeForm}>إلغاء</Button>
                 </div>
@@ -474,11 +488,11 @@ export function Payments() {
       {previewPayment && (
         <DocumentPreviewDialog
           open={previewPayment !== null}
-          title={`وصل قبض ${previewPayment.receiptNumber}`}
+          title={`وصل قبض ${formatDocumentNumber(previewPayment.receiptNumber)}`}
           bodyHtml={buildReceiptPrintHtml(previewPayment, settings ?? { officeName: '', phone: '', address: '', currency, lowStockThreshold: 5, theme: 'light', autoBackupEnabled: true, autoBackupInterval: 60, language: 'ar' }, previewDebt)}
-          fileNameBase={previewPayment.receiptNumber}
+          fileNameBase={`وصل_قبض_${formatDocumentNumber(previewPayment.receiptNumber)}_${previewPayment.customerName}`}
           pdfFormat="receipt80"
-          shareTitle={`وصل قبض ${previewPayment.receiptNumber}`}
+          shareTitle={`وصل قبض ${formatDocumentNumber(previewPayment.receiptNumber)}`}
           onClose={() => setPreviewPayment(null)}
         />
       )}

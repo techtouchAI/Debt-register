@@ -13,6 +13,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
+import { confirmDialog } from '@/lib/confirm';
+import { documentNumberMatches, formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
 
 export function Purchases() {
   const settings = useLiveQuery(() => getSettingsOrDefault(), []);
@@ -23,7 +25,7 @@ export function Purchases() {
     const all = await db.purchases.orderBy('date').reverse().toArray();
     const query = search.trim().toLowerCase();
     if (!query) return all;
-    return all.filter((purchase) => purchase.purchaseNumber.toLowerCase().includes(query) || purchase.supplierName.toLowerCase().includes(query));
+    return all.filter((purchase) => documentNumberMatches(purchase.purchaseNumber, query) || purchase.supplierName.toLowerCase().includes(query));
   }, [search]);
 
   const handlePrint = async (id: number) => {
@@ -37,7 +39,7 @@ export function Purchases() {
         return;
       }
       const printed = await printPurchase(found.purchase, found.items, s);
-      if (!printed) toast.info('لا يوجد حوار طباعة هنا', 'افتح الوصل ثم استخدم زر PDF');
+      if (!printed) toast.info('لا يوجد حوار طباعة هنا', 'افتح الوصل ثم استخدم زر "حفظ كمستند"');
     } catch (error) {
       reportError('Purchases.print', error, 'تعذّرت طباعة وصل الشراء');
     } finally {
@@ -55,10 +57,10 @@ export function Purchases() {
         toast.error('وصل الشراء غير موجود');
         return;
       }
-      const fileName = await generatePurchasePDF(found.purchase, found.items, s);
-      toast.success('تم إنشاء ملف PDF', fileName);
+      const saved = await generatePurchasePDF(found.purchase, found.items, s);
+      if (saved) toast.success('تم حفظ وصل الشراء كمستند', saved.message);
     } catch (error) {
-      reportError('Purchases.pdf', error, 'تعذّر إنشاء ملف PDF');
+      reportError('Purchases.pdf', error, 'تعذّر حفظ المستند');
     } finally {
       setBusyId(null);
     }
@@ -66,7 +68,13 @@ export function Purchases() {
 
   const handleDelete = async (id: number) => {
     if (busyId !== null) return;
-    if (!confirm('هل أنت متأكد من حذف وصل الشراء؟ ستُخصم كمياته من المخزن إذا لم تكن قد بيعت.')) return;
+    const confirmed = await confirmDialog({
+      title: 'حذف وصل الشراء؟',
+      message: 'ستُخصم كمياته من المخزن إذا لم تكن قد بيعت.',
+      confirmText: 'حذف الوصل',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
     setBusyId(id);
     try {
       const result = await deletePurchase(id);
@@ -111,9 +119,9 @@ export function Purchases() {
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-12 h-12 rounded-xl bg-primary-100 dark:bg-primary-900/30 text-primary-600 flex items-center justify-center flex-shrink-0"><FileText className="w-6 h-6" /></div>
-                <div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><p className="font-bold truncate">{purchase.purchaseNumber}</p><Badge variant={purchase.paymentMethod === 'cash' ? 'success' : 'warning'} className="text-[10px]">{purchase.paymentMethod === 'cash' ? 'نقدي' : 'آجل'}</Badge></div><p className="text-sm text-gray-600 dark:text-gray-400 truncate">{purchase.supplierName} • {formatDate(purchase.date, true)} • {purchase.itemsCount} مادة</p></div>
+                <div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><p className="font-bold truncate">{formatDocumentNumber(purchase.purchaseNumber)}</p><Badge variant={purchase.paymentMethod === 'cash' ? 'success' : 'warning'} className="text-[10px]">{saleTypeLabel(purchase.paymentMethod)}</Badge></div><p className="text-sm text-gray-600 dark:text-gray-400 truncate">{purchase.supplierName} • {formatDate(purchase.date, true)} • {purchase.itemsCount} مادة</p></div>
               </div>
-              <div className="flex flex-wrap items-center justify-between lg:justify-end gap-3"><div className="text-right min-w-0"><p className="font-bold whitespace-nowrap">{formatCurrency(purchase.total, settings?.currency)}</p>{purchase.remaining > 0 && <p className="text-xs text-red-600 whitespace-nowrap">متبقي: {formatCurrency(purchase.remaining, settings?.currency)}</p>}</div><div className="flex flex-wrap gap-1"><Link to={`/purchases/${purchase.id}`}><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="عرض وصل الشراء"><Eye className="w-4 h-4" /></Button></Link><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="طباعة وصل الشراء" onClick={() => handlePrint(purchase.id!)} disabled={busyId !== null}><Printer className="w-4 h-4" /></Button><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="تنزيل وصل الشراء PDF" onClick={() => handlePdf(purchase.id!)} disabled={busyId !== null}><Download className="w-4 h-4" /></Button><Link to={`/purchases/${purchase.id}/edit`}><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="تعديل وصل الشراء"><Edit className="w-4 h-4" /></Button></Link><Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" aria-label="حذف وصل الشراء" onClick={() => handleDelete(purchase.id!)} disabled={busyId === purchase.id}><Trash2 className="w-4 h-4" /></Button></div></div>
+              <div className="flex flex-wrap items-center justify-between lg:justify-end gap-3"><div className="text-right min-w-0"><p className="font-bold whitespace-nowrap">{formatCurrency(purchase.total, settings?.currency)}</p>{purchase.remaining > 0 && <p className="text-xs text-red-600 whitespace-nowrap">متبقي: {formatCurrency(purchase.remaining, settings?.currency)}</p>}</div><div className="flex flex-wrap gap-1"><Link to={`/purchases/${purchase.id}`} aria-label="عرض وصل الشراء" title="عرض وصل الشراء"><Button variant="ghost" size="icon" className="h-8 w-8" tabIndex={-1}><Eye className="w-4 h-4" /></Button></Link><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="طباعة وصل الشراء" title="طباعة وصل الشراء" onClick={() => handlePrint(purchase.id!)} disabled={busyId !== null}><Printer className="w-4 h-4" /></Button><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="حفظ وصل الشراء كمستند" title="حفظ وصل الشراء كمستند" onClick={() => handlePdf(purchase.id!)} disabled={busyId !== null}><Download className="w-4 h-4" /></Button><Link to={`/purchases/${purchase.id}/edit`} aria-label="تعديل وصل الشراء" title="تعديل وصل الشراء"><Button variant="ghost" size="icon" className="h-8 w-8" tabIndex={-1}><Edit className="w-4 h-4" /></Button></Link><Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" aria-label="حذف وصل الشراء" title="حذف وصل الشراء" onClick={() => handleDelete(purchase.id!)} disabled={busyId === purchase.id}><Trash2 className="w-4 h-4" /></Button></div></div>
             </div>
           </CardContent></Card>
         ))}

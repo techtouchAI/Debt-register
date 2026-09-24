@@ -9,8 +9,14 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
+import { confirmDialog } from '@/lib/confirm';
+import { notificationSourceLabel, notificationTypeLabel } from '@/lib/labels';
+import { usePermission } from '@/hooks/useSession';
+import { getElectronAPI, isTauri } from '@/lib/platform';
 
 export function Notifications() {
+  const can = usePermission();
+  const canManage = can('notifications.manage');
   const [filter, setFilter] = useState<'all' | 'unread' | 'warning' | 'info'>('all');
   const [permission, setPermission] = useState<NotificationPermissionState>('prompt');
   const [isRequesting, setIsRequesting] = useState(false);
@@ -91,7 +97,8 @@ export function Notifications() {
   };
 
   const clearAll = async () => {
-    if (!confirm('هل أنت متأكد من حذف جميع الإشعارات؟')) return;
+    const confirmed = await confirmDialog({ title: 'حذف جميع الإشعارات؟', confirmText: 'حذف الكل', tone: 'danger' });
+    if (!confirmed) return;
     try {
       await db.notifications.clear();
       toast.success('تم حذف جميع الإشعارات');
@@ -132,11 +139,11 @@ export function Notifications() {
             الإشعارات
             {unreadCount > 0 && <Badge variant="destructive" className="mr-2">{unreadCount} جديد</Badge>}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">تنبيهات النظام - داخل التطبيق وخارجه (Android/Windows)</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">تنبيهات النظام - داخل التطبيق وخارجه (أندرويد وويندوز)</p>
         </div>
         <div className="flex gap-2">
           {unreadCount > 0 && <Button variant="outline" size="sm" onClick={markAllAsRead}><Check className="w-4 h-4 ml-1" />تحديد الكل كمقروء</Button>}
-          <Button variant="outline" size="sm" onClick={clearAll} className="text-red-600"><Trash2 className="w-4 h-4 ml-1" />حذف الكل</Button>
+          {canManage && <Button variant="outline" size="sm" onClick={clearAll} className="text-red-600"><Trash2 className="w-4 h-4 ml-1" />حذف الكل</Button>}
         </div>
       </div>
 
@@ -148,7 +155,7 @@ export function Notifications() {
                 <BellRing className="w-5 h-5" />
               </div>
               <div>
-                <p className="font-bold text-sm">إشعارات النظام {isNative() ? '(أندرويد)' : ''}</p>
+                <p className="font-bold text-sm">إشعارات النظام {isNative() ? '(أندرويد)' : getElectronAPI() || isTauri() ? '(ويندوز)' : ''}</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                   {permission === 'granted'
                     ? 'مفعّلة — تصلك التنبيهات في شريط النظام حتى خارج التطبيق'
@@ -207,13 +214,14 @@ export function Notifications() {
                         <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 leading-relaxed">{notification.message}</p>
                         <div className="flex items-center gap-2 mt-2">
                           <span className="text-[11px] text-gray-500">{formatDate(notification.createdAt, true)}</span>
-                          {notification.relatedType && <Badge variant="outline" className="text-[10px]">{notification.relatedType}</Badge>}
-                          <Badge variant={notification.type === 'warning' ? 'warning' : notification.type === 'error' ? 'destructive' : notification.type === 'success' ? 'success' : 'secondary'} className="text-[10px]">{notification.type}</Badge>
+                          {/* القيم الداخلية (system/info...) لا تُعرض أبداً — تسميات عربية دائماً */}
+                          {notification.relatedType && <Badge variant="outline" className="text-[10px]">{notificationSourceLabel(notification.relatedType)}</Badge>}
+                          <Badge variant={notification.type === 'warning' ? 'warning' : notification.type === 'error' ? 'destructive' : notification.type === 'success' ? 'success' : 'secondary'} className="text-[10px]">{notificationTypeLabel(notification.type)}</Badge>
                         </div>
                       </div>
                       <div className="flex gap-1 flex-shrink-0">
-                        {!notification.isRead && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => markAsRead(notification.id!)}><Check className="w-4 h-4" /></Button>}
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-red-600" onClick={() => deleteNotification(notification.id!)}><Trash2 className="w-4 h-4" /></Button>
+                        {!notification.isRead && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => markAsRead(notification.id!)} aria-label="تحديد كمقروء" title="تحديد كمقروء"><Check className="w-4 h-4" /></Button>}
+                        {canManage && <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-red-600" onClick={() => deleteNotification(notification.id!)} aria-label="حذف الإشعار" title="حذف الإشعار"><Trash2 className="w-4 h-4" /></Button>}
                       </div>
                     </div>
                   </div>
@@ -231,7 +239,7 @@ export function Notifications() {
                 <p className="font-bold">نظام الإشعارات يعمل:</p>
                 <ul className="list-disc pr-4 mt-2 space-y-1">
                   <li>داخل التطبيق: جرس الإشعارات</li>
-                  <li>خارج التطبيق: إشعارات منبثقة في Android و Windows</li>
+                  <li>خارج التطبيق: إشعارات منبثقة في أندرويد وويندوز</li>
                   <li>تنبيهات تلقائية عند نفاد مادة أو دين كبير</li>
                 </ul>
               </div>

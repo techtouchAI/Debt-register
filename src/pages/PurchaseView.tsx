@@ -13,6 +13,8 @@ import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDia
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
+import { confirmDialog } from '@/lib/confirm';
+import { formatDocumentNumber } from '@/lib/labels';
 import type { OfficeSettings, Purchase, PurchaseItem } from '@/types';
 
 export function PurchaseView() {
@@ -76,10 +78,10 @@ export function PurchaseView() {
     if (!purchase || !settings || isBusy) return;
     setIsBusy(true);
     try {
-      const fileName = await generatePurchasePDF(purchase, items, settings);
-      toast.success('تم إنشاء ملف PDF', fileName);
+      const saved = await generatePurchasePDF(purchase, items, settings);
+      if (saved) toast.success('تم حفظ وصل الشراء كمستند', saved.message);
     } catch (error) {
-      reportError('PurchaseView.pdf', error, 'تعذّر إنشاء ملف PDF');
+      reportError('PurchaseView.pdf', error, 'تعذّر حفظ المستند');
     } finally {
       setIsBusy(false);
     }
@@ -87,7 +89,13 @@ export function PurchaseView() {
 
   const handleDelete = useCallback(async () => {
     if (!purchase?.id || isBusy) return;
-    if (!confirm(`هل أنت متأكد من حذف وصل الشراء ${purchase.purchaseNumber}؟ ستُخصم كمياته من المخزن.`)) return;
+    const confirmed = await confirmDialog({
+      title: `حذف وصل الشراء ${formatDocumentNumber(purchase.purchaseNumber)}؟`,
+      message: 'ستُخصم كمياته من المخزن.',
+      confirmText: 'حذف الوصل',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
     setIsBusy(true);
     try {
       const result = await deletePurchase(purchase.id);
@@ -111,18 +119,18 @@ export function PurchaseView() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3"><Button variant="ghost" size="icon" onClick={() => goBack('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button><div><h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><ClipboardList className="w-6 h-6 text-primary-600" />{purchase.purchaseNumber}</h1><p className="text-xs sm:text-sm text-gray-500 mt-1">{formatDate(purchase.date, true)} • {purchase.itemsCount} مادة</p></div></div>
+        <div className="flex items-center gap-3"><Button variant="ghost" size="icon" onClick={() => goBack('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button><div><h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><ClipboardList className="w-6 h-6 text-primary-600" />{formatDocumentNumber(purchase.purchaseNumber)}</h1><p className="text-xs sm:text-sm text-gray-500 mt-1">{formatDate(purchase.date, true)} • {purchase.itemsCount} مادة</p></div></div>
         <Badge variant={purchase.paymentMethod === 'cash' ? 'success' : 'warning'}>{purchase.paymentMethod === 'cash' ? 'مدفوع نقداً' : 'آجل للمورد'}</Badge>
       </div>
 
-      <div className="flex flex-wrap gap-2"><Button onClick={() => setShowPreview(true)} className="bg-primary-600 hover:bg-primary-700 flex-1 sm:flex-none"><Eye className="w-4 h-4 ml-2" />معاينة</Button><Button variant="outline" onClick={handlePrint} disabled={isBusy} className="flex-1 sm:flex-none"><Printer className="w-4 h-4 ml-2" />طباعة</Button><Button variant="outline" onClick={handlePdf} disabled={isBusy} className="flex-1 sm:flex-none"><Download className="w-4 h-4 ml-2" />PDF</Button><Link to={`/purchases/${purchase.id}/edit`} className="flex-1 sm:flex-none"><Button variant="outline" className="w-full"><Edit className="w-4 h-4 ml-2" />تعديل</Button></Link><Button variant="destructive" onClick={handleDelete} disabled={isBusy} className="flex-1 sm:flex-none"><Trash2 className="w-4 h-4 ml-2" />حذف</Button></div>
+      <div className="flex flex-wrap gap-2"><Button onClick={() => setShowPreview(true)} className="bg-primary-600 hover:bg-primary-700 flex-1 sm:flex-none"><Eye className="w-4 h-4 ml-2" />معاينة</Button><Button variant="outline" onClick={handlePrint} disabled={isBusy} className="flex-1 sm:flex-none"><Printer className="w-4 h-4 ml-2" />طباعة</Button><Button variant="outline" onClick={handlePdf} disabled={isBusy} className="flex-1 sm:flex-none"><Download className="w-4 h-4 ml-2" />حفظ كمستند</Button><Link to={`/purchases/${purchase.id}/edit`} className="flex-1 sm:flex-none"><Button variant="outline" className="w-full"><Edit className="w-4 h-4 ml-2" />تعديل</Button></Link><Button variant="destructive" onClick={handleDelete} disabled={isBusy} className="flex-1 sm:flex-none"><Trash2 className="w-4 h-4 ml-2" />حذف</Button></div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="border-0 shadow-md lg:col-span-2"><CardHeader><CardTitle className="text-base">مواد الوصل</CardTitle></CardHeader><CardContent><div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-x-auto"><table className="w-full text-sm min-w-[480px]"><thead><tr className="bg-gray-50 dark:bg-gray-800/60 text-[12px] text-gray-600 dark:text-gray-300"><th className="p-3 text-right">المادة</th><th className="p-3 text-center whitespace-nowrap">الكمية</th><th className="p-3 text-center whitespace-nowrap">سعر الشراء</th><th className="p-3 text-left whitespace-nowrap">الإجمالي</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t border-gray-100 dark:border-gray-800"><td className="p-3 font-medium">{item.materialName}</td><td className="p-3 text-center whitespace-nowrap">{item.quantity}</td><td className="p-3 text-center whitespace-nowrap">{formatCurrency(item.purchasePrice, settings.currency)}</td><td className="p-3 text-left font-bold text-green-600 whitespace-nowrap">{formatCurrency(item.total, settings.currency)}</td></tr>)}</tbody></table></div>{purchase.notes && <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl text-sm"><strong>ملاحظات: </strong>{purchase.notes}</div>}</CardContent></Card>
         <Card className="border-0 shadow-md"><CardHeader><CardTitle className="text-base">ملخص الشراء</CardTitle></CardHeader><CardContent className="text-sm space-y-2"><div className="flex justify-between"><span className="text-gray-500">المورد:</span><strong>{purchase.supplierName}</strong></div><div className="flex justify-between"><span className="text-gray-500">المجموع:</span><strong>{formatCurrency(purchase.subtotal, settings.currency)}</strong></div>{purchase.discount > 0 && <div className="flex justify-between"><span className="text-gray-500">الخصم:</span><strong>{formatCurrency(purchase.discount, settings.currency)}</strong></div>}<div className="h-px bg-gray-200 dark:bg-gray-700" /><div className="flex justify-between text-base"><strong>الإجمالي:</strong><strong className="text-primary-600">{formatCurrency(purchase.total, settings.currency)}</strong></div>{purchase.paymentMethod === 'credit' && <><div className="flex justify-between"><span className="text-gray-500">المدفوع:</span><strong className="text-green-600">{formatCurrency(purchase.paidAmount, settings.currency)}</strong></div><div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><strong className="text-red-600">{formatCurrency(purchase.remaining, settings.currency)}</strong></div></>}</CardContent></Card>
       </div>
 
-      <DocumentPreviewDialog open={showPreview} title={purchase.purchaseNumber} bodyHtml={buildPurchasePrintHtml(purchase, items, settings)} fileNameBase={`${purchase.purchaseNumber}_${purchase.supplierName}`} shareTitle={`وصل شراء ${purchase.purchaseNumber}`} onClose={() => setShowPreview(false)} />
+      <DocumentPreviewDialog open={showPreview} title={`وصل شراء ${formatDocumentNumber(purchase.purchaseNumber)}`} bodyHtml={buildPurchasePrintHtml(purchase, items, settings)} fileNameBase={`وصل_شراء_${formatDocumentNumber(purchase.purchaseNumber)}_${purchase.supplierName}`} shareTitle={`وصل شراء ${formatDocumentNumber(purchase.purchaseNumber)}`} onClose={() => setShowPreview(false)} />
     </div>
   );
 }

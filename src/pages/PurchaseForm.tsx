@@ -14,6 +14,7 @@ import { getPurchaseWithItems, savePurchase, computePurchaseTotals, type Purchas
 import { buildPurchasePrintHtml } from '@/lib/print';
 import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
+import { formatDocumentNumber } from '@/lib/labels';
 import { toast } from '@/lib/toast';
 import type { Material, OfficeSettings, Purchase } from '@/types';
 
@@ -209,7 +210,7 @@ export function PurchaseForm() {
         toast.error('لم يتم حفظ وصل الشراء', result.error);
         return;
       }
-      toast.success(isEdit ? 'تم تحديث وصل الشراء' : 'تم حفظ وصل الشراء', `رقم الوصل: ${result.purchaseNumber}`);
+      toast.success(isEdit ? 'تم تحديث وصل الشراء' : 'تم حفظ وصل الشراء', `رقم الوصل: ${formatDocumentNumber(result.purchaseNumber)}`);
       // صفحة الوصل المحفوظ تحلّ محل النموذج (أو نرجع إليها إن جئنا منها)،
       // فلا يعيد زر الرجوع فتح نموذج أُرسل للتو.
       returnTo(`/purchases/${result.purchaseId}`);
@@ -396,7 +397,7 @@ export function PurchaseForm() {
       </div>
 
       <QuickAddPurchaseMaterialDialog open={showQuickAdd} initialName={quickAddName} currency={settings?.currency} defaultMinQuantity={settings?.lowStockThreshold} onClose={() => setShowQuickAdd(false)} onCreated={handleCreatedMaterial} />
-      {previewBody && <DocumentPreviewDialog open={previewBody !== null} title={loadedPurchase?.purchaseNumber || 'معاينة وصل الشراء'} bodyHtml={previewBody} fileNameBase={loadedPurchase?.purchaseNumber || `مسودة_شراء_${supplierName || 'وصل'}`} shareTitle="معاينة وصل الشراء" onClose={() => setPreviewBody(null)} />}
+      {previewBody && <DocumentPreviewDialog open={previewBody !== null} title={loadedPurchase?.purchaseNumber ? `وصل شراء ${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : 'معاينة وصل الشراء'} bodyHtml={previewBody} fileNameBase={loadedPurchase?.purchaseNumber ? `وصل_شراء_${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : `مسودة_شراء_${supplierName || 'وصل'}`} shareTitle="معاينة وصل الشراء" onClose={() => setPreviewBody(null)} />}
     </div>
   );
 }

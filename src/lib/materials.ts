@@ -1,4 +1,5 @@
 import { logBackgroundFailure } from './lifecycle';
+import { assertPermission } from './session';
 import { db, logActivity, createNotification, checkLowStock, getSettingsOrDefault } from './db';
 import { roundMoney, toFiniteNumber } from './utils';
 import type { Material } from '@/types';
@@ -75,6 +76,7 @@ export function validateMaterialInput(input: Partial<MaterialInput>): { ok: true
 
 /** إنشاء مادة جديدة مع سجل النشاط وتنبيه المخزون المنخفض. */
 export async function createMaterial(input: Partial<MaterialInput>): Promise<MaterialSaveResult> {
+  assertPermission('materials.manage');
   const validation = validateMaterialInput(input);
   if (!validation.ok) return validation;
 
@@ -116,6 +118,7 @@ export async function createMaterial(input: Partial<MaterialInput>): Promise<Mat
 
 /** تحديث مادة موجودة. */
 export async function updateMaterial(id: number, input: Partial<MaterialInput>): Promise<MaterialSaveResult> {
+  assertPermission('materials.manage');
   const existing = await db.materials.get(id);
   if (!existing) return { ok: false, error: 'المادة غير موجودة' };
 
@@ -147,6 +150,7 @@ export async function updateMaterial(id: number, input: Partial<MaterialInput>):
 
 /** حذف مادة غير مرتبطة بفواتير أو وصول شراء. */
 export async function deleteMaterial(id: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  assertPermission('materials.manage');
   if (!Number.isInteger(id) || id <= 0) return { ok: false, error: 'معرّف المادة غير صالح' };
 
   const result = await db.transaction('rw', [db.materials, db.invoiceItems, db.purchaseItems], async () => {

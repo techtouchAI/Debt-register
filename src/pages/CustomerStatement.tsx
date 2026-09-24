@@ -14,10 +14,14 @@ import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDia
 import { Invoice, Payment } from '@/types';
 import { generateCustomerStatementPDF } from '@/lib/pdf';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { toast } from '@/lib/toast';
+import { formatDocumentNumber, paymentMethodLabel } from '@/lib/labels';
+import { usePermission } from '@/hooks/useSession';
 
 export function CustomerStatement() {
   const { id } = useParams();
   const goBack = useGoBack();
+  const can = usePermission();
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
   const [showPreview, setShowPreview] = useState(false);
 
@@ -44,15 +48,16 @@ export function CustomerStatement() {
   const handlePrint = async () => {
     if (!customer || !settings) return;
     const opened = await printCustomerStatement(customer, invoices, payments, settings, debt);
-    if (!opened) setShowPreview(true); // البديل: معاينة مع زر PDF
+    if (!opened) setShowPreview(true); // البديل: معاينة مع زر حفظ المستند
   };
 
   const handleExportPDF = async () => {
     if (!customer || !settings) return;
     try {
-      await generateCustomerStatementPDF(customer, invoices, payments, settings, debt);
+      const saved = await generateCustomerStatementPDF(customer, invoices, payments, settings, debt);
+      if (saved) toast.success('تم حفظ كشف الحساب كمستند', saved.message);
     } catch (error) {
-      reportError('CustomerStatement.pdf', error, 'تعذّر إنشاء ملف PDF');
+      reportError('CustomerStatement.pdf', error, 'تعذّر حفظ كشف الحساب كمستند');
     }
   };
 
@@ -113,9 +118,9 @@ export function CustomerStatement() {
             <div className="flex flex-wrap gap-2">
               <Button className="bg-primary-600 hover:bg-primary-700" onClick={() => setShowPreview(true)}><Eye className="w-4 h-4 ml-2" />معاينة</Button>
               <Button variant="outline" onClick={handlePrint}><Printer className="w-4 h-4 ml-2" />طباعة</Button>
-              <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 ml-2" />PDF</Button>
-              <Link to={`/invoices/new?customerId=${customer.id}`}><Button className="bg-primary-600 hover:bg-primary-700">فاتورة جديدة</Button></Link>
-              <Link to={`/payments/new?customerId=${customer.id}`}><Button className="bg-green-600 hover:bg-green-700">تسديد دين</Button></Link>
+              <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 ml-2" />حفظ كمستند</Button>
+              {can('sales.create') && <Link to={`/invoices/new?customerId=${customer.id}`}><Button className="bg-primary-600 hover:bg-primary-700">فاتورة جديدة</Button></Link>}
+              {can('payments.create') && <Link to={`/payments/new?customerId=${customer.id}`}><Button className="bg-green-600 hover:bg-green-700">تسديد دين</Button></Link>}
             </div>
           </div>
 
@@ -176,7 +181,7 @@ export function CustomerStatement() {
                       <>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            <p className="font-bold">{(item.data as Invoice).invoiceNumber}</p>
+                            <p className="font-bold">{formatDocumentNumber((item.data as Invoice).invoiceNumber)}</p>
                             <Badge variant={(item.data as Invoice).status === 'paid' ? 'success' : (item.data as Invoice).status === 'partial' ? 'warning' : 'destructive'} className="text-[10px]">
                               {(item.data as Invoice).status === 'paid' ? 'مدفوعة' : (item.data as Invoice).status === 'partial' ? 'جزئية' : 'غير مدفوعة'}
                             </Badge>
@@ -199,14 +204,14 @@ export function CustomerStatement() {
                       <>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            <p className="font-bold">{(item.data as Payment).receiptNumber}</p>
+                            <p className="font-bold">{formatDocumentNumber((item.data as Payment).receiptNumber)}</p>
                             <Badge variant="success" className="text-[10px]">تسديد</Badge>
                           </div>
                           <p className="text-sm text-gray-500">{formatDate(item.date, true)}</p>
                         </div>
                         <div className="flex justify-between items-center">
                           <div>
-                            <p className="text-sm">تسديد دين • {(item.data as Payment).method === 'cash' ? 'نقدي' : (item.data as Payment).method === 'transfer' ? 'تحويل' : 'أخرى'}</p>
+                            <p className="text-sm">تسديد دين • {paymentMethodLabel((item.data as Payment).method)}</p>
                             {(item.data as Payment).notes && <p className="text-xs text-gray-500 mt-1">{(item.data as Payment).notes}</p>}
                           </div>
                           <div className="text-left">
@@ -240,7 +245,7 @@ export function CustomerStatement() {
               {invoices.map(inv => (
                 <div key={inv.id} className="flex justify-between items-center p-2.5 bg-gray-50 dark:bg-gray-800/50 rounded-lg text-sm">
                   <div>
-                    <p className="font-medium">{inv.invoiceNumber}</p>
+                    <p className="font-medium">{formatDocumentNumber(inv.invoiceNumber)}</p>
                     <p className="text-xs text-gray-500">{formatDate(inv.date)} • {inv.itemsCount} مادة</p>
                   </div>
                   <p className="font-bold">{formatCurrency(inv.total, settings?.currency)}</p>
@@ -260,8 +265,8 @@ export function CustomerStatement() {
               {payments.map(p => (
                 <div key={p.id} className="flex justify-between items-center p-2.5 bg-green-50 dark:bg-green-900/20 rounded-lg text-sm border border-green-200 dark:border-green-800/30">
                   <div>
-                    <p className="font-medium">{p.receiptNumber}</p>
-                    <p className="text-xs text-gray-500">{formatDate(p.date)} • {p.method}</p>
+                    <p className="font-medium">{formatDocumentNumber(p.receiptNumber)}</p>
+                    <p className="text-xs text-gray-500">{formatDate(p.date)} • {paymentMethodLabel(p.method)}</p>
                   </div>
                   <p className="font-bold text-green-600">{formatCurrency(p.amount, settings?.currency)}</p>
                 </div>
@@ -277,7 +282,7 @@ export function CustomerStatement() {
           open={showPreview}
           title={`كشف حساب ${customer.fullName}`}
           bodyHtml={buildCustomerStatementPrintHtml(customer, invoices, payments, settings, debt)}
-          fileNameBase={`Statement_${customer.fullName}`}
+          fileNameBase={`كشف_حساب_${customer.fullName}`}
           shareTitle={`كشف حساب ${customer.fullName}`}
           onClose={() => setShowPreview(false)}
         />

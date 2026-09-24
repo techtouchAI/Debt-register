@@ -1,5 +1,6 @@
 import { escapeHtml, formatDate } from './utils';
 import { officeNameFontSize } from './officeName';
+import { formatDocumentNumber, paymentMethodLabel, saleTypeLabel } from './labels';
 import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase, PurchaseItem } from '@/types';
 
 /**
@@ -32,7 +33,7 @@ import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase,
  * ------------------------------------------------------------------ */
 
 const DOCUMENT_CSS = `
-.doc { font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif; color: #111827; direction: rtl; line-height: 1.7; }
+.doc { font-family: 'Cairo Variable', 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif; color: #111827; direction: rtl; line-height: 1.7; }
 .doc * { box-sizing: border-box; }
 .doc h1, .doc h2, .doc h3, .doc p { margin: 0; }
 .doc .page { max-width: 770px; margin: 0 auto; background: #fff; }
@@ -97,6 +98,41 @@ export interface BuiltDocument {
   bodyHtml: string;
 }
 
+/**
+ * قواعد الخط المدمج في التطبيق (@font-face) بعناوين مطلقة.
+ *
+ * مستند الطباعة يُكتب داخل إطار مستقل لا يرث خطوط الصفحة، فكان يُطبع بخط
+ * النظام (يختلف بين ويندوز وأندرويد). ننسخ قواعد الخط من أوراق الأنماط
+ * المحمّلة ونحوّل عناوينها النسبية إلى مطلقة، فتخرج الفاتورة المطبوعة بنفس
+ * خط التطبيق والمعاينة وملف المستند على كل المنصات — دون إنترنت.
+ */
+function collectFontFaceCss(): string {
+  if (typeof document === 'undefined') return '';
+  const rules: string[] = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    let cssRules: CSSRuleList;
+    try {
+      cssRules = sheet.cssRules;
+    } catch {
+      continue; // ورقة أنماط من مصدر آخر لا يُسمح بقراءتها
+    }
+    const base = sheet.href || document.baseURI;
+    for (const rule of Array.from(cssRules)) {
+      if (rule.type !== CSSRule.FONT_FACE_RULE) continue;
+      const text = rule.cssText.replace(/url\((['"]?)([^'")]+)\1\)/g, (match, quote: string, url: string) => {
+        if (/^(data:|blob:)/i.test(url)) return match;
+        try {
+          return `url(${quote}${new URL(url, base).href}${quote})`;
+        } catch {
+          return match;
+        }
+      });
+      rules.push(text);
+    }
+  }
+  return rules.join('\n');
+}
+
 /** وثيقة HTML كاملة وجاهزة (لـ iframe المعاينة/الطباعة). */
 export function buildPrintDocument(title: string, bodyHtml: string): string {
   return `<!doctype html>
@@ -105,7 +141,7 @@ export function buildPrintDocument(title: string, bodyHtml: string): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
-<style>${DOCUMENT_CSS}</style>
+<style>${collectFontFaceCss()}${DOCUMENT_CSS}</style>
 </head>
 <body style="margin:0;padding:16px;background:#fff;">${bodyHtml}</body>
 </html>`;
@@ -221,9 +257,9 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
 
       <div class="doc-meta">
         <div class="col">
-          <p class="pair">رقم الفاتورة: <span class="v num">${escapeHtml(invoice.invoiceNumber)}</span></p>
+          <p class="pair">رقم الفاتورة: <span class="v num">${escapeHtml(formatDocumentNumber(invoice.invoiceNumber))}</span></p>
           <p class="wrap">الزبون: <strong>${escapeHtml(invoice.customerName)}</strong></p>
-          <p class="pair">النوع: <span class="v">${invoice.type === 'cash' ? 'نقدي' : 'آجل'}</span></p>
+          <p class="pair">النوع: <span class="v">${saleTypeLabel(invoice.type)}</span></p>
         </div>
         <div class="col">
           <p class="pair">التاريخ: <span class="v">${escapeHtml(formatDate(invoice.date, true))}</span></p>
@@ -258,12 +294,12 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
 }
 
 export async function printInvoice(invoice: Invoice, items: InvoiceItem[], settings: OfficeSettings): Promise<boolean> {
-  return printHtmlDocument(invoice.invoiceNumber, buildInvoicePrintHtml(invoice, items, settings));
+  return printHtmlDocument(`فاتورة ${formatDocumentNumber(invoice.invoiceNumber)}`, buildInvoicePrintHtml(invoice, items, settings));
 }
 
 export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings, remainingDebt?: number): string {
   const currency = escapeHtml(settings.currency || '');
-  const methodText = payment.method === 'cash' ? 'نقدي' : payment.method === 'transfer' ? 'تحويل' : 'أخرى';
+  const methodText = paymentMethodLabel(payment.method);
   return `
     <div class="doc receipt"><div class="page" style="text-align:center;">
       ${officeNameHeading(settings, 'h2')}
@@ -271,7 +307,7 @@ export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings
       <hr />
       <h3 style="font-size:15px;">وصل قبض</h3>
       <div class="lines">
-        <p><strong>رقم الوصل:</strong> <span class="num">${escapeHtml(payment.receiptNumber)}</span></p>
+        <p><strong>رقم الوصل:</strong> <span class="num">${escapeHtml(formatDocumentNumber(payment.receiptNumber))}</span></p>
         <p><strong>التاريخ:</strong> ${escapeHtml(formatDate(payment.date, true))}</p>
         <p><strong>الزبون:</strong> ${escapeHtml(payment.customerName)}</p>
         <p><strong>طريقة الدفع:</strong> ${methodText}</p>
@@ -286,7 +322,7 @@ export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings
 }
 
 export async function printReceipt(payment: Payment, settings: OfficeSettings, remainingDebt?: number): Promise<boolean> {
-  return printHtmlDocument(payment.receiptNumber, buildReceiptPrintHtml(payment, settings, remainingDebt));
+  return printHtmlDocument(`وصل قبض ${formatDocumentNumber(payment.receiptNumber)}`, buildReceiptPrintHtml(payment, settings, remainingDebt));
 }
 
 export function buildCustomerStatementPrintHtml(
@@ -303,8 +339,8 @@ export function buildCustomerStatementPrintHtml(
       (invoice) => `
         <tr>
           <td class="name">${escapeHtml(formatDate(invoice.date))}</td>
-          <td class="c num">${escapeHtml(invoice.invoiceNumber)}</td>
-          <td class="c">${invoice.type === 'cash' ? 'نقدي' : 'آجل'}</td>
+          <td class="c num">${escapeHtml(formatDocumentNumber(invoice.invoiceNumber))}</td>
+          <td class="c">${saleTypeLabel(invoice.type)}</td>
           <td class="l num">${escapeHtml(invoice.total.toLocaleString('ar-IQ'))}</td>
         </tr>`
     )
@@ -315,7 +351,7 @@ export function buildCustomerStatementPrintHtml(
       (payment) => `
         <tr>
           <td class="name">${escapeHtml(formatDate(payment.date))}</td>
-          <td class="c num">${escapeHtml(payment.receiptNumber)}</td>
+          <td class="c num">${escapeHtml(formatDocumentNumber(payment.receiptNumber))}</td>
           <td class="l num">${escapeHtml(payment.amount.toLocaleString('ar-IQ'))}</td>
         </tr>`
     )
@@ -384,7 +420,7 @@ export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[]
     )
     .join('');
 
-  const methodText = purchase.paymentMethod === 'cash' ? 'نقدي' : 'آجل';
+  const methodText = saleTypeLabel(purchase.paymentMethod);
 
   return `
     <div class="doc"><div class="page">
@@ -397,7 +433,7 @@ export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[]
 
       <div class="doc-meta">
         <div class="col">
-          <p class="pair">رقم الوصل: <span class="v num">${escapeHtml(purchase.purchaseNumber)}</span></p>
+          <p class="pair">رقم الوصل: <span class="v num">${escapeHtml(formatDocumentNumber(purchase.purchaseNumber))}</span></p>
           <p class="wrap">المورد: <strong>${escapeHtml(purchase.supplierName)}</strong></p>
           <p class="pair">طريقة الدفع: <span class="v">${methodText}</span></p>
         </div>
@@ -434,5 +470,5 @@ export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[]
 }
 
 export async function printPurchase(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): Promise<boolean> {
-  return printHtmlDocument(purchase.purchaseNumber, buildPurchasePrintHtml(purchase, items, settings));
+  return printHtmlDocument(`وصل شراء ${formatDocumentNumber(purchase.purchaseNumber)}`, buildPurchasePrintHtml(purchase, items, settings));
 }

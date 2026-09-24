@@ -19,10 +19,13 @@ import { useModalCloser } from '@/hooks/useModalCloser';
 import { formatCurrency, roundMoney } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { guard } from '@/lib/errors';
+import { confirmDialog } from '@/lib/confirm';
+import { usePermission } from '@/hooks/useSession';
 import { Customer } from '@/types';
 
 export function Customers() {
   const scope = useAsyncScope();
+  const can = usePermission();
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
@@ -132,7 +135,12 @@ export function Customers() {
           return;
         }
 
-        if (!confirm(`هل أنت متأكد من حذف الزبون "${check.customer.fullName}" نهائياً؟`)) return;
+        const confirmed = await confirmDialog({
+          title: `حذف الزبون "${check.customer.fullName}" نهائياً؟`,
+          confirmText: 'حذف الزبون',
+          tone: 'danger'
+        });
+        if (!confirmed) return;
 
         const result = await scope.run(() => deleteCustomer(customerId));
         if (!result.ok) {
@@ -159,10 +167,12 @@ export function Customers() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدارة العملاء ومتابعة الديون</p>
         </div>
-        <Button onClick={() => { setEditing(null); setFormData({ fullName: '', phone: '', address: '', notes: '' }); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
-          <Plus className="w-4 h-4 ml-2" />
-          إضافة زبون جديد
-        </Button>
+        {can('customers.create') && (
+          <Button onClick={() => { setEditing(null); setFormData({ fullName: '', phone: '', address: '', notes: '' }); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
+            <Plus className="w-4 h-4 ml-2" />
+            إضافة زبون جديد
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -266,28 +276,36 @@ export function Customers() {
                       كشف الحساب
                     </Button>
                   </Link>
-                  <Button variant="outline" size="sm" onClick={() => handleEdit(customer)}>
-                    <Edit className="w-3.5 h-3.5 ml-1" />
-                    تعديل
-                  </Button>
-                  <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => handleDelete(customer)}>
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
+                  {can('customers.edit') && (
+                    <Button variant="outline" size="sm" onClick={() => handleEdit(customer)}>
+                      <Edit className="w-3.5 h-3.5 ml-1" />
+                      تعديل
+                    </Button>
+                  )}
+                  {can('customers.delete') && (
+                    <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => handleDelete(customer)} aria-label={`حذف الزبون ${customer.fullName}`} title="حذف الزبون">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
 
                 <div className="flex gap-2">
-                  <Link to={`/invoices/new?customerId=${customer.id}`} className="flex-1">
-                    <Button variant="outline" size="sm" className="w-full text-xs">
-                      <FileText className="w-3 h-3 ml-1" />
-                      فاتورة جديدة
-                    </Button>
-                  </Link>
-                  <Link to={`/payments/new?customerId=${customer.id}`} className="flex-1">
-                    <Button variant="outline" size="sm" className="w-full text-xs">
-                      <CreditCard className="w-3 h-3 ml-1" />
-                      تسديد
-                    </Button>
-                  </Link>
+                  {can('sales.create') && (
+                    <Link to={`/invoices/new?customerId=${customer.id}`} className="flex-1">
+                      <Button variant="outline" size="sm" className="w-full text-xs">
+                        <FileText className="w-3 h-3 ml-1" />
+                        فاتورة جديدة
+                      </Button>
+                    </Link>
+                  )}
+                  {can('payments.create') && (
+                    <Link to={`/payments/new?customerId=${customer.id}`} className="flex-1">
+                      <Button variant="outline" size="sm" className="w-full text-xs">
+                        <CreditCard className="w-3 h-3 ml-1" />
+                        تسديد
+                      </Button>
+                    </Link>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -301,26 +319,27 @@ export function Customers() {
             <Users className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <h3 className="font-bold text-gray-900 dark:text-white mb-2">لا يوجد عملاء</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">ابدأ بإضافة عملائك</p>
-            <Button onClick={() => setShowForm(true)}><Plus className="w-4 h-4 ml-2" />إضافة زبون</Button>
+            {can('customers.create') && <Button onClick={() => setShowForm(true)}><Plus className="w-4 h-4 ml-2" />إضافة زبون</Button>}
           </CardContent>
         </Card>
       )}
 
       {showForm && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg">
+          <Card className="w-full max-w-lg max-h-[92vh] overflow-y-auto overscroll-contain" role="dialog" aria-modal="true" aria-label={editing ? 'تعديل بيانات الزبون' : 'إضافة زبون جديد'}>
             <CardHeader>
               <CardTitle>{editing ? 'تعديل بيانات الزبون' : 'إضافة زبون جديد'}</CardTitle>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              {/* noValidate: التحقق العربي في saveCustomer بدل فقاعات المتصفح */}
+              <form onSubmit={handleSubmit} noValidate className="space-y-4">
                 <div>
                   <label className="text-sm font-medium mb-1 block">الاسم الكامل *</label>
-                  <Input placeholder="الاسم الثلاثي أو الرباعي" value={formData.fullName} onChange={(e) => setFormData({ ...formData, fullName: e.target.value })} required />
+                  <Input placeholder="الاسم الثلاثي أو الرباعي" value={formData.fullName} onChange={(e) => setFormData({ ...formData, fullName: e.target.value })} aria-required="true" autoFocus />
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1 block">رقم الهاتف</label>
-                  <Input placeholder="07xxxxxxxx" value={formData.phone || ''} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} dir="ltr" />
+                  <Input placeholder="مثال: 07701234567" inputMode="tel" value={formData.phone || ''} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} dir="ltr" />
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1 block">العنوان</label>

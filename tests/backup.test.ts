@@ -84,9 +84,9 @@ describe('النسخ الاحتياطي', () => {
     expect(await db.backups.count()).toBe(1);
   });
 
-  it('يرفض ملف JSON غير صالح', async () => {
-    const file = new File(['{ هذا ليس JSON'], 'broken.json', { type: 'application/json' });
-    await expect(importBackup(file)).rejects.toThrow(/JSON/);
+  it('يرفض ملفاً تالفاً برسالة عربية بلا مصطلحات إنجليزية', async () => {
+    const file = new File(['{ هذا ليس ملفاً صالحاً'], 'broken.json', { type: 'application/json' });
+    await expect(importBackup(file)).rejects.toThrow('الملف ليس نسخة احتياطية صالحة أو أنه تالف');
   });
 
   it('يستكمل الإعدادات إذا لم تحتويها النسخة', async () => {
@@ -134,11 +134,11 @@ describe('النسخ الاحتياطي', () => {
   });
 
   it('ينظّف أسماء الملفات من الأحرف غير الآمنة', () => {
-    expect(backupFileName('../../etc/passwd', new Date(2026, 4, 3, 9, 8, 7))).toBe('etc_passwd_Backup_2026-05-03_09-08-07.json');
+    expect(backupFileName('../../etc/passwd', new Date(2026, 4, 3, 9, 8, 7))).toBe('etc_passwd_نسخة_احتياطية_2026-05-03_09-08-07.json');
     expect(backupFileName('مكتب الرافدين الزراعي', new Date(2026, 4, 3, 9, 8, 7))).toBe(
-      'مكتب الرافدين الزراعي_Backup_2026-05-03_09-08-07.json'
+      'مكتب الرافدين الزراعي_نسخة_احتياطية_2026-05-03_09-08-07.json'
     );
-    expect(backupFileName('', new Date(2026, 0, 1, 0, 0, 0))).toBe('Office_Backup_2026-01-01_00-00-00.json');
+    expect(backupFileName('', new Date(2026, 0, 1, 0, 0, 0))).toBe('المكتب_نسخة_احتياطية_2026-01-01_00-00-00.json');
   });
 });
 

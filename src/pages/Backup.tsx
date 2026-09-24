@@ -1,17 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Database, Download, Upload, HardDrive, Clock, FileJson, AlertTriangle, CheckCircle, Trash2, Folder, Smartphone, Monitor, RotateCcw, Loader2 } from 'lucide-react';
+import { Database, Download, Upload, HardDrive, Clock, FileJson, AlertTriangle, CheckCircle, Trash2, Folder, RotateCcw, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, refreshSettings } from '@/lib/db';
 import {
   exportBackupToFile,
-  importBackup,
+  importInspectedBackup,
+  inspectBackupFile,
   listSnapshots,
   saveSnapshot,
   restoreSnapshot,
   deleteSnapshot
 } from '@/lib/backup';
+import { confirmDialog } from '@/lib/confirm';
+import { formatFileSize } from '@/lib/labels';
+import { getElectronAPI, isNativePlatform, isTauri } from '@/lib/platform';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -23,6 +27,7 @@ export function Backup() {
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   /* نطاق يُلغى عند مغادرة الشاشة: يمنع متابعة عمليات النسخ/الاستعادة على
      قاعدة بيانات أُغلقت، ويوقف مؤقت إعادة التحميل المعلّق. */
   const scope = useAsyncScope();
@@ -50,6 +55,13 @@ export function Backup() {
     },
     [scope]
   );
+
+  /** أين يُحفظ ملف التصدير على المنصة الحالية (وصف دقيق بالعربية). */
+  const saveLocationHint = isNativePlatform()
+    ? 'أندرويد: يُحفظ في المستندات ← إدارة المكتب ← النسخ الاحتياطية، ثم تفتح نافذة المشاركة لحفظ نسخة في مكان آخر أو إرسالها'
+    : getElectronAPI() || isTauri()
+      ? 'ويندوز: يفتح صندوق الحفظ لتختار المكان (المقترح: التنزيلات ← إدارة المكتب)'
+      : 'المتصفح: يُحفظ في مجلد التنزيلات';
 
   const backups = useLiveQuery(() => db.backups.orderBy('date').reverse().toArray(), []);
   const snapshots = useLiveQuery(() => listSnapshots(), []);
@@ -88,10 +100,10 @@ export function Backup() {
     if (isExporting) return;
     setIsExporting(true);
     try {
-      const fileName = await scope.run(() => exportBackupToFile('manual'));
+      const exported = await scope.run(() => exportBackupToFile('manual'));
       if (scope.aborted) return; // غادر المستخدم الشاشة: لا رسائل ولا تحديث حجم
       // لا حاجة لتحديث يدوي للأرقام: استعلام الحجم حيّ ويُحدَّث تلقائياً
-      toast.success('تم إنشاء النسخة الاحتياطية', `${fileName} — حُفظت في مجلد التنزيلات`);
+      toast.success('تم إنشاء النسخة الاحتياطية', exported.message);
     } catch (error) {
       if (error instanceof Error && error.message === 'BACKUP_CANCELLED') {
         toast.info('أُلغي الحفظ', 'لم يتم اختيار مكان للحفظ');
@@ -115,18 +127,35 @@ export function Backup() {
     }
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!confirm(`هل أنت متأكد من استيراد النسخة الاحتياطية "${file.name}"؟\n\n⚠️ تحذير: سيتم استبدال جميع البيانات الحالية ببيانات النسخة الاحتياطية.\n\nيُنصح بعمل نسخة احتياطية للبيانات الحالية قبل الاستيراد.`)) {
-      e.target.value = '';
-      return;
-    }
-
+  /**
+   * الاستيراد على مرحلتين: فحص الملف أولاً (بنيته وبصمة سلامته وأعداد
+   * سجلاته) وعرض ملخصه في حوار التأكيد، ثم الاستبدال بعد موافقة صريحة.
+   * يعمل من زر اختيار الملف ومن سحب الملف وإفلاته (ويندوز بالفأرة).
+   */
+  const importFromFile = async (file: File) => {
+    if (isImporting) return;
     setIsImporting(true);
     try {
-      const result = await scope.run(() => importBackup(file));
+      const inspected = await scope.run(() => inspectBackupFile(file));
+      if (scope.aborted) return;
+      const { preview } = inspected;
+      const counts = preview.counts;
+      const confirmed = await confirmDialog({
+        title: 'استيراد النسخة الاحتياطية؟',
+        message: `الملف: ${file.name}\nسيتم استبدال جميع البيانات الحالية ببيانات هذه النسخة. يُنصح بتصدير نسخة من البيانات الحالية قبل المتابعة.`,
+        details: [
+          `المكتب: ${preview.officeName || 'غير محدد'}`,
+          `تاريخ النسخة: ${formatDate(preview.date, true)}`,
+          `${counts.invoices ?? 0} فاتورة • ${counts.customers ?? 0} زبون • ${counts.materials ?? 0} مادة`,
+          `${counts.payments ?? 0} تسديد • ${counts.purchases ?? 0} وصل شراء • ${counts.users ?? 0} مستخدم`,
+          ...preview.warnings.slice(0, 3)
+        ],
+        confirmText: 'استيراد واستبدال البيانات',
+        tone: 'warning'
+      });
+      if (!confirmed || scope.aborted) return;
+
+      const result = await scope.run(() => importInspectedBackup(file, inspected.backup, inspected.warnings));
       if (scope.aborted) return;
       toast.success(
         'تم الاستيراد بنجاح',
@@ -137,15 +166,39 @@ export function Backup() {
     } catch (error) {
       reportError('Backup.import', error, 'فشل الاستيراد');
     } finally {
-      setIsImporting(false);
-      e.target.value = '';
+      if (!scope.aborted) setIsImporting(false);
     }
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // تفريغ الحقل فوراً: اختيار الملف نفسه مرة أخرى يُطلق الحدث من جديد
+    e.target.value = '';
+    if (file) void importFromFile(file);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!/\.json$/i.test(file.name)) {
+      toast.warning('ملف غير مدعوم', 'أفلت ملف نسخة احتياطية صادراً من هذا التطبيق');
+      return;
+    }
+    void importFromFile(file);
   };
 
   const handleRestoreSnapshot = async (snapshot: Omit<BackupSnapshot, 'payload'>) => {
     const snapshotId = snapshot.id;
     if (!snapshotId) return;
-    if (!confirm(`سيتم استبدال البيانات الحالية بنسخة ${formatDate(snapshot.date, true)}.\nهل تريد المتابعة؟`)) return;
+    const confirmed = await confirmDialog({
+      title: 'استعادة النسخة الداخلية؟',
+      message: `سيتم استبدال البيانات الحالية بنسخة ${formatDate(snapshot.date, true)}.`,
+      confirmText: 'استعادة',
+      tone: 'warning'
+    });
+    if (!confirmed) return;
 
     setIsRestoring(snapshotId);
     try {
@@ -161,7 +214,8 @@ export function Backup() {
   };
 
   const handleDeleteSnapshot = async (id: number) => {
-    if (!confirm('هل تريد حذف هذه النسخة الداخلية؟')) return;
+    const confirmed = await confirmDialog({ title: 'حذف هذه النسخة الداخلية؟', confirmText: 'حذف', tone: 'danger' });
+    if (!confirmed) return;
     try {
       await deleteSnapshot(id);
       toast.success('تم حذف النسخة الداخلية');
@@ -171,7 +225,13 @@ export function Backup() {
   };
 
   const handleDeleteBackupMeta = async (id: number) => {
-    if (!confirm('هل تريد حذف سجل هذه النسخة من القائمة؟ (لن يحذف الملف من الجهاز)')) return;
+    const confirmed = await confirmDialog({
+      title: 'حذف السجل من القائمة؟',
+      message: 'يُحذف السطر من سجل النسخ فقط، ولا يُحذف الملف من الجهاز.',
+      confirmText: 'حذف السجل',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
     try {
       await db.backups.delete(id);
     } catch (error) {
@@ -180,13 +240,23 @@ export function Backup() {
   };
 
   const handleClearAllData = async () => {
-    if (!confirm('⚠️ تحذير خطير: هل أنت متأكد من حذف جميع بيانات التطبيق نهائياً؟\n\nسيتم حذف:\n• الإعدادات والمستخدمون\n• جميع المواد والعملاء\n• جميع الفواتير ووصول الشراء والتسديدات\n• الإشعارات وسجل النشاط\n• سجل النسخ والنسخ الداخلية\n\nسيبدأ التطبيق من جديد بمعالج إعداد المكتب، ولا يمكن التراجع عن هذا الإجراء!')) return;
-
-    const confirmText = prompt('للتأكيد، اكتب "حذف نهائي" بالضبط:');
-    if (confirmText !== 'حذف نهائي') {
-      toast.info('تم إلغاء العملية', 'النص غير متطابق');
-      return;
-    }
+    // حوار داخل التطبيق يطلب كتابة "حذف نهائي": كان `prompt()` الأصلي غير
+    // مدعوم في نسخة ويندوز فيفشل الحذف دائماً هناك.
+    const confirmed = await confirmDialog({
+      title: 'حذف جميع بيانات التطبيق نهائياً؟',
+      message: 'سيبدأ التطبيق من جديد بمعالج إعداد المكتب، ولا يمكن التراجع عن هذا الإجراء.',
+      details: [
+        'الإعدادات والمستخدمون',
+        'جميع المواد والعملاء',
+        'جميع الفواتير ووصول الشراء والتسديدات',
+        'الإشعارات وسجل النشاط',
+        'سجل النسخ والنسخ الداخلية'
+      ],
+      confirmText: 'حذف نهائي',
+      tone: 'danger',
+      requireText: 'حذف نهائي'
+    });
+    if (!confirmed) return;
 
     try {
       await db.transaction(
@@ -249,39 +319,49 @@ export function Backup() {
             <div className="h-1 bg-gradient-to-r from-primary-600 to-primary-400" />
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><HardDrive className="w-5 h-5" />إنشاء نسخ احتياطي</CardTitle>
-              <p className="text-xs text-gray-500">التصدير اليدوي يحفظ ملفاً باسم المكتب والتاريخ في مجلد التنزيلات</p>
+              <p className="text-xs text-gray-500">التصدير اليدوي يحفظ ملفاً واحداً فيه كل بيانات المكتب باسم المكتب والتاريخ</p>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
                   <h3 className="font-bold text-primary-800 dark:text-primary-300 flex items-center gap-2"><Download className="w-4 h-4" />تصدير نسخة احتياطية</h3>
                   <p className="text-xs text-primary-700 dark:text-primary-400 mt-2 leading-relaxed">
-                    يتم حفظ ملف JSON يحتوي على جميع بياناتك في مجلد التحميلات مع اسم المكتب والتاريخ:<br/>
-                    <code className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded text-[11px] mt-1 inline-block">اسم_المكتب_Backup_2024-01-15_14-30-00.json</code>
+                    ملف واحد يضم كل شيء: بيانات المكتب والشعار والإعدادات، المستخدمين، المواد، الزبائن، الفواتير، التسديدات، وصول الشراء، الإشعارات وسجل النشاط وتسلسل أرقام المستندات. اسم الملف:<br/>
+                    <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded text-[11px] mt-1 inline-block break-all">اسم_المكتب_نسخة_احتياطية_التاريخ_الوقت</span>
                   </p>
                   <Button onClick={handleExport} disabled={isExporting} className="w-full mt-4 bg-primary-600 hover:bg-primary-700">
-                    {isExporting ? 'جاري التصدير...' : <><Download className="w-4 h-4 ml-2" />تصدير الآن إلى التحميلات</>}
+                    {isExporting ? 'جاري التصدير...' : <><Download className="w-4 h-4 ml-2" />تصدير الآن</>}
                   </Button>
-                  <div className="flex gap-2 mt-3 text-[11px] text-primary-600 dark:text-primary-400">
-                    <span className="flex items-center gap-1"><Folder className="w-3 h-3" />Downloads/AgriOffice/</span>
-                    <span className="flex items-center gap-1"><Smartphone className="w-3 h-3" />Android</span>
-                    <span className="flex items-center gap-1"><Monitor className="w-3 h-3" />Windows 10/11</span>
-                  </div>
+                  <p className="flex items-start gap-1.5 mt-3 text-[11px] text-primary-600 dark:text-primary-400 leading-relaxed">
+                    <Folder className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    {saveLocationHint}
+                  </p>
                 </div>
 
-                <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
+                <div
+                  className={`border rounded-xl p-4 transition-colors ${isDragging ? 'bg-primary-50 dark:bg-primary-900/20 border-primary-500 border-dashed' : 'bg-gray-100/70 dark:bg-gray-800/40 border-gray-200 dark:border-gray-700/60'}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'copy';
+                    if (!isDragging) setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                >
                   <h3 className="font-bold text-blue-800 dark:text-blue-300 flex items-center gap-2"><Upload className="w-4 h-4" />استيراد نسخة احتياطية</h3>
                   <p className="text-xs text-blue-700 dark:text-blue-400 mt-2 leading-relaxed">
-                    استيراد ملف نسخ احتياطي سابق. سيتم وضعه في مجلد خاص بالتطبيق مع تاريخ الاستيراد وحفظ نسخة تلقائية جديدة كما طلبت.
+                    يُفحص الملف أولاً ويُعرض ملخصه (اسم المكتب والتاريخ وعدد السجلات) قبل الاستبدال، ثم تُحفظ نسخة أمان داخلية تلقائياً.
                   </p>
                   <label className="block w-full mt-4">
                     <div className="w-full h-11 bg-primary-600 hover:bg-primary-700 text-white rounded-lg flex items-center justify-center gap-2 cursor-pointer font-medium text-sm transition-colors">
-                      <Upload className="w-4 h-4" />
+                      {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                       {isImporting ? 'جاري الاستيراد...' : 'اختيار ملف للاستيراد'}
                     </div>
-                    <input type="file" accept=".json" className="hidden" onChange={handleImport} disabled={isImporting} />
+                    <input type="file" accept=".json,application/json" className="hidden" onChange={handleImport} disabled={isImporting} />
                   </label>
-                  <p className="text-[11px] text-blue-600 dark:text-blue-400 mt-2">• يدعم ملفات JSON فقط • نسخ تلقائي بعد الاستيراد</p>
+                  <p className="text-[11px] text-blue-600 dark:text-blue-400 mt-2">
+                    • ملفات النسخ الصادرة من هذا التطبيق فقط • يمكنك أيضاً سحب الملف وإفلاته هنا
+                  </p>
                 </div>
               </div>
 
@@ -293,7 +373,7 @@ export function Backup() {
                     <li>قم بعمل نسخ احتياطي يومياً على الأقل - بيانات الديون تمتد لسنة</li>
                     <li>احفظ النسخ على فلاش ميموري خارجي أو حاسبة أخرى</li>
                     <li>عند الاستيراد تُنشأ نسخة أمان داخلية تلقائياً يمكن الرجوع إليها</li>
-                    <li>كل نسخة لها اسم وتاريخ خاص بها كما طلبت: اسم_المكتب_تاريخ_وقت.json</li>
+                    <li>كل نسخة لها اسم وتاريخ خاص بها: اسم المكتب ثم التاريخ والوقت</li>
                     <li>في حال تعطل الحاسبة أو فيروس، يمكنك استعادة كل شيء من النسخة</li>
                   </ul>
                 </div>
@@ -328,7 +408,7 @@ export function Backup() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">{formatDate(snapshot.date, true)}</p>
                         <p className="text-[11px] text-gray-500">
-                          {(snapshot.size / 1024).toFixed(1)} KB • {snapshot.type === 'auto' ? 'تلقائية' : 'يدوية'}
+                          {formatFileSize(snapshot.size)} • {snapshot.type === 'auto' ? 'تلقائية' : 'يدوية'}
                         </p>
                       </div>
                     </div>
@@ -385,7 +465,7 @@ export function Backup() {
                           <Badge variant={backup.type === 'auto' ? 'secondary' : backup.type === 'import' ? 'warning' : 'success'} className="text-[9px]">
                             {backup.type === 'auto' ? 'تلقائي' : backup.type === 'import' ? 'استيراد' : 'يدوي'}
                           </Badge>
-                          {backup.size && <span>{(backup.size / 1024).toFixed(1)} KB</span>}
+                          {backup.size ? <span>{formatFileSize(backup.size)}</span> : null}
                         </div>
                       </div>
                     </div>
@@ -418,13 +498,13 @@ export function Backup() {
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">التسديدات</p><p className="font-bold text-lg">{stats.payments}</p></div>
               </div>
               <div className="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800/30 rounded-xl p-3">
-                <p className="text-xs text-primary-700 dark:text-primary-300">حجم النسخة التقديري</p>
-                <p className="font-bold text-primary-800 dark:text-primary-200">{(stats.totalSize / 1024).toFixed(1)} KB</p>
-                <p className="text-[11px] text-primary-600 dark:text-primary-400 mt-1">JSON مضغوط</p>
+                <p className="text-xs text-primary-700 dark:text-primary-300">حجم البيانات التقديري</p>
+                <p className="font-bold text-primary-800 dark:text-primary-200">{formatFileSize(stats.totalSize)}</p>
+                <p className="text-[11px] text-primary-600 dark:text-primary-400 mt-1">محفوظة على هذا الجهاز فقط</p>
               </div>
               <div className="text-xs text-gray-500 space-y-1">
                 <p className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-600" />آمن 100% بدون انترنت</p>
-                <p className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-600" />يعمل على Android و Windows 10/11</p>
+                <p className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-600" />يعمل على أندرويد وويندوز 10 و 11</p>
                 <p className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-green-600" />نسخ تلقائي كل {settings?.autoBackupInterval || 60} دقيقة</p>
               </div>
             </CardContent>

@@ -1,5 +1,7 @@
 import type { Table } from 'dexie';
 import { db, getMeta, setMeta } from './db';
+import { DOCUMENT_PREFIX, LEGACY_DOCUMENT_PREFIX } from './labels';
+import { SEQUENCE_META_PREFIX } from './metaKeys';
 
 /**
  * مولّد أرقام تسلسلية فريدة وغير قابلة لإعادة الاستخدام.
@@ -11,12 +13,18 @@ import { db, getMeta, setMeta } from './db';
  * الآلية: أعلى رقم مستخدم في الجدول ∪ أعلى رقم محفوظ في جدول meta (علامة
  * high-water) ثم التحقق من عدم استخدام الرقم. إذا تراجعت المعاملة لاحقاً
  * يُفقد الرقم فقط ولا يُعاد استخدامه.
+ *
+ * البادئات عربية (ف/ق/ش). الأرقام المحفوظة قبل هذا الإصدار ببادئة إنجليزية
+ * (INV/REC/PUR) تُحسب ضمن التسلسل نفسه، فيكمل الترقيم من حيث توقف ولا يتكرر
+ * رقم في الشهر نفسه ولو اختلفت البادئة.
+ *
+ * علامات high-water محفوظة بمفاتيح `seq:<البادئة>` في جدول meta، وهي جزء من
+ * النسخة الاحتياطية (انظر `backup.ts`) حتى لا يُعاد استخدام رقم محذوف بعد
+ * الاستعادة على جهاز جديد.
  */
-async function highestUsed(
-  table: Table<Record<string, unknown>, number>,
-  index: string,
-  prefix: string
-): Promise<number> {
+type SequenceTable = Table<Record<string, unknown>, number>;
+
+async function highestInTable(table: SequenceTable, index: string, prefix: string): Promise<number> {
   let maxInTable = 0;
   try {
     const keys = (await table.where(index).between(prefix, `${prefix}\uffff`, true, false).keys()) as unknown[];
@@ -27,27 +35,35 @@ async function highestUsed(
   } catch (error) {
     console.warn('تعذّر قراءة الأرقام السابقة:', error);
   }
+  return maxInTable;
+}
 
-  const metaKey = `seq:${prefix}`;
-  let highWater = 0;
+async function highWater(prefix: string): Promise<number> {
   try {
-    const stored = await getMeta<number>(metaKey);
-    if (Number.isFinite(stored as number)) highWater = stored as number;
+    const stored = await getMeta<number>(`${SEQUENCE_META_PREFIX}${prefix}`);
+    return Number.isFinite(stored as number) ? (stored as number) : 0;
   } catch {
     /* جدول meta غير متاح بعد الترقية — نعتمد على الجدول فقط */
+    return 0;
   }
+}
 
-  return Math.max(maxInTable, highWater) + 1;
+/** أعلى رقم مستخدم عبر كل البادئات المكافئة (الحالية + القديمة). */
+async function highestUsed(table: SequenceTable, index: string, prefixes: readonly string[]): Promise<number> {
+  const values = await Promise.all(
+    prefixes.flatMap((prefix) => [highestInTable(table, index, prefix), highWater(prefix)])
+  );
+  return Math.max(0, ...values) + 1;
 }
 
 async function allocate(
-  table: Table<Record<string, unknown>, number>,
+  table: SequenceTable,
   index: string,
   prefix: string,
+  legacyPrefix: string,
   pad: number
 ): Promise<string> {
-  const metaKey = `seq:${prefix}`;
-  let candidateValue = await highestUsed(table, index, prefix);
+  let candidateValue = await highestUsed(table, index, [prefix, legacyPrefix]);
   const build = (value: number) => `${prefix}${String(value).padStart(pad, '0')}`;
   let candidate = build(candidateValue);
 
@@ -59,7 +75,7 @@ async function allocate(
   }
 
   try {
-    await setMeta(metaKey, candidateValue);
+    await setMeta(`${SEQUENCE_META_PREFIX}${prefix}`, candidateValue);
   } catch (error) {
     console.warn('تعذّر حفظ علامة التسلسل:', error);
   }
@@ -67,20 +83,40 @@ async function allocate(
   return candidate;
 }
 
-/** رقم فاتورة بصيغة INV-YYYYMM-0001 حسب تاريخ الفاتورة. */
+const yearMonth = (date: Date) => `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+/** رقم فاتورة بصيغة ف-YYYYMM-0001 حسب تاريخ الفاتورة. */
 export function nextInvoiceNumber(date: Date = new Date()): Promise<string> {
-  const prefix = `INV-${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}-`;
-  return allocate(db.invoices as unknown as Table<Record<string, unknown>, number>, 'invoiceNumber', prefix, 4);
+  const stamp = yearMonth(date);
+  return allocate(
+    db.invoices as unknown as SequenceTable,
+    'invoiceNumber',
+    `${DOCUMENT_PREFIX.invoice}-${stamp}-`,
+    `${LEGACY_DOCUMENT_PREFIX.invoice}-${stamp}-`,
+    4
+  );
 }
 
-/** رقم وصل قبض بصيغة REC-YYYY-00001 حسب تاريخ التسديد. */
+/** رقم وصل قبض بصيغة ق-YYYY-00001 حسب تاريخ التسديد. */
 export function nextReceiptNumber(date: Date = new Date()): Promise<string> {
-  const prefix = `REC-${date.getFullYear()}-`;
-  return allocate(db.payments as unknown as Table<Record<string, unknown>, number>, 'receiptNumber', prefix, 5);
+  const stamp = String(date.getFullYear());
+  return allocate(
+    db.payments as unknown as SequenceTable,
+    'receiptNumber',
+    `${DOCUMENT_PREFIX.receipt}-${stamp}-`,
+    `${LEGACY_DOCUMENT_PREFIX.receipt}-${stamp}-`,
+    5
+  );
 }
 
-/** رقم وصل شراء بصيغة PUR-YYYYMM-0001 حسب تاريخ الشراء. */
+/** رقم وصل شراء بصيغة ش-YYYYMM-0001 حسب تاريخ الشراء. */
 export function nextPurchaseNumber(date: Date = new Date()): Promise<string> {
-  const prefix = `PUR-${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}-`;
-  return allocate(db.purchases as unknown as Table<Record<string, unknown>, number>, 'purchaseNumber', prefix, 4);
+  const stamp = yearMonth(date);
+  return allocate(
+    db.purchases as unknown as SequenceTable,
+    'purchaseNumber',
+    `${DOCUMENT_PREFIX.purchase}-${stamp}-`,
+    `${LEGACY_DOCUMENT_PREFIX.purchase}-${stamp}-`,
+    4
+  );
 }
