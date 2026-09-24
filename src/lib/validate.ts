@@ -200,7 +200,10 @@ function sanitizeInvoices(rows: unknown[], now: string, warnings: string[]): Inv
       notes: asString(row.notes) || undefined,
       status,
       updatedAt: typeof row.updatedAt === 'string' && row.updatedAt ? asDate(row.updatedAt, date) : undefined,
-      downPaymentId: asId(row.downPaymentId)
+      downPaymentId: asId(row.downPaymentId),
+      // الرصيد السابق لقطة تاريخية: تُنقل كما هي (بلا سالب) ولا تُعاد حسابها
+      previousBalance:
+        row.previousBalance === undefined ? undefined : Math.max(0, asNumber(row.previousBalance))
     });
   }
   return invoices;

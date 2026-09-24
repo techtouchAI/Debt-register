@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
-import { ArrowRight, Eye, FileText, Loader2, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
+import { ArrowRight, Eye, FileText, HelpCircle, Loader2, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
 import { QuickAddPurchaseMaterialDialog } from '@/components/materials/QuickAddPurchaseMaterialDialog';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { getPurchaseWithItems, savePurchase, computePurchaseTotals, type PurchaseDraft } from '@/lib/purchases';
 import { buildPurchasePrintHtml } from '@/lib/print';
@@ -61,6 +62,7 @@ export function PurchaseForm() {
   const [loadedPurchase, setLoadedPurchase] = useState<Purchase | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -275,10 +277,18 @@ export function PurchaseForm() {
           <Button variant="ghost" size="icon" onClick={() => goBack('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><FileText className="w-7 h-7 text-primary-600" />{isEdit ? 'تعديل وصل شراء' : 'وصل شراء جديد'}</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">أدخل المواد مباشرة؛ المادة الجديدة تُسجّل في المخزن تلقائياً عند الحفظ.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              شراء من مورد: تدخل المواد إلى المخزن وتُسجَّل مشترياتك نقداً أو ديناً عليه — أما بيع المواد للزبائن فيُسجَّل في فاتورة البيع.
+            </p>
           </div>
         </div>
-        <Badge variant="secondary">إدخال مخزن</Badge>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Badge variant="secondary">إدخال مخزن</Badge>
+          <Button variant="outline" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق؟
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -397,6 +407,8 @@ export function PurchaseForm() {
       </div>
 
       <QuickAddPurchaseMaterialDialog open={showQuickAdd} initialName={quickAddName} currency={settings?.currency} defaultMinQuantity={settings?.lowStockThreshold} onClose={() => setShowQuickAdd(false)} onCreated={handleCreatedMaterial} />
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
+
       {previewBody && <DocumentPreviewDialog open={previewBody !== null} title={loadedPurchase?.purchaseNumber ? `وصل شراء ${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : 'معاينة وصل الشراء'} bodyHtml={previewBody} fileNameBase={loadedPurchase?.purchaseNumber ? `وصل_شراء_${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : `مسودة_شراء_${supplierName || 'وصل'}`} shareTitle="معاينة وصل الشراء" onClose={() => setPreviewBody(null)} />}
     </div>
   );

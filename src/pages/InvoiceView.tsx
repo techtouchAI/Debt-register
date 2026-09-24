@@ -10,7 +10,7 @@ import { deleteInvoice, getInvoiceWithItems } from '@/lib/invoices';
 import { buildInvoicePrintHtml, printInvoice } from '@/lib/print';
 import { generateInvoicePDF } from '@/lib/pdf';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { confirmDialog } from '@/lib/confirm';
@@ -141,6 +141,10 @@ export function InvoiceView() {
 
   if (!invoice || !settings) return null;
 
+  // الدين القديم المحمول على الفاتورة (لقطة وقت الإصدار) + المطلوب كاملاً
+  const previousBalance = Math.max(0, roundMoney(toFiniteNumber(invoice.previousBalance)));
+  const totalDue = roundMoney(invoice.total + previousBalance);
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -263,10 +267,22 @@ export function InvoiceView() {
               )}
               <div className="h-px bg-gray-200 dark:bg-gray-700" />
               <div className="flex justify-between text-base"><span className="font-bold">الإجمالي:</span><span className="font-bold text-primary-600">{formatCurrency(invoice.total, settings.currency)}</span></div>
+              {previousBalance > 0 && (
+                <>
+                  <div className="flex justify-between" data-testid="invoice-view-previous-balance">
+                    <span className="text-gray-500">الرصيد السابق:</span>
+                    <span className="font-bold text-amber-600">{formatCurrency(previousBalance, settings.currency)}</span>
+                  </div>
+                  <div className="flex justify-between text-base"><span className="font-bold">إجمالي المطلوب:</span><span className="font-bold text-primary-600">{formatCurrency(totalDue, settings.currency)}</span></div>
+                  <p className="text-[11px] leading-relaxed text-gray-500">
+                    الرصيد السابق دين قديم كان على الزبون قبل هذه الفاتورة، ويُسدَّد معها في نفس الوصل.
+                  </p>
+                </>
+              )}
               {invoice.type === 'credit' && (
                 <>
                   <div className="flex justify-between"><span className="text-gray-500">المدفوع:</span><span className="font-bold text-green-600">{formatCurrency(invoice.paidAmount, settings.currency)}</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><span className={`font-bold ${invoice.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(invoice.remaining, settings.currency)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">المتبقي على هذه الفاتورة:</span><span className={`font-bold ${invoice.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(invoice.remaining, settings.currency)}</span></div>
                 </>
               )}
             </CardContent>

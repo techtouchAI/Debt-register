@@ -1,4 +1,4 @@
-import { escapeHtml, formatDate } from './utils';
+import { escapeHtml, formatDate, roundMoney, toFiniteNumber } from './utils';
 import { officeNameFontSize } from './officeName';
 import { formatDocumentNumber, paymentMethodLabel, saleTypeLabel } from './labels';
 import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase, PurchaseItem } from '@/types';
@@ -246,6 +246,11 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
     .join('');
 
   const statusText = invoice.status === 'paid' ? 'مدفوعة' : invoice.status === 'partial' ? 'مدفوعة جزئياً' : 'غير مدفوعة';
+  // الدين القديم المحمول على الفاتورة: يُعرض سطراً مستقلاً ثم يُجمع في
+  // «إجمالي المطلوب» — ولا يُضاف إلى «الإجمالي» حتى لا تحتسبه أرصدة
+  // الزبائن والتقارير مرتين (دين الفواتير السابقة محفوظ على فواتيرها).
+  const previousBalance = Math.max(0, toFiniteNumber(invoice.previousBalance));
+  const totalDue = roundMoney(invoice.total + previousBalance);
 
   return `
     <div class="doc"><div class="page">
@@ -285,7 +290,21 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
         <p>المجموع: <span class="num">${escapeHtml(invoice.subtotal.toLocaleString('ar-IQ'))}</span> ${currency}</p>
         ${invoice.discount > 0 ? `<p>الخصم: <span class="num">${escapeHtml(invoice.discount.toLocaleString('ar-IQ'))}</span> ${currency}</p>` : ''}
         <p class="grand">الإجمالي: <span class="num">${escapeHtml(invoice.total.toLocaleString('ar-IQ'))}</span> ${currency}</p>
-        ${invoice.type === 'credit' ? `<p>المدفوع: <span class="num">${escapeHtml(invoice.paidAmount.toLocaleString('ar-IQ'))}</span> | المتبقي: <span class="num">${escapeHtml(invoice.remaining.toLocaleString('ar-IQ'))}</span></p>` : ''}
+        ${
+          previousBalance > 0
+            ? `<p>الرصيد السابق: <span class="num">${escapeHtml(previousBalance.toLocaleString('ar-IQ'))}</span> ${currency}</p>
+        <p class="grand">إجمالي المطلوب: <span class="num">${escapeHtml(totalDue.toLocaleString('ar-IQ'))}</span> ${currency}</p>`
+            : ''
+        }
+        ${
+          invoice.type === 'credit'
+            ? `<p>المدفوع: <span class="num">${escapeHtml(invoice.paidAmount.toLocaleString('ar-IQ'))}</span> | المتبقي على هذه الفاتورة: <span class="num">${escapeHtml(invoice.remaining.toLocaleString('ar-IQ'))}</span></p>${
+                previousBalance > 0
+                  ? `<p class="notes">الرصيد السابق هو دين قديم على الزبون قبل هذه الفاتورة، ويُسدَّد معها في نفس الوصل.</p>`
+                  : ''
+              }`
+            : ''
+        }
       </div>
 
       ${invoice.notes ? `<p class="notes">ملاحظات: ${escapeHtml(invoice.notes)}</p>` : ''}

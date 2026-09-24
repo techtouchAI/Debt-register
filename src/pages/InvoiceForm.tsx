@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
-import { FileText, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
+import { FileText, HelpCircle, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,6 +9,8 @@ import { NumberInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
+import { getCustomerPreviousBalance } from '@/lib/debts';
+import { logBackgroundFailure } from '@/lib/lifecycle';
 import { buildInvoicePrintHtml } from '@/lib/print';
 import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -19,6 +21,7 @@ import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialD
 import { formatDocumentNumber } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 /**
  * سطر في السلة. الكمية والسعر `null` أثناء تفريغ الحقل للكتابة من جديد:
@@ -77,6 +80,10 @@ export function InvoiceForm() {
   const [date, setDate] = useState(formatLocalDateTimeInput());
   const [paidAmount, setPaidAmount] = useState<number | null>(0);
   const [isSaving, setIsSaving] = useState(false);
+  // دين الزبون المختار (يُقرأ من الأرصدة الفعلية ويظهر في الملخص قبل الحفظ)
+  // مع معرّف صاحبه: تغيير الزبون يجعل القراءة القديمة غير صالحة فتُهمل تلقائياً
+  const [customerDebt, setCustomerDebt] = useState<{ customerId: number; amount: number } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,6 +168,34 @@ export function InvoiceForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * دين الزبون المختار: يُقرأ لحظة اختياره حتى يُضاف إلى الفاتورة الجديدة
+   * كرصيد سابق. الحساب من السجلات الأصلية (لا قيم مخزنة) فيطابق تماماً ما
+   * سيُثبَّت على الفاتورة عند الحفظ، والحفظ نفسه يعيد الحساب داخل المعاملة
+   * فلا تعتمد سلامة البيانات على الواجهة.
+   */
+  useEffect(() => {
+    const customerId = selectedCustomer?.id;
+    if (isEdit || !customerId) return;
+    let cancelled = false;
+    // نفس الدالة التي يُحسب بها الرصيد عند الحفظ: ما تراه في الملخص هو ما
+    // سيُثبَّت على الفاتورة حرفياً (مصدر حساب واحد للواجهة ولطبقة البيانات).
+    void getCustomerPreviousBalance(customerId)
+      .then((debt) => {
+        if (!cancelled) setCustomerDebt({ customerId, amount: debt });
+      })
+      .catch((error) => {
+        if (!cancelled) logBackgroundFailure('تعذّر حساب دين الزبون السابق:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, selectedCustomer?.id]);
+
+  /** دين الزبون المختار فعلاً (يُهمَل أي قراءة تخص زبوناً آخر بعد تبديله). */
+  const liveCustomerDebt =
+    !isEdit && customerDebt && customerDebt.customerId === selectedCustomer?.id ? customerDebt.amount : 0;
+
   const filteredMaterials = useMemo(() => {
     const query = searchMaterial.trim().toLowerCase();
     if (!query) return [];
@@ -217,12 +252,31 @@ export function InvoiceForm() {
   const invalidLine = cart.find((item) => cartLineError(item) !== null);
   const safeDiscount = Math.min(Math.max(roundMoney(toFiniteNumber(discount)), 0), subtotal);
   const total = roundMoney(subtotal - safeDiscount);
-  const safePaid = Math.min(Math.max(roundMoney(toFiniteNumber(paidAmount)), 0), total);
-  const remaining = invoiceType === 'credit' ? roundMoney(total - safePaid) : 0;
+  /**
+   * الرصيد السابق المحمول على هذه الفاتورة:
+   *  - عند الإنشاء: دين الزبون الحالي (طالما الفاتورة آجلة ومرتبطة بزبون مسجل)
+   *  - عند التعديل: اللقطة المثبَّتة على الفاتورة — لا تُعاد حسابها بعد
+   *    تسديدات لاحقة حتى لا يتغيّر مستند سبق تسليمه.
+   */
+  const previousBalance =
+    invoiceType === 'credit'
+      ? isEdit
+        ? Math.max(0, roundMoney(toFiniteNumber(loadedInvoice?.previousBalance)))
+        : liveCustomerDebt
+      : 0;
+  const totalDue = roundMoney(total + previousBalance);
+  const safePaid = Math.min(Math.max(roundMoney(toFiniteNumber(paidAmount)), 0), totalDue);
+  // المتبقي بعد هذه الدفعة على مستوى الزبون: المطلوب كاملاً ناقص المدفوع
+  // (التوزيع على أقدم الفواتير عند الحفظ قد يجعل متبقي الفاتورة وحدها أقل)
+  const remaining = invoiceType === 'credit' ? roundMoney(totalDue - safePaid) : 0;
   // حدود الخصم والدفعة تظهر كتحقّق مرئي بدل قصّ القيمة بصمت أثناء الكتابة
   const discountError = discount !== null && roundMoney(discount) > subtotal ? `الخصم أكبر من المجموع (${subtotal})` : null;
   const paidError =
-    invoiceType === 'credit' && paidAmount !== null && roundMoney(paidAmount) > total ? `المدفوع أكبر من الإجمالي (${total})` : null;
+    invoiceType === 'credit' && paidAmount !== null && roundMoney(paidAmount) > totalDue
+      ? `المدفوع أكبر من إجمالي المطلوب (${totalDue})`
+      : null;
+  // الدين الظاهر في التنبيه: الدين الحالي للزبون عند الإنشاء، واللقطة المثبَّتة عند التعديل
+  const outstandingDebt = roundMoney(Math.max(previousBalance, liveCustomerDebt));
 
   const handleSave = async (shouldPDF = false) => {
     if (isSaving) return;
@@ -310,6 +364,8 @@ export function InvoiceForm() {
         subtotal,
         discount: safeDiscount,
         total,
+        // المسودة تعرض ما ستحفظه الفاتورة تماماً: الرصيد السابق سطر مستقل
+        previousBalance: previousBalance > 0 ? previousBalance : undefined,
         paidAmount: invoiceType === 'cash' ? total : safePaid,
         remaining,
         date: previewDate,
@@ -360,9 +416,17 @@ export function InvoiceForm() {
             <FileText className="w-7 h-7 text-primary-600" />
             {isEdit ? 'تعديل فاتورة' : 'فاتورة بيع جديدة'}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">الفاتورة الذكية - بحث سريع وحساب تلقائي</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            بيع للزبون: تخرج المواد من المخزن وتُسجَّل مبيعاتك نقداً أو ديناً — ولشراء المواد من مورد استخدم وصل الشراء.
+          </p>
         </div>
-        <Button variant="outline" onClick={() => goBack('/invoices')}>رجوع للفواتير</Button>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق؟
+          </Button>
+          <Button variant="outline" onClick={() => goBack('/invoices')}>رجوع للفواتير</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -448,6 +512,18 @@ export function InvoiceForm() {
                   {invoiceType === 'credit' && !selectedCustomer && (
                     <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
                       الفواتير الآجلة تحتاج زبوناً مسجلاً حتى يُحسب الدين بشكل صحيح.
+                    </p>
+                  )}
+                  {outstandingDebt > 0 && (
+                    <p
+                      className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                      data-testid="invoice-previous-balance-note"
+                    >
+                      {isEdit
+                        ? `رصيد سابق مثبَّت على هذه الفاتورة: ${formatCurrency(outstandingDebt, settings?.currency)} (دين قديم كان على الزبون قبل إصدارها).`
+                        : invoiceType === 'credit'
+                          ? `على هذا الزبون دين سابق بقيمة ${formatCurrency(outstandingDebt, settings?.currency)} — أُضيف إلى الفاتورة ضمن «إجمالي المطلوب».`
+                          : `على هذا الزبون دين سابق بقيمة ${formatCurrency(outstandingDebt, settings?.currency)} — يُسدَّد بوصل قبض، والفاتورة النقدية تبقى مدفوعة بالكامل.`}
                     </p>
                   )}
                 </div>
@@ -604,6 +680,19 @@ export function InvoiceForm() {
                 <div className="h-px bg-gray-200 dark:bg-gray-700 my-2" />
                 <div className="flex justify-between text-base"><span className="font-bold">الإجمالي النهائي:</span><span className="font-bold text-primary-600 text-lg">{formatCurrency(total, settings?.currency)}</span></div>
 
+                {previousBalance > 0 && (
+                  <>
+                    <div className="flex justify-between" data-testid="invoice-previous-balance-row">
+                      <span className="text-gray-500">الرصيد السابق (دين قديم):</span>
+                      <span className="font-bold text-amber-600">{formatCurrency(previousBalance, settings?.currency)}</span>
+                    </div>
+                    <div className="flex justify-between text-base">
+                      <span className="font-bold">إجمالي المطلوب:</span>
+                      <span className="font-bold text-primary-600 text-lg">{formatCurrency(totalDue, settings?.currency)}</span>
+                    </div>
+                  </>
+                )}
+
                 {invoiceType === 'credit' && (
                   <>
                     <div className="flex items-center justify-between gap-2">
@@ -617,9 +706,9 @@ export function InvoiceForm() {
                       />
                     </div>
                     {paidError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{paidError}</p>}
-                    <div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><span className={`font-bold ${remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(remaining, settings?.currency)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">المتبقي على الزبون:</span><span className={`font-bold ${remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(remaining, settings?.currency)}</span></div>
                     <p className="text-[11px] text-gray-500 leading-relaxed">
-                      تُسجَّل الدفعة كوصل قبض، ويُوزَّع المسدد تلقائياً على أقدم فواتير الزبون.
+                      تُسجَّل الدفعة كوصل قبض، ويُوزَّع المسدد تلقائياً على أقدم فواتير الزبون (يشمل الرصيد السابق).
                     </p>
                   </>
                 )}
@@ -657,6 +746,8 @@ export function InvoiceForm() {
           </Card>
         </div>
       </div>
+
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       <QuickAddMaterialDialog
         open={showQuickAdd}

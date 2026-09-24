@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   FileText, 
@@ -7,6 +7,7 @@ import {
   CreditCard, 
   TrendingUp, 
   AlertTriangle,
+  HelpCircle,
   Plus,
   Wallet,
   ShoppingCart,
@@ -22,6 +23,7 @@ import { logBackgroundFailure } from '@/lib/lifecycle';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import { OverflowMarquee } from '@/components/ui/OverflowMarquee';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 import { usePermission } from '@/hooks/useSession';
 import { formatDocumentNumber } from '@/lib/labels';
 import type { Permission } from '@/lib/permissions';
@@ -31,6 +33,7 @@ export function Dashboard() {
   const can = usePermission();
   const officeName = settings?.officeName?.trim() || '';
   const today = formatLocalDateInput();
+  const [showHelp, setShowHelp] = useState(false);
 
   const recentInvoices = useLiveQuery(() => db.invoices.orderBy('createdAt').reverse().limit(5).toArray(), []);
 
@@ -108,9 +111,11 @@ export function Dashboard() {
 
   // الإجراءات السريعة حسب صلاحية المستخدم (موظف المبيعات لا يرى وصل الشراء
   // ولا إضافة مادة) — نفس المصفوفة التي تحرس المسارات وطبقة البيانات
-  const allQuickActions: Array<{ title: string; desc: string; icon: typeof FileText; color: string; href: string; count: number | null; permission: Permission }> = [
-    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null, permission: 'sales.create' },
-    { title: 'وصل شراء جديد', desc: 'إدخال مواد وتحديث المخزن', icon: ShoppingCart, color: 'bg-gray-900 dark:bg-white', href: '/purchases/new', count: null, permission: 'purchases.manage' },
+  // `tag` يوضّح اتجاه حركة المواد على البطاقة نفسها، فلا يبقى الفرق بين
+  // فاتورة البيع ووصل الشراء موكولاً إلى تجربة المستخدم وحدها
+  const allQuickActions: Array<{ title: string; desc: string; tag?: string; icon: typeof FileText; color: string; href: string; count: number | null; permission: Permission }> = [
+    { title: 'فاتورة بيع جديدة', desc: 'بيع للزبون: تخرج المواد من المخزن وتُسجَّل مبيعاتك', tag: 'مبيعات — خروج من المخزن', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null, permission: 'sales.create' },
+    { title: 'وصل شراء جديد', desc: 'شراء من مورد: تدخل المواد للمخزن وتُسجَّل مشترياتك', tag: 'مشتريات — إدخال إلى المخزن', icon: ShoppingCart, color: 'bg-gray-900 dark:bg-white', href: '/purchases/new', count: null, permission: 'purchases.manage' },
     { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null, permission: 'payments.create' },
     { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials, permission: 'materials.manage' },
     { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers, permission: 'customers.view' },
@@ -160,7 +165,13 @@ export function Dashboard() {
 
       {/* Quick Actions - Big Buttons */}
       <div>
-        <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">إجراءات سريعة</h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-bold text-gray-900 dark:text-white">إجراءات سريعة</h2>
+          <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق بين فاتورة البيع ووصل الشراء؟
+          </Button>
+        </div>
         <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${quickActions.length >= 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-3'}`}>
           {quickActions.map((action, idx) => (
             <Link key={idx} to={action.href}>
@@ -174,8 +185,13 @@ export function Dashboard() {
                   </div>
                   <h3 className="font-bold text-gray-900 dark:text-white mb-1">{action.title}</h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{action.desc}</p>
-                  {action.count !== null && (
-                    <Badge variant="secondary" className="text-[11px]">{action.count} عنصر</Badge>
+                  {(action.tag || action.count !== null) && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {action.tag && <Badge variant="outline" className="text-[10px]">{action.tag}</Badge>}
+                      {action.count !== null && (
+                        <Badge variant="secondary" className="text-[11px]">{action.count} عنصر</Badge>
+                      )}
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -183,6 +199,8 @@ export function Dashboard() {
           ))}
         </div>
       </div>
+
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -220,17 +238,17 @@ export function Dashboard() {
           <CardContent>
             <div className="space-y-3">
               {recentInvoices?.length ? recentInvoices.map((inv) => (
-                <div key={inv.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inv.type === 'cash' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600'}`}>
+                <div key={inv.id} className="flex items-center justify-between gap-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className={`w-10 h-10 shrink-0 rounded-lg flex items-center justify-center ${inv.type === 'cash' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600'}`}>
                       {inv.type === 'cash' ? <Wallet className="w-5 h-5" /> : <CreditCard className="w-5 h-5" />}
                     </div>
-                    <div>
-                      <p className="font-medium text-sm text-gray-900 dark:text-white">{formatDocumentNumber(inv.invoiceNumber)}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{inv.customerName} • {new Date(inv.date).toLocaleDateString('ar-EG')}</p>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm text-gray-900 dark:text-white truncate">{formatDocumentNumber(inv.invoiceNumber)}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{inv.customerName} • {new Date(inv.date).toLocaleDateString('ar-EG')}</p>
                     </div>
                   </div>
-                  <div className="text-left">
+                  <div className="shrink-0 text-left">
                     <p className="font-bold text-sm text-gray-900 dark:text-white">{formatCurrency(inv.total, settings?.currency)}</p>
                     <Badge variant={inv.type === 'cash' ? 'success' : 'warning'} className="text-[10px] mt-1">
                       {inv.type === 'cash' ? 'نقدي' : 'آجل'}

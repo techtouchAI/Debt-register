@@ -143,7 +143,15 @@ describe('موظف المبيعات: بيع فقط', () => {
     render(<App />);
     await loginAs('أحمد', '5678');
     window.location.hash = '#/invoices';
-    await waitFor(() => expect(screen.getByText('سجل المبيعات اليومي - قلب النظام')).toBeTruthy(), { timeout: 5000 });
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(
+            'مبيعاتك: تخرج المواد من المخزن وتُسجَّل على الزبون نقداً أو ديناً — أما شراء المواد من الموردين فيُسجَّل في وصول الشراء.'
+          )
+        ).toBeTruthy(),
+      { timeout: 5000 }
+    );
     await waitFor(() => expect(screen.getByLabelText('عرض الفاتورة')).toBeTruthy(), { timeout: 5000 });
     expect(screen.getByLabelText('طباعة الفاتورة')).toBeTruthy();
     expect(screen.queryByLabelText('تعديل الفاتورة')).toBeNull();

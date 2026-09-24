@@ -103,6 +103,24 @@ describe('قوالب المستندات', () => {
     expect(buildPrintDocument('PUR-1', html)).toContain('table-layout: fixed');
   });
 
+  it('يطبع الرصيد السابق وإجمالي المطلوب على الفاتورة التي تحمل ديناً قديماً', () => {
+    const previous = 3000;
+    const carried = { ...invoice, previousBalance: previous };
+    const html = buildInvoicePrintHtml(carried, items, settings);
+
+    expect(html).toContain('الرصيد السابق');
+    expect(html).toContain('إجمالي المطلوب');
+    // المطلوب = قيمة الفاتورة + الدين القديم (منسّق كبقية الأرقام في المستند)
+    expect(html).toContain((invoice.total + previous).toLocaleString('ar-IQ'));
+    // المتبقي صار منسوباً صراحةً إلى هذه الفاتورة حتى لا يُلتبس بالمطلوب كاملاً
+    expect(html).toContain('المتبقي على هذه الفاتورة');
+
+    // فاتورة بلا دين قديم: لا تظهر سطور الرصيد السابق إطلاقاً
+    const plain = buildInvoicePrintHtml(invoice, items, settings);
+    expect(plain).not.toContain('الرصيد السابق');
+    expect(plain).not.toContain('إجمالي المطلوب');
+  });
+
   it('يبني وثيقة كاملة صالحة للمعاينة والطباعة', () => {
     const doc = buildPrintDocument('فاتورة INV-1', '<div class="doc">x</div>');
     expect(doc).toContain('<!doctype html>');

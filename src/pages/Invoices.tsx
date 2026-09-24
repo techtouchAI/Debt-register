@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar } from 'lucide-react';
+import { FileText, HelpCircle, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import { generateInvoicePDF } from '@/lib/pdf';
 import { confirmDialog } from '@/lib/confirm';
 import { documentNumberMatches, formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 export function Invoices() {
   const settings = useLiveQuery(() => getSettings(), []);
@@ -23,6 +24,7 @@ export function Invoices() {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'cash' | 'credit'>('all');
   const [dateFilter, setDateFilter] = useState('');
+  const [showHelp, setShowHelp] = useState(false);
 
   const invoices = useLiveQuery(async () => {
     let all = await db.invoices.orderBy('date').reverse().toArray();
@@ -122,14 +124,22 @@ export function Invoices() {
             <FileText className="w-7 h-7 text-primary-600" />
             الفواتير والمبيعات
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">سجل المبيعات اليومي - قلب النظام</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            مبيعاتك: تخرج المواد من المخزن وتُسجَّل على الزبون نقداً أو ديناً — أما شراء المواد من الموردين فيُسجَّل في وصول الشراء.
+          </p>
         </div>
-        <Link to="/invoices/new" className="w-full lg:w-auto">
-          <Button className="bg-primary-600 hover:bg-primary-700 w-full lg:w-auto">
-            <Plus className="w-4 h-4 ml-2" />
-            فاتورة بيع جديدة
+        <div className="flex w-full flex-wrap gap-2 lg:w-auto">
+          <Button variant="outline" className="flex-1 lg:flex-none" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق بينها وبين وصل الشراء؟
           </Button>
-        </Link>
+          <Link to="/invoices/new" className="flex-1 lg:flex-none">
+            <Button className="bg-primary-600 hover:bg-primary-700 w-full">
+              <Plus className="w-4 h-4 ml-2" />
+              فاتورة بيع جديدة
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -235,6 +245,8 @@ export function Invoices() {
           </Card>
         ))}
       </div>
+
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       {invoices?.length === 0 && (
         <Card className="border-0 shadow-md">
