@@ -197,9 +197,11 @@ describe('القائمة الجانبية (الدرج الجوال)', () => {
       lastBackListener?.({ canGoBack: true, exitApp: vi.fn() });
     });
 
-    // شاشة واحدة بالضبط — لا ضغطة ميتة على مدخل الفخ ولا قفزة مزدوجة
+    // شاشة واحدة بالضبط — لا ضغطة ميتة على مدخل الفخ ولا قفزة مزدوجة.
+    // تغيّر hash يسبق أحياناً اكتمال رسم الصفحة التالية، لذلك ننتظر
+    // الإشارة المرئية نفسها بدلاً من القراءة المتزامنة بعد حدث السجل.
     await waitFor(() => expect(window.location.hash).toBe('#/'), { timeout: 2000 });
-    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy(), { timeout: 2000 });
   });
 
   it('الدرج الجانبي في الجوال يُغلق بزر الرجوع', async () => {
