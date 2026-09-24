@@ -24,6 +24,7 @@ import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import { formatCurrency, formatLocalDateInput, getStockStatus, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
 export function Dashboard() {
   const settings = useOfficeSettings();
+  const officeName = settings?.officeName?.trim() || '';
   const today = formatLocalDateInput();
 
   const recentInvoices = useLiveQuery(() => db.invoices.orderBy('createdAt').reverse().limit(5).toArray(), []);
@@ -124,12 +125,15 @@ export function Dashboard() {
         <div className="relative z-10">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <h1 className="text-2xl lg:text-3xl font-bold mb-2 truncate max-w-full" title={settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'}>
-                {settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'}
+              <h1
+                className="text-2xl lg:text-3xl font-bold mb-2 truncate max-w-full"
+                title={officeName ? `مرحباً بك في ${officeName}` : 'مرحباً بك في النظام'}
+              >
+                {officeName ? `مرحباً بك في ${officeName}` : 'مرحباً بك في النظام'}
               </h1>
-              <div className="flex items-center gap-2 text-white/80 text-sm lg:text-base whitespace-nowrap overflow-hidden">
+              <div className="flex min-w-0 items-center gap-2 text-white/80 text-sm lg:text-base whitespace-nowrap overflow-hidden">
                 <span className="truncate">نظام إدارة متكامل - دون اتصال بالانترنت</span>
-                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+                <span className="bg-red-500 w-2 h-2 rounded-full shrink-0 animate-pulse" aria-hidden="true" />
               </div>
             </div>
             <div className="flex gap-2">

@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { formatErrorMessage } from '@/lib/errors';
 
 interface Props { children: ReactNode }
 interface State { error: Error | null }
@@ -46,7 +47,7 @@ export class ErrorBoundary extends Component<Props, State> {
             توقف التطبيق عن العرض بدلًا من شاشة فارغة. بياناتك محفوظة محلياً ولم تتأثر.
           </p>
           <pre className="text-[11px] text-right bg-gray-100 dark:bg-gray-900 rounded-lg p-3 mb-4 overflow-auto max-h-32 text-gray-700 dark:text-gray-300">
-            {this.state.error.message}
+            {formatErrorMessage(this.state.error)}
           </pre>
           <div className="flex flex-col sm:flex-row gap-2 justify-center">
             <button
