@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
+import { CartCell } from '@/components/ui/cart-cell';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
@@ -604,46 +605,48 @@ export function InvoiceForm() {
                   </div>
                 ) : (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-                    <div className="bg-gray-50 dark:bg-gray-800/50 p-3 grid grid-cols-12 gap-2 text-[11px] font-bold text-gray-600 dark:text-gray-400">
+                    {/* رأس الجدول للشاشات المتوسطة فأعلى؛ على الجوال يحمل كل حقل
+                        عنوانه داخل السطر (CartCell) فيبقى العرض كافياً للأرقام. */}
+                    <div className="hidden bg-gray-50 dark:bg-gray-800/50 p-3 text-[11px] font-bold text-gray-600 dark:text-gray-400 sm:grid sm:grid-cols-12 sm:gap-2">
                       <div className="col-span-5">المادة</div>
                       <div className="col-span-2 text-center">الكمية</div>
                       <div className="col-span-2 text-center">السعر المفرد</div>
-                      <div className="col-span-2 text-center">المجموع</div>
-                      <div className="col-span-1"></div>
+                      <div className="col-span-3 text-center">المجموع</div>
                     </div>
                     {cart.map((item) => {
                       const lineError = cartLineError(item);
                       const errorId = `invoice-line-error-${item.material.id}`;
                       return (
-                      <div key={item.material.id} className="p-3 grid grid-cols-12 gap-2 items-center border-t border-gray-100 dark:border-gray-800 text-sm">
-                        <div className="col-span-5">
+                      <div key={item.material.id} className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-gray-100 p-3 text-sm dark:border-gray-800 sm:grid-cols-12 sm:items-center sm:gap-2">
+                        <div className="col-span-2 min-w-0 sm:col-span-5">
                           <p className="font-medium truncate">{item.material.name}</p>
                           <p className="text-[11px] text-gray-500">متوفر: {item.material.quantity}</p>
                         </div>
-                        <div className="col-span-2">
+                        <CartCell label="الكمية" className="sm:col-span-2">
                           <NumberInput
                             value={item.quantity}
                             onValueChange={(quantity) => updateLine(item.material.id as number, { quantity })}
                             aria-label={`كمية ${item.material.name}`}
                             aria-invalid={lineError !== null}
                             aria-describedby={lineError ? errorId : undefined}
-                            className={`h-8 text-center ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                            className={`h-9 w-full px-2 text-center text-sm sm:h-8 sm:text-xs ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                           />
-                        </div>
-                        <div className="col-span-2">
+                        </CartCell>
+                        <CartCell label="السعر المفرد" className="sm:col-span-2">
                           <NumberInput
                             value={item.unitPrice}
                             onValueChange={(unitPrice) => updateLine(item.material.id as number, { unitPrice })}
                             aria-label={`سعر ${item.material.name}`}
-                            className="h-8 text-center text-xs"
+                            className="h-9 w-full px-2 text-center text-sm sm:h-8 sm:text-xs"
                           />
-                        </div>
-                        <div className="col-span-2 text-center font-bold text-green-600">{formatCurrency(lineTotal(item), settings?.currency)}</div>
-                        <div className="col-span-1 text-center">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${item.material.name}`} onClick={() => setCart((prev) => prev.filter((c) => c.material.id !== item.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button>
+                        </CartCell>
+                        <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 sm:col-span-3 sm:gap-1">
+                          <span className="shrink-0 text-[11px] text-gray-500 sm:hidden">المجموع:</span>
+                          <span className="font-bold text-green-600 whitespace-nowrap">{formatCurrency(lineTotal(item), settings?.currency)}</span>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500 sm:h-7 sm:w-7" aria-label={`حذف ${item.material.name}`} onClick={() => setCart((prev) => prev.filter((c) => c.material.id !== item.material.id))}><Trash2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" /></Button>
                         </div>
                         {lineError && (
-                          <p id={errorId} role="alert" className="col-span-12 text-[11px] text-red-600 dark:text-red-400">{lineError}</p>
+                          <p id={errorId} role="alert" className="col-span-2 text-[11px] text-red-600 dark:text-red-400 sm:col-span-12">{lineError}</p>
                         )}
                       </div>
                       );
