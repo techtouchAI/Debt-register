@@ -24,6 +24,12 @@ type TableKey =
 /** أقصى عدد نسخ داخلية محفوظة في IndexedDB. */
 const MAX_SNAPSHOTS = 5;
 
+/**
+ * بادئة اسم ملف النسخة الاحتياطية حين لا يكون اسم المكتب معروفاً بعد
+ * (اسم عام محايد — الاسم الفعلي يأتي دائماً من إعدادات المستخدم).
+ */
+const DEFAULT_FILE_PREFIX = 'Office';
+
 export async function createBackup(): Promise<BackupData> {
   const [settings, users, materials, customers, invoices, invoiceItems, payments, purchases, purchaseItems, notifications, activityLogs] =
     await Promise.all([
@@ -65,7 +71,7 @@ export function backupFileName(officeName?: string, date: Date = new Date()): st
   ).padStart(2, '0')}`;
   const suffix = `_Backup_${dateStr}_${timeStr}.json`;
   const availableForName = Math.max(24, MAX_FILE_NAME_BYTES - utf8ByteLength(suffix));
-  const name = sanitizeFileName(officeName || 'AgriOffice', 'AgriOffice', availableForName);
+  const name = sanitizeFileName(officeName || DEFAULT_FILE_PREFIX, DEFAULT_FILE_PREFIX, availableForName);
   return `${name}${suffix}`;
 }
 
@@ -102,7 +108,7 @@ export async function exportBackupToFile(type: 'auto' | 'manual' = 'manual'): Pr
     data: jsonString,
     encoding: 'utf8',
     subDir: 'Backups',
-    shareTitle: `نسخة احتياطية - ${backupData.officeName || 'المكتب الزراعي'}`
+    shareTitle: `نسخة احتياطية - ${backupData.officeName || 'المكتب'}`
   });
 
   if (!result.ok) {

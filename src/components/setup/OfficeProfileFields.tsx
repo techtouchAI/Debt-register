@@ -131,7 +131,7 @@ export const OfficeProfileFields = forwardRef<OfficeProfileFieldsHandle, OfficeP
             label={
               <>
                 <Building className="w-4 h-4 text-primary-600" />
-                اسم المكتب الزراعي *
+                اسم المكتب *
               </>
             }
             error={errors.officeName}
@@ -145,7 +145,7 @@ export const OfficeProfileFields = forwardRef<OfficeProfileFieldsHandle, OfficeP
               {...a11y('officeName')}
               value={value.officeName}
               onChange={(e) => onChange({ officeName: e.target.value })}
-              placeholder="اكتب اسم مكتبك هنا — مثلاً: مكتب الرافدين الزراعي"
+              placeholder="اكتب اسم مكتبك هنا — مثلاً: مكتب الرافدين"
               className={`h-11 text-base ${errorClass(errors.officeName)}`}
               autoFocus={autoFocusName}
               autoComplete="organization"

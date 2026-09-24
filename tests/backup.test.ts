@@ -138,7 +138,7 @@ describe('النسخ الاحتياطي', () => {
     expect(backupFileName('مكتب الرافدين الزراعي', new Date(2026, 4, 3, 9, 8, 7))).toBe(
       'مكتب الرافدين الزراعي_Backup_2026-05-03_09-08-07.json'
     );
-    expect(backupFileName('', new Date(2026, 0, 1, 0, 0, 0))).toBe('AgriOffice_Backup_2026-01-01_00-00-00.json');
+    expect(backupFileName('', new Date(2026, 0, 1, 0, 0, 0))).toBe('Office_Backup_2026-01-01_00-00-00.json');
   });
 });
 

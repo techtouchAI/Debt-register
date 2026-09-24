@@ -30,7 +30,7 @@ import {
 
 const CAPACITOR_CONFIG = {
   appId: 'com.agrioffice.debtregister',
-  appName: 'إدارة المكتب الزراعي',
+  appName: 'إدارة المكتب',
   webDir: 'dist',
   server: { androidScheme: 'https' },
   plugins: {
@@ -53,7 +53,7 @@ const CAPACITOR_MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
 
 const CAPACITOR_STRINGS = `<?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">إدارة المكتب الزراعي</string>
+    <string name="app_name">إدارة المكتب</string>
     <string name="title_activity_main">MainActivity</string>
     <string name="package_name">com.agrioffice.debtregister</string>
 </resources>
@@ -88,10 +88,10 @@ describe('مزامنة app_name (السبب الجذري لفشل بناء APK)'
 <resources>
     <string name="app_name">قديم</string>
     <string name="title_activity_main">MainActivity</string>
-    <string name="app_name">إدارة المكتب الزراعي</string>
+    <string name="app_name">إدارة المكتب</string>
 </resources>
 `;
-    const result = syncAppName(duplicated, 'إدارة المكتب الزراعي');
+    const result = syncAppName(duplicated, 'مكتب الرافدين');
     expect(result.duplicates).toBe(1);
     expect(result.xml.match(/name="app_name"/g)).toHaveLength(1);
   });
@@ -248,7 +248,7 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
       expect(first.pathsWritten).toBe(true);
       expect(first.fileProviderAdded).toBe(true);
       expect(first.fileProviderRepaired).toBe(false);
-      expect(first.appName).toBe('إدارة المكتب الزراعي');
+      expect(first.appName).toBe('إدارة المكتب');
 
       const manifestText = await readFile(join(root, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
       expect(manifestText).toContain(`android:authorities="${FILE_PROVIDER_AUTHORITY}"`);
@@ -280,7 +280,7 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
   it('يصلح مشروعاً يحتوي app_name مكرراً ويُنتج ملفاً صالحاً واحداً', async () => {
     const duplicated = CAPACITOR_STRINGS.replace(
       '</resources>',
-      '    <string name="app_name">إدارة المكتب الزراعي</string>\n</resources>'
+      '    <string name="app_name">إدارة المكتب</string>\n</resources>'
     );
     const root = await createFakeAndroidProject(duplicated);
     try {

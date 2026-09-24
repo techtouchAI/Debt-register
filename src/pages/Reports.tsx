@@ -341,7 +341,7 @@ export function Reports() {
             <BarChart3 className="w-7 h-7 text-primary-600" />
             التقارير والإحصائيات
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">تقارير شاملة لإدارة المكتب الزراعي</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">تقارير شاملة لإدارة المكتب</p>
         </div>
         <Button variant="outline" onClick={exportReport} disabled={isExporting}>
           {isExporting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Download className="w-4 h-4 ml-2" />}

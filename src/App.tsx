@@ -6,7 +6,7 @@ import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/Toaster';
 import { Button } from '@/components/ui/button';
 import { FirstRunSetup } from '@/components/setup/FirstRunSetup';
-import { BackNavigationHandler } from '@/components/BackNavigationHandler';
+import { BackNavigationHandler, BootBackHandler } from '@/components/BackNavigationHandler';
 import { Dashboard } from '@/pages/Dashboard';
 import { Materials } from '@/pages/Materials';
 import { Customers } from '@/pages/Customers';
@@ -127,7 +127,16 @@ function App() {
     document.documentElement.dataset.appBoot = needsSetup ? 'setup' : boot.status;
   }, [boot.status, needsSetup]);
 
-  if (boot.status === 'storage-error') return <StorageErrorScreen error={boot.error} />;
+  if (boot.status === 'storage-error') {
+    return (
+      <div dir="rtl" className="font-cairo">
+        {// خارج الموجّه: زر الرجوع يعرض تأكيد الخروج بدل إنهاء التطبيق فوراً
+        }
+        <BootBackHandler />
+        <StorageErrorScreen error={boot.error} />
+      </div>
+    );
+  }
 
   if (boot.status === 'loading') {
     return (
@@ -135,6 +144,9 @@ function App() {
         dir="rtl"
         className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-50 dark:bg-gray-900 font-cairo"
       >
+        {// الرجوع أثناء الإقلاع لا يُنهي التطبيق: يعرض تأكيد الخروج كما في الرئيسية
+        }
+        <BootBackHandler />
         <div className="w-10 h-10 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
         <p className="text-sm text-gray-500 dark:text-gray-400">جاري تحميل بيانات المكتب…</p>
       </div>
@@ -144,6 +156,10 @@ function App() {
   if (needsSetup) {
     return (
       <div dir="rtl" className="font-cairo">
+        {// معالج التشغيل الأول خارج الموجّه: الرجوع هنا يعرض تأكيد الخروج
+        // (لا صفحات يمكن الرجوع إليها) ولا يُنهي التطبيق بضغطة واحدة.
+        }
+        <BootBackHandler />
         <FirstRunSetup initial={setupSettings} onDone={(saved) => { setSetupSettings(saved); setNeedsSetup(false); }} />
         <Toaster />
       </div>

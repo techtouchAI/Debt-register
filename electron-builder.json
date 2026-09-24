@@ -1,7 +1,7 @@
 {
   "appId": "com.agrioffice.debtregister",
-  "productName": "إدارة المكتب الزراعي",
-  "copyright": "Copyright © 2024 Agri Office",
+  "productName": "إدارة المكتب",
+  "copyright": "Copyright © 2024 TechTouch AI",
   "asar": true,
   "directories": {
     "output": "release",
@@ -29,7 +29,7 @@
       }
     ],
     "icon": "public/pwa-512x512.png",
-    "artifactName": "AgriOffice-${version}-${arch}.${ext}"
+    "artifactName": "OfficeManager-${version}-${arch}.${ext}"
   },
   "nsis": {
     "oneClick": false,
@@ -37,11 +37,11 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "إدارة المكتب الزراعي",
+    "shortcutName": "إدارة المكتب",
     "deleteAppDataOnUninstall": false,
-    "artifactName": "AgriOffice-Setup-${version}.${ext}"
+    "artifactName": "OfficeManager-Setup-${version}.${ext}"
   },
   "portable": {
-    "artifactName": "AgriOffice-Portable-${version}.exe"
+    "artifactName": "OfficeManager-Portable-${version}.exe"
   }
 }

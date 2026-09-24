@@ -1,7 +1,7 @@
 [package]
 name = "agro-office"
 version = "1.0.0"
-description = "Offline agricultural office and debt manager"
+description = "Offline office manager and debt register"
 authors = ["TechTouch AI"]
 edition = "2021"
 rust-version = "1.77.2"

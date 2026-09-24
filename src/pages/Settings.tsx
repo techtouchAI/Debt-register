@@ -315,7 +315,7 @@ export function Settings() {
           {/* Office Info */}
           <Card className="border-0 shadow-md">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base"><Building className="w-5 h-5" />بيانات المكتب الزراعي</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-base"><Building className="w-5 h-5" />بيانات المكتب</CardTitle>
               <p className="text-xs text-gray-500">هذه البيانات ستظهر في ترويسة كل فاتورة ووصل</p>
             </CardHeader>
             <CardContent className="space-y-4">

@@ -55,7 +55,7 @@ describe('إقلاع التطبيق', () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب الزراعي/)).toBeTruthy();
+        expect(screen.getByText(/مرحباً بك في نظام إدارة المكتب/)).toBeTruthy();
       },
       { timeout: 4000 }
     );

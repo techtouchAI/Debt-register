@@ -124,7 +124,7 @@ export function Dashboard() {
         <div className="relative z-10">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
-              <h1 className="text-2xl lg:text-3xl font-bold mb-2">{settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'} 🌾</h1>
+              <h1 className="text-2xl lg:text-3xl font-bold mb-2">{settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'}</h1>
               <p className="text-white/80 text-sm lg:text-base">نظام إدارة متكامل — جميع بياناتك آمنة ومحفوظة محلياً</p>
             </div>
             <div className="flex gap-2">

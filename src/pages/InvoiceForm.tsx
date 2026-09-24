@@ -462,7 +462,7 @@ export function InvoiceForm() {
               <div className="relative">
                 <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <Input
-                  placeholder="ابحث باسم المادة... مثلاً: مبيد عناكب، سماد..."
+                  placeholder="ابحث باسم المادة..."
                   value={searchMaterial}
                   onChange={(e) => { setSearchMaterial(e.target.value); setShowMaterialList(true); }}
                   onFocus={() => setShowMaterialList(true)}

@@ -4,7 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 
 /**
- * نافذة سطح المكتب لنظام المكتب الزراعي.
+ * نافذة سطح المكتب لنظام إدارة المكتب.
  *
  * مبادئ الأمان المطبّقة هنا:
  *  - contextIsolation مفعّل و nodeIntegration معطّل و sandbox مفعّل.
@@ -28,23 +28,44 @@ const SMOKE_TEST = process.argv.includes('--smoke-test');
 
 const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 
-/* ------------------- بيانات المستخدم في النسخة المحمولة ------------------- */
+/* ------------------------- بيانات المستخدم (userData) ------------------------- */
 /**
- * في نسخة `portable` يكون مجلد userData الافتراضي داخل مجلد مؤقت يُمسح عند
- * الخروج، فتُفقد قاعدة البيانات المحلية (IndexedDB) مع كل تشغيل. لذلك نوجّه
- * بيانات المستخدم إلى مجلد ثابت بجانب الملف التنفيذي، فتبقى الفواتير والديون
- * بعد إغلاق البرنامج. يترك electron-builder هذا المتغيّر في النسخة المحمولة.
+ * مجلد بيانات المستخدم (فيه IndexedDB أي الفواتير والديون).
+ *
+ * 1) النسخة المحمولة (`portable`): المجلد الافتراضي داخل مسار مؤقت يُمسح عند
+ *    الخروج، فتُفقد البيانات مع كل تشغيل — لذلك نوجّهها إلى مجلد ثابت بجانب
+ *    الملف التنفيذي. يترك electron-builder هذا المتغيّر في النسخة المحمولة.
+ *
+ * 2) النسخة المثبّتة: اسم مجلد userData الافتراضي مشتق من اسم العرض
+ *    (`productName`). وعند تغيير اسم التطبيق إلى اسم عام (إدارة المكتب)
+ *    كان المسار الافتراضي سيتبدّل، فيجد المستخدم القائم قاعدة بيانات فارغة
+ *    وكأن فواتيره وديونه اختفت. لذلك نُبقي المسار على المجلد القديم **إن
+ *    وُجد** (ترحيل شفّاف بلا فقدان بيانات)، ونستخدم الاسم الجديد للتثبيتات
+ *    الجديدة فقط.
  */
+const LEGACY_USER_DATA_DIRS = ['إدارة المكتب الزراعي', 'debt-register-agri-office'];
+
 function configureUserDataDir() {
-  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
-  if (!portableDir) return;
   try {
-    const dataDir = path.join(portableDir, 'AgriOfficeData');
-    fs.mkdirSync(dataDir, { recursive: true });
-    app.setPath('userData', dataDir);
-    app.setPath('sessionData', dataDir);
+    const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+    if (portableDir) {
+      const dataDir = path.join(portableDir, 'AgriOfficeData');
+      fs.mkdirSync(dataDir, { recursive: true });
+      app.setPath('userData', dataDir);
+      app.setPath('sessionData', dataDir);
+      return;
+    }
+
+    // نسخة مثبّتة: أبقِ بيانات المستخدم القائم في مكانها
+    const appDataDir = app.getPath('appData');
+    const legacy = LEGACY_USER_DATA_DIRS.map((name) => path.join(appDataDir, name)).find((dir) =>
+      fs.existsSync(path.join(dir, 'IndexedDB'))
+    );
+    if (!legacy) return; // تثبيت جديد: الاسم الجديد هو المسار الافتراضي
+    app.setPath('userData', legacy);
+    app.setPath('sessionData', legacy);
   } catch (error) {
-    console.error('تعذّر تجهيز مجلد بيانات النسخة المحمولة:', error);
+    console.error('تعذّر تجهيز مجلد بيانات المستخدم:', error);
   }
 }
 
@@ -316,7 +337,7 @@ ipcMain.handle('save-backup', async (_event, payload) => {
     if (typeof payload?.data !== 'string') return { success: false, error: 'لا توجد بيانات للحفظ' };
 
     const downloads = app.getPath('downloads');
-    const suggestedDir = path.join(downloads, 'AgriOffice');
+    const suggestedDir = path.join(downloads, 'OfficeManager');
     await fsp.mkdir(suggestedDir, { recursive: true }).catch(() => {});
 
     const { filePath } = await dialog.showSaveDialog({
@@ -353,7 +374,7 @@ ipcMain.handle('save-file', async (_event, payload) => {
     else filters.push({ name: 'ملفات', extensions: [extension || '*'] });
 
     const downloads = app.getPath('downloads');
-    const suggestedDir = path.join(downloads, 'AgriOffice');
+    const suggestedDir = path.join(downloads, 'OfficeManager');
     await fsp.mkdir(suggestedDir, { recursive: true }).catch(() => {});
 
     const { filePath } = await dialog.showSaveDialog({
@@ -377,7 +398,7 @@ ipcMain.handle('save-file', async (_event, payload) => {
 
 ipcMain.handle('show-notification', async (_event, payload) => {
   try {
-    const title = String(payload?.title || 'المكتب الزراعي').slice(0, 200);
+    const title = String(payload?.title || 'إدارة المكتب').slice(0, 200);
     const body = String(payload?.body || '').slice(0, 500);
     if (Notification.isSupported()) {
       new Notification({

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { isNativePlatform, getElectronAPI } from '@/lib/platform'
+import { installNativeBackGuard } from '@/lib/nativeBridge'
 import { initTheme } from '@/hooks/useTheme'
 import './index.css'
 
@@ -37,6 +38,20 @@ function registerServiceWorker(): void {
 
 // السمة تُطبَّق قبل أول رسم (كانت تُقرأ داخل تأثير فتُسبب وميضاً عند الإقلاع)
 initTheme()
+
+/**
+ * حارس زر الرجوع الأصلي: يُسجَّل قبل رسم الواجهة.
+ *
+ * على أندرويد: `AppPlugin` يُنهي التطبيق (أو يرجع داخل WebView) إن لم يكن
+ * هناك أي مستمع JS لحدث `backButton`. فبين إقلاع التطبيق وجاهزية الواجهة
+ * (قراءة قاعدة البيانات، معالج التشغيل الأول) كان زر الرجوع يُنفّذ السلوك
+ * الافتراضي للمنصة — أي خروجاً مباشراً من التطبيق. تسجيل الحارس هنا يمنع
+ * ذلك، ويفوّض القرار لاحقاً إلى المعالج النشط (`BackNavigationHandler` أو
+ * `BootBackHandler`) بلا تكرار في المعالجة.
+ *
+ * لا يفعل شيئاً على الويب/سطح المكتب (لا حدث رجوع أصلي هناك).
+ */
+installNativeBackGuard()
 
 registerServiceWorker()
 

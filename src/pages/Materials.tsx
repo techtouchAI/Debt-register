@@ -166,7 +166,7 @@ export function Materials() {
             <Package className="w-7 h-7 text-primary-600" />
             إدارة المخزن
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدارة المواد الزراعية والأسمدة والمبيدات</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدارة المواد والأصناف والمخزون</p>
         </div>
         <Button onClick={() => { setEditing(null); setFormData(emptyMaterialForm(settings?.lowStockThreshold)); setShowForm(true); }} className="bg-primary-600 hover:bg-primary-700">
           <Plus className="w-4 h-4 ml-2" />
@@ -338,7 +338,7 @@ export function Materials() {
           <CardContent className="text-center py-16">
             <Package className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <h3 className="font-bold text-gray-900 dark:text-white mb-2">لا توجد مواد</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">ابدأ بإضافة موادك الزراعية للمخزن</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">ابدأ بإضافة موادك إلى المخزن</p>
             <Button onClick={() => openForm()}><Plus className="w-4 h-4 ml-2" />إضافة مادة</Button>
           </CardContent>
         </Card>
@@ -358,7 +358,7 @@ export function Materials() {
                   <div className="md:col-span-2">
                     <label className="text-sm font-medium mb-1 block">اسم المادة *</label>
                     <Input
-                      placeholder="مثلاً: مبيد عناكب، سماد يوريا، بذور طماطم..."
+                      placeholder="اكتب اسم المادة"
                       value={formData.name}
                       onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
                       required
@@ -367,7 +367,7 @@ export function Materials() {
                   <div>
                     <label className="text-sm font-medium mb-1 block">الفئة</label>
                     <Input
-                      placeholder="مبيدات، أسمدة، بذور..."
+                      placeholder="اكتب الفئة"
                       value={formData.category}
                       onChange={(e) => setFormData((prev) => ({ ...prev, category: e.target.value }))}
                     />

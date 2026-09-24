@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agro Office",
+  "productName": "Office Manager",
   "version": "1.0.0",
   "identifier": "ai.techtouch.agrooffice",
   "build": {
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "المكتب الزراعي — إدارة الفواتير والديون",
+        "title": "إدارة المكتب — الفواتير والمخزون والديون",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -30,7 +30,7 @@
     "active": true,
     "category": "Business",
     "shortDescription": "إدارة الفواتير والمخزن والديون دون إنترنت",
-    "longDescription": "تطبيق محلي لإدارة المكتب الزراعي والفواتير والمخزون وحسابات الزبائن والديون.",
+    "longDescription": "تطبيق محلي لإدارة المكتب والفواتير والمخزون وحسابات الزبائن والديون.",
     "copyright": "Copyright © 2026 TechTouch AI",
     "targets": "all",
     "icon": [
