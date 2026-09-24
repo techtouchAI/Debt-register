@@ -109,7 +109,7 @@ export const OfficeProfileFields = forwardRef<OfficeProfileFieldsHandle, OfficeP
       event.target.value = '';
       if (!file) return;
       if (!file.type.startsWith('image/')) {
-        toast.warning('ملف غير مدعوم', 'اختر صورة PNG أو JPG');
+        toast.warning('ملف غير مدعوم', 'اختر ملف صورة (صورة الشعار من الجهاز)');
         return;
       }
       if (file.size > MAX_LOGO_BYTES) {
@@ -169,7 +169,7 @@ export const OfficeProfileFields = forwardRef<OfficeProfileFieldsHandle, OfficeP
                 enterKeyHint="next"
                 value={value.phone}
                 onChange={(e) => onChange({ phone: e.target.value })}
-                placeholder="07xxxxxxxxx"
+                placeholder="مثال: 07701234567"
                 className={`text-left ${errorClass(errors.phone)}`}
                 disabled={disabled}
               />
@@ -272,7 +272,7 @@ export const OfficeProfileFields = forwardRef<OfficeProfileFieldsHandle, OfficeP
               </div>
             )}
           </div>
-          <p className="text-[11px] text-gray-500 mt-2">يظهر في الفواتير - أقل من 2MB</p>
+          <p className="text-[11px] text-gray-500 mt-2">يظهر في الفواتير - أقل من 2 ميجابايت</p>
         </div>
       </div>
     );

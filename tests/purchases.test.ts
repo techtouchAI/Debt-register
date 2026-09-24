@@ -33,7 +33,7 @@ describe('وصول الشراء وإدخال المواد', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.purchaseNumber).toMatch(/^PUR-202609-/);
+    expect(result.purchaseNumber).toMatch(/^ش-202609-/);
     expect(result.purchase.total).toBe(48000);
     const material = await db.materials.where('name').equals('مبيد جديد').first();
     expect(material?.quantity).toBe(4);

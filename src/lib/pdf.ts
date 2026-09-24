@@ -1,5 +1,3 @@
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 import { OfficeSettings, Invoice, InvoiceItem, Payment, Customer, Purchase, PurchaseItem } from '@/types';
 import {
   buildEmbeddableDocument,
@@ -8,8 +6,9 @@ import {
   buildCustomerStatementPrintHtml,
   buildPurchasePrintHtml
 } from './print';
-import { saveFile } from './files';
-import { sanitizeFileName } from './utils';
+import { describeSavedLocation, saveFile } from './files';
+import { formatLocalDateInput, sanitizeFileName } from './utils';
+import { formatDocumentNumber } from './labels';
 
 /**
  * توليد ملفات PDF من قوالب HTML نفسها المستخدمة في المعاينة والطباعة.
@@ -25,6 +24,16 @@ import { sanitizeFileName } from './utils';
  */
 
 type PdfFormat = 'a4' | 'receipt80';
+
+/**
+ * مكتبتا الرسم وإنشاء المستند (≈ 780 ك.ب) تُحمَّلان عند أول حفظ مستند فقط،
+ * لا عند إقلاع التطبيق — إقلاع أسرع بوضوح على هواتف أندرويد الضعيفة. الملفات
+ * محلية داخل التطبيق فلا حاجة لإنترنت.
+ */
+async function loadPdfLibraries() {
+  const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([import('jspdf'), import('html2canvas')]);
+  return { jsPDF, html2canvas };
+}
 
 const RENDER_WIDTH: Record<PdfFormat, number> = {
   a4: 794, // عرض A4 بالبكسل (96dpi)
@@ -51,6 +60,7 @@ async function waitForImages(root: HTMLElement, timeoutMs = 3000): Promise<void>
 }
 
 async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise<Blob> {
+  const { jsPDF, html2canvas } = await loadPdfLibraries();
   const container = document.createElement('div');
   container.style.position = 'fixed';
   container.style.left = '-12000px';
@@ -104,7 +114,7 @@ async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise
       slice.width = canvas.width;
       slice.height = sliceHeight;
       const ctx = slice.getContext('2d');
-      if (!ctx) throw new Error('تعذّر تجهيز صفحة PDF');
+      if (!ctx) throw new Error('تعذّر تجهيز صفحة المستند');
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, slice.width, slice.height);
       ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
@@ -128,18 +138,29 @@ async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise
   }
 }
 
-async function savePdfBlob(blob: Blob, fileName: string, shareTitle: string): Promise<string> {
-  const safeName = sanitizeFileName(fileName, 'document') + '.pdf';
+/** نتيجة حفظ مستند: اسم الملف ووصف عربي لمكانه (لرسالة النجاح). */
+export interface SavedDocument {
+  fileName: string;
+  message: string;
+}
+
+/**
+ * حفظ المستند عبر خدمة الملفات الموحّدة.
+ * @returns null إذا ألغى المستخدم صندوق الحفظ (لا رسالة نجاح كاذبة).
+ */
+async function savePdfBlob(blob: Blob, fileName: string, shareTitle: string): Promise<SavedDocument | null> {
+  const safeName = sanitizeFileName(fileName, 'مستند') + '.pdf';
   const result = await saveFile({
     fileName: safeName,
     mimeType: 'application/pdf',
     data: blob,
     shareTitle
   });
-  if (!result.ok && result.error !== 'CANCELLED') {
-    throw new Error(result.error || 'تعذّر حفظ ملف PDF');
+  if (!result.ok) {
+    if (result.error === 'CANCELLED') return null;
+    throw new Error(result.error || 'تعذّر حفظ المستند');
   }
-  return safeName;
+  return { fileName: safeName, message: describeSavedLocation(result, safeName) };
 }
 
 export async function generateInvoicePDF(
@@ -147,20 +168,21 @@ export async function generateInvoicePDF(
   items: InvoiceItem[],
   settings: OfficeSettings,
   _customer?: Customer
-): Promise<string> {
+): Promise<SavedDocument | null> {
   void _customer;
   const blob = await renderHtmlToPdfBlob(buildInvoicePrintHtml(invoice, items, settings), 'a4');
-  const fileName = `${invoice.invoiceNumber}_${invoice.customerName}`;
-  return savePdfBlob(blob, fileName, `فاتورة ${invoice.invoiceNumber}`);
+  const number = formatDocumentNumber(invoice.invoiceNumber);
+  return savePdfBlob(blob, `فاتورة_${number}_${invoice.customerName}`, `فاتورة ${number}`);
 }
 
 export async function generateReceiptPDF(
   payment: Payment,
   settings: OfficeSettings,
   customerDebtAfter?: number
-): Promise<string> {
+): Promise<SavedDocument | null> {
   const blob = await renderHtmlToPdfBlob(buildReceiptPrintHtml(payment, settings, customerDebtAfter), 'receipt80');
-  return savePdfBlob(blob, payment.receiptNumber, `وصل قبض ${payment.receiptNumber}`);
+  const number = formatDocumentNumber(payment.receiptNumber);
+  return savePdfBlob(blob, `وصل_قبض_${number}_${payment.customerName}`, `وصل قبض ${number}`);
 }
 
 export async function generateCustomerStatementPDF(
@@ -169,12 +191,12 @@ export async function generateCustomerStatementPDF(
   payments: Payment[],
   settings: OfficeSettings,
   totalDebt: number
-): Promise<string> {
+): Promise<SavedDocument | null> {
   const blob = await renderHtmlToPdfBlob(
     buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt),
     'a4'
   );
-  const fileName = `Statement_${customer.fullName}_${new Date().toISOString().slice(0, 10)}`;
+  const fileName = `كشف_حساب_${customer.fullName}_${formatLocalDateInput()}`;
   return savePdfBlob(blob, fileName, `كشف حساب ${customer.fullName}`);
 }
 
@@ -182,10 +204,10 @@ export async function generatePurchasePDF(
   purchase: Purchase,
   items: PurchaseItem[],
   settings: OfficeSettings
-): Promise<string> {
+): Promise<SavedDocument | null> {
   const blob = await renderHtmlToPdfBlob(buildPurchasePrintHtml(purchase, items, settings), 'a4');
-  const fileName = `${purchase.purchaseNumber}_${purchase.supplierName}`;
-  return savePdfBlob(blob, fileName, `وصل شراء ${purchase.purchaseNumber}`);
+  const number = formatDocumentNumber(purchase.purchaseNumber);
+  return savePdfBlob(blob, `وصل_شراء_${number}_${purchase.supplierName}`, `وصل شراء ${number}`);
 }
 
 /** توليد PDF من أي مستند مبني مسبقاً (للمسودات والمعاينات). */
@@ -194,7 +216,7 @@ export async function generatePdfFromBodyHtml(
   fileName: string,
   shareTitle: string,
   format: PdfFormat = 'a4'
-): Promise<string> {
+): Promise<SavedDocument | null> {
   const blob = await renderHtmlToPdfBlob(bodyHtml, format);
   return savePdfBlob(blob, fileName, shareTitle);
 }

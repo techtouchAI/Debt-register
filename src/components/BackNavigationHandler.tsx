@@ -5,7 +5,7 @@ import { installDesktopBack } from '@/lib/desktopBack';
 import { closeTopModal, hasOpenModal, openModalCount, subscribeModalStack } from '@/lib/modalStack';
 import { installHistoryTrap, syncHistoryTrap } from '@/lib/historyTrap';
 import { resolveBackIntent } from '@/lib/backIntent';
-import { canGoBackInApp, currentHistoryIndex, recordHistoryEntry } from '@/lib/navigation';
+import { canGoBackInApp, currentHistoryIndex, currentRoutePath, recordHistoryEntry } from '@/lib/navigation';
 import { canExitApp } from '@/lib/appExit';
 import { toast } from '@/lib/toast';
 import { ExitConfirmDialog } from '@/components/ExitConfirmDialog';
@@ -72,7 +72,7 @@ export function BackNavigationHandler() {
   const handleBackRequest = useEffectEvent(() => {
     const intent = resolveBackIntent({
       hasOpenOverlay: hasOpenModal(),
-      pathname: pathRef.current,
+      pathname: currentRoutePath(pathRef.current),
       // المعيار فهرس React Router داخل التطبيق، لا `canGoBack` من Capacitor
       // الذي يشمل مدخلات خارج التطبيق وفخاخ الطبقات.
       hasInAppHistory: canGoBackInApp()

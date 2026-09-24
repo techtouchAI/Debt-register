@@ -13,9 +13,13 @@ import { formatCurrency, formatDate, isSameLocalDay } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { generateInvoicePDF } from '@/lib/pdf';
+import { confirmDialog } from '@/lib/confirm';
+import { documentNumberMatches, formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
+import { usePermission } from '@/hooks/useSession';
 
 export function Invoices() {
   const settings = useLiveQuery(() => getSettings(), []);
+  const can = usePermission();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'cash' | 'credit'>('all');
   const [dateFilter, setDateFilter] = useState('');
@@ -24,8 +28,9 @@ export function Invoices() {
     let all = await db.invoices.orderBy('date').reverse().toArray();
     
     if (search) {
-      all = all.filter(inv => 
-        inv.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
+      // رقم الفاتورة يُطابق بالصيغتين (المخزّنة والمعروضة بالعربية)
+      all = all.filter(inv =>
+        documentNumberMatches(inv.invoiceNumber, search) ||
         inv.customerName.toLowerCase().includes(search.toLowerCase())
       );
     }
@@ -45,7 +50,13 @@ export function Invoices() {
 
   const handleDelete = async (invoiceId: number) => {
     if (busyId !== null) return;
-    if (!confirm('هل أنت متأكد من حذف هذه الفاتورة؟\nسيتم إرجاع الكميات للمخزن وتحديث رصيد الزبون.')) return;
+    const confirmed = await confirmDialog({
+      title: 'حذف هذه الفاتورة؟',
+      message: 'سيتم إرجاع الكميات للمخزن وتحديث رصيد الزبون.',
+      confirmText: 'حذف الفاتورة',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
 
     setBusyId(invoiceId);
     try {
@@ -74,7 +85,7 @@ export function Invoices() {
       }
       const opened = await printInvoice(found.invoice, found.items, s);
       if (!opened) {
-        toast.info('لا يوجد حوار طباعة هنا', 'افتح الفاتورة ثم استخدم زر PDF للحفظ أو المشاركة');
+        toast.info('لا يوجد حوار طباعة هنا', 'افتح الفاتورة ثم استخدم زر "حفظ كمستند" للحفظ أو المشاركة');
       }
     } catch (error) {
       reportError('Invoices.print', error, 'تعذّر طباعة الفاتورة');
@@ -92,9 +103,10 @@ export function Invoices() {
         return;
       }
       const customer = found.invoice.customerId ? await db.customers.get(found.invoice.customerId) : undefined;
-      await generateInvoicePDF(found.invoice, found.items, s, customer);
+      const saved = await generateInvoicePDF(found.invoice, found.items, s, customer);
+      if (saved) toast.success('تم حفظ الفاتورة كمستند', saved.message);
     } catch (error) {
-      reportError('Invoices.export', error, 'تعذّر تصدير الفاتورة');
+      reportError('Invoices.export', error, 'تعذّر حفظ الفاتورة كمستند');
     }
   };
 
@@ -185,9 +197,9 @@ export function Invoices() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-bold text-gray-900 dark:text-white">{invoice.invoiceNumber}</p>
+                      <p className="font-bold text-gray-900 dark:text-white">{formatDocumentNumber(invoice.invoiceNumber)}</p>
                       <Badge variant={invoice.type === 'cash' ? 'success' : 'warning'} className="text-[10px]">
-                        {invoice.type === 'cash' ? 'نقدي' : 'آجل'}
+                        {saleTypeLabel(invoice.type)}
                       </Badge>
                       <Badge variant={invoice.status === 'paid' ? 'success' : invoice.status === 'partial' ? 'warning' : 'destructive'} className="text-[10px]">
                         {invoice.status === 'paid' ? 'مدفوعة' : invoice.status === 'partial' ? 'جزئية' : 'غير مدفوعة'}
@@ -203,15 +215,19 @@ export function Invoices() {
                     {invoice.type === 'credit' && invoice.remaining > 0 && <p className="text-xs text-red-600 whitespace-nowrap">متبقي: {formatCurrency(invoice.remaining, settings?.currency)}</p>}
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    <Link to={`/invoices/${invoice.id}`}>
-                      <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="w-4 h-4" /></Button>
+                    <Link to={`/invoices/${invoice.id}`} aria-label="عرض الفاتورة" title="عرض الفاتورة">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" tabIndex={-1}><Eye className="w-4 h-4" /></Button>
                     </Link>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePrint(invoice.id!)}><Printer className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleExportPDF(invoice.id!)}><Download className="w-4 h-4" /></Button>
-                    <Link to={`/invoices/${invoice.id}/edit`}>
-                      <Button variant="ghost" size="icon" className="h-8 w-8"><Edit className="w-4 h-4" /></Button>
-                    </Link>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:text-red-700" disabled={busyId === invoice.id} onClick={() => handleDelete(invoice.id!)}><Trash2 className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePrint(invoice.id!)} aria-label="طباعة الفاتورة" title="طباعة الفاتورة"><Printer className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleExportPDF(invoice.id!)} aria-label="حفظ الفاتورة كمستند" title="حفظ الفاتورة كمستند"><Download className="w-4 h-4" /></Button>
+                    {can('invoices.edit') && (
+                      <Link to={`/invoices/${invoice.id}/edit`} aria-label="تعديل الفاتورة" title="تعديل الفاتورة">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" tabIndex={-1}><Edit className="w-4 h-4" /></Button>
+                      </Link>
+                    )}
+                    {can('invoices.delete') && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:text-red-700" disabled={busyId === invoice.id} onClick={() => handleDelete(invoice.id!)} aria-label="حذف الفاتورة" title="حذف الفاتورة"><Trash2 className="w-4 h-4" /></Button>
+                    )}
                   </div>
                 </div>
               </div>

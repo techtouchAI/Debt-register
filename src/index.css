@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 * {
-  font-family: 'Cairo', 'Tajawal', sans-serif;
+  font-family: 'Cairo Variable', 'Cairo', 'Segoe UI', Tahoma, sans-serif;
 }
 
 html {
@@ -17,10 +17,28 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar (نحيف على اللمس — أندرويد) */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
+}
+
+/* سطح المكتب (فأرة): شريط تمرير أعرض يسهل سحبه، ومساحة ثابتة له حتى لا
+   "تقفز" الصفحة أفقياً عند فتح نافذة (قفل تمرير الخلفية يخفي الشريط) */
+@media (hover: hover) and (pointer: fine) {
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
 }
 
 ::-webkit-scrollbar-track {
@@ -98,6 +116,72 @@ body {
 
 .office-name-tight {
   font-size: 0.6875rem; /* 11px */
+}
+
+/* ------------------------------------------------------------------ *
+ * نص متحرك عند تجاوز المساحة (OverflowMarquee) — اسم المكتب في الرئيسية
+ * ------------------------------------------------------------------ */
+.office-marquee {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.office-marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.office-marquee.is-overflowing .office-marquee-track {
+  /* توقف قصير ثابت (1.5 ثانية) عند البداية ليُقرأ أول الاسم، ثم حركة
+     مستمرة؛ عند 100% تحل النسخة المكررة محل الأصل تماماً فلا قفزة */
+  animation: office-marquee var(--marquee-duration, 12s) linear 1.5s infinite;
+}
+
+/* الفأرة فوق الاسم أو التركيز عليه يوقف الحركة للقراءة */
+.office-marquee.is-overflowing:hover .office-marquee-track,
+.office-marquee.is-overflowing:focus-within .office-marquee-track {
+  animation-play-state: paused;
+}
+
+@keyframes office-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--marquee-distance, 0));
+  }
+}
+
+/* تقليل الحركة في النظام: الاسم يلتف كاملاً بدل التحرك */
+@media (prefers-reduced-motion: reduce) {
+  .office-marquee {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .office-marquee-track {
+    display: inline;
+    white-space: normal;
+  }
+  .office-marquee.is-overflowing .office-marquee-track {
+    animation: none;
+  }
+  .office-marquee-copy {
+    display: none;
+  }
+}
+
+@media print {
+  .office-marquee,
+  .office-marquee-track {
+    white-space: normal;
+    animation: none !important;
+  }
+  .office-marquee-copy {
+    display: none;
+  }
 }
 
 /* في المطبوعات لا اقتطاع ولا حدّ أسطر: الاسم يلتف كاملاً */

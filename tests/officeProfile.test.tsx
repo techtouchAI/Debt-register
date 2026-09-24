@@ -126,7 +126,7 @@ describe('معالج التشغيل الأول لا يمكن تخطيه', () => 
     change(byId('setup-address'), 'الأنبار - الكرمة');
     fireEvent.click(screen.getByText(/حفظ وبدء استخدام النظام/));
 
-    await waitFor(() => expect(screen.getByText('مرحباً بك في مكتب الكرمة الزراعي')).toBeTruthy(), {
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name').textContent).toBe('مكتب الكرمة الزراعي'), {
       timeout: 5000
     });
     const saved = await getSettings();

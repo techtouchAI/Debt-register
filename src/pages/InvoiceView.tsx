@@ -13,6 +13,9 @@ import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDia
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
+import { confirmDialog } from '@/lib/confirm';
+import { formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
+import { usePermission } from '@/hooks/useSession';
 import type { Customer, Invoice, InvoiceItem, OfficeSettings } from '@/types';
 
 /**
@@ -20,7 +23,7 @@ import type { Customer, Invoice, InvoiceItem, OfficeSettings } from '@/types';
  *
  * سابقاً كان زر العين يفتح نموذج التعديل نفسه (المسار /invoices/:id كان
  * يُفسَّر كتعديل) فلا توجد معاينة حقيقية. هذه الصفحة للعرض فقط مع
- * معاينة وطباعة وPDF وتعديل وحذف.
+ * معاينة وطباعة وحفظ كمستند وتعديل وحذف (التعديل والحذف للمدير فقط).
  */
 
 export function InvoiceView() {
@@ -28,6 +31,7 @@ export function InvoiceView() {
   const navigate = useNavigate();
   const goBack = useGoBack();
   const returnTo = useReturnTo();
+  const can = usePermission();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
@@ -79,7 +83,7 @@ export function InvoiceView() {
     setIsBusy(true);
     try {
       const printed = await printInvoice(invoice, items, settings);
-      if (!printed) setShowPreview(true); // البديل: معاينة مع زر PDF
+      if (!printed) setShowPreview(true); // البديل: معاينة مع زر حفظ المستند
     } catch (error) {
       reportError('InvoiceView.print', error, 'تعذّر الطباعة');
     } finally {
@@ -91,10 +95,10 @@ export function InvoiceView() {
     if (!invoice || !settings || isBusy) return;
     setIsBusy(true);
     try {
-      const fileName = await generateInvoicePDF(invoice, items, settings, customer);
-      toast.success('تم إنشاء ملف PDF', fileName);
+      const saved = await generateInvoicePDF(invoice, items, settings, customer);
+      if (saved) toast.success('تم حفظ الفاتورة كمستند', saved.message);
     } catch (error) {
-      reportError('InvoiceView.pdf', error, 'تعذّر إنشاء ملف PDF');
+      reportError('InvoiceView.pdf', error, 'تعذّر حفظ المستند');
     } finally {
       setIsBusy(false);
     }
@@ -102,7 +106,13 @@ export function InvoiceView() {
 
   const handleDelete = useCallback(async () => {
     if (!invoice?.id || isBusy) return;
-    if (!confirm(`هل أنت متأكد من حذف الفاتورة ${invoice.invoiceNumber}؟\nسيتم إرجاع الكميات للمخزن وتحديث رصيد الزبون.`)) return;
+    const confirmed = await confirmDialog({
+      title: `حذف الفاتورة ${formatDocumentNumber(invoice.invoiceNumber)}؟`,
+      message: 'سيتم إرجاع الكميات للمخزن وتحديث رصيد الزبون.',
+      confirmText: 'حذف الفاتورة',
+      tone: 'danger'
+    });
+    if (!confirmed) return;
     setIsBusy(true);
     try {
       const result = await deleteInvoice(invoice.id);
@@ -141,7 +151,7 @@ export function InvoiceView() {
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2 flex-wrap">
               <FileText className="w-6 h-6 text-primary-600" />
-              {invoice.invoiceNumber}
+              {formatDocumentNumber(invoice.invoiceNumber)}
             </h1>
             <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">
               {formatDate(invoice.date, true)} • {invoice.itemsCount} مادة
@@ -149,7 +159,7 @@ export function InvoiceView() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge variant={invoice.type === 'cash' ? 'success' : 'warning'}>{invoice.type === 'cash' ? 'نقدي' : 'آجل'}</Badge>
+          <Badge variant={invoice.type === 'cash' ? 'success' : 'warning'}>{saleTypeLabel(invoice.type)}</Badge>
           <Badge variant={invoice.status === 'paid' ? 'success' : invoice.status === 'partial' ? 'warning' : 'destructive'}>
             {invoice.status === 'paid' ? 'مدفوعة' : invoice.status === 'partial' ? 'جزئية' : 'غير مدفوعة'}
           </Badge>
@@ -167,18 +177,22 @@ export function InvoiceView() {
         </Button>
         <Button variant="outline" onClick={handleExportPdf} disabled={isBusy} className="flex-1 sm:flex-none">
           <Download className="w-4 h-4 ml-2" />
-          PDF
+          حفظ كمستند
         </Button>
-        <Link to={`/invoices/${invoice.id}/edit`} className="flex-1 sm:flex-none">
-          <Button variant="outline" className="w-full">
-            <Edit className="w-4 h-4 ml-2" />
-            تعديل
+        {can('invoices.edit') && (
+          <Link to={`/invoices/${invoice.id}/edit`} className="flex-1 sm:flex-none">
+            <Button variant="outline" className="w-full">
+              <Edit className="w-4 h-4 ml-2" />
+              تعديل
+            </Button>
+          </Link>
+        )}
+        {can('invoices.delete') && (
+          <Button variant="destructive" onClick={handleDelete} disabled={isBusy} className="flex-1 sm:flex-none">
+            <Trash2 className="w-4 h-4 ml-2" />
+            حذف
           </Button>
-        </Link>
-        <Button variant="destructive" onClick={handleDelete} disabled={isBusy} className="flex-1 sm:flex-none">
-          <Trash2 className="w-4 h-4 ml-2" />
-          حذف
-        </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -262,10 +276,10 @@ export function InvoiceView() {
 
       <DocumentPreviewDialog
         open={showPreview}
-        title={invoice.invoiceNumber}
+        title={`فاتورة ${formatDocumentNumber(invoice.invoiceNumber)}`}
         bodyHtml={buildInvoicePrintHtml(invoice, items, settings)}
-        fileNameBase={`${invoice.invoiceNumber}_${invoice.customerName}`}
-        shareTitle={`فاتورة ${invoice.invoiceNumber}`}
+        fileNameBase={`فاتورة_${formatDocumentNumber(invoice.invoiceNumber)}_${invoice.customerName}`}
+        shareTitle={`فاتورة ${formatDocumentNumber(invoice.invoiceNumber)}`}
         onClose={() => setShowPreview(false)}
       />
     </div>

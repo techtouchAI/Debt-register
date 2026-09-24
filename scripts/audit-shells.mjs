@@ -137,6 +137,27 @@ async function main() {
   check('لا يُحذف مجلد بيانات المستخدم عند إلغاء التثبيت', builder.nsis?.deleteAppDataOnUninstall === false);
   check('أيقونة ويندوز موجودة', existsSync(join(repoRoot, builder.win?.icon ?? '')));
   check('صفحة الخطأ العربية لتعذّر التحميل موجودة', /تعذّر تحميل واجهة التطبيق/.test(mainCjs));
+  check('صفحة الخطأ لا تعرض الوصف الإنجليزي التقني من Chromium', !/\$\{errorDescription\}/.test(mainCjs));
+  check('لغة Chromium عربية (رسائل التحقق ومنتقي التاريخ) عبر --lang=ar', /appendSwitch\('lang', 'ar'\)/.test(mainCjs));
+  check('لا قائمة Electron الإنجليزية الافتراضية (File/Edit/View)', /Menu\.setApplicationMenu\(null\)/.test(mainCjs));
+  check(
+    'قائمة الزر الأيمن عربية (قص/نسخ/لصق) للفأرة على ويندوز',
+    /context-menu/.test(mainCjs) && /label: 'قص'/.test(mainCjs) && /label: 'لصق'/.test(mainCjs) && /label: 'تحديد الكل'/.test(mainCjs)
+  );
+  check(
+    'التكبير بـ Ctrl + عجلة الفأرة و Ctrl +/-/0 مع حفظه بين مرات التشغيل',
+    /zoom-changed/.test(mainCjs) && /before-input-event/.test(mainCjs) && /window-state\.json/.test(mainCjs)
+  );
+  check(
+    'أنواع الملفات في صندوق الحفظ بالعربية (لا PDF/JSON)',
+    !/name: 'PDF'/.test(mainCjs) && !/name: 'JSON'/.test(mainCjs) && /name: 'مستند'/.test(mainCjs) && /name: 'جدول بيانات'/.test(mainCjs)
+  );
+  check('مجلد الحفظ المقترح باسم عربي (التنزيلات/إدارة المكتب)', /const APP_FOLDER = 'إدارة المكتب'/.test(mainCjs) && !/'OfficeManager'\)/.test(mainCjs));
+  check('النقر على الإشعار يُظهر نافذة التطبيق (مثل أندرويد)', /notification\.on\('click'/.test(mainCjs));
+  check(
+    'التنقّل مسموح لصفحة التطبيق فقط (إفلات ملف لا يستبدل الواجهة)',
+    /pathToFileURL\(APP_INDEX\)/.test(mainCjs) && !/if \(url\.protocol === 'file:'\) return true;/.test(mainCjs)
+  );
 
   /* --------------------------- أندرويد --------------------------- */
   section('أندرويد (Capacitor)');
@@ -277,8 +298,45 @@ async function main() {
     const capabilities = await readJson('desktop/src-tauri/capabilities/default.json');
     check('capability يحتوي notification:default', JSON.stringify(capabilities.permissions ?? []).includes('notification:default'));
   }
-  check('نسخة وحيدة من تطبيق Tauri', /single_instance|single-instance/.test(await readText('desktop/src-tauri/Cargo.toml')));
-  check('إضافة النسخة الوحيدة مسجّلة في lib.rs', /single_instance/.test(await readText('desktop/src-tauri/src/lib.rs')));
+  const tauriCargo = await readText('desktop/src-tauri/Cargo.toml');
+  const tauriLib = await readText('desktop/src-tauri/src/lib.rs');
+  check('نسخة وحيدة من تطبيق Tauri', /single_instance|single-instance/.test(tauriCargo));
+  check('إضافة النسخة الوحيدة مسجّلة في lib.rs', /single_instance/.test(tauriLib));
+  check('واجهات Tauri العامة متاحة للواجهة المشتركة (withGlobalTauri)', tauri.app?.withGlobalTauri === true);
+  check(
+    'حفظ الملفات في Tauri بصندوق حفظ أصلي (إضافتا dialog و fs مسجّلتان)',
+    /tauri-plugin-dialog/.test(tauriCargo) && /tauri-plugin-fs/.test(tauriCargo) && /tauri_plugin_dialog::init\(\)/.test(tauriLib) && /tauri_plugin_fs::init\(\)/.test(tauriLib)
+  );
+  check('CSP لا يعتمد على خطوط من الإنترنت (الخط مدمج)', !/fonts\.googleapis|fonts\.gstatic/.test(tauri.app?.security?.csp ?? ''));
+  if (await fileExists(join(repoRoot, 'desktop/src-tauri/capabilities/default.json'))) {
+    const tauriPermissions = JSON.stringify((await readJson('desktop/src-tauri/capabilities/default.json')).permissions ?? []);
+    check(
+      'صلاحيات Tauri: صندوق الحفظ + كتابة الملف المختار + إغلاق النافذة بعد تأكيد الخروج',
+      ['dialog:allow-save', 'fs:allow-write-file', 'core:window:allow-close'].every((permission) => tauriPermissions.includes(permission))
+    );
+  }
+  const tauriWindowsConfPath = 'desktop/src-tauri/tauri.windows.conf.json';
+  if (await fileExists(join(repoRoot, tauriWindowsConfPath))) {
+    const tauriWindows = await readJson(tauriWindowsConfPath);
+    check('اسم التطبيق على ويندوز (Tauri) عربي مع اسم ملف تنفيذي لاتيني ثابت', /[\u0600-\u06FF]/.test(tauriWindows.productName ?? '') && /^[a-z0-9-]+$/.test(tauriWindows.mainBinaryName ?? ''));
+  } else {
+    warn('إعداد ويندوز الخاص بـ Tauri (tauri.windows.conf.json) موجود', false);
+  }
+  const tauriWindowsBundle = tauri.bundle?.windows ?? {};
+  check('مثبّت Tauri على ويندوز بالعربية (NSIS + WiX)', (tauriWindowsBundle.nsis?.languages ?? []).includes('Arabic') && tauriWindowsBundle.wix?.language === 'ar-SA');
+  // رمز الترقية يُشتق افتراضياً من اسم المنتج؛ تثبيته يجعل تغيير الاسم (إلى العربية)
+  // ترقيةً للنسخة المثبّتة لا تطبيقاً مكرراً في قائمة البرامج
+  check(
+    'رمز ترقية MSI مثبّت (تغيير الاسم لا يكرر التطبيق المثبّت)',
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tauriWindowsBundle.wix?.upgradeCode ?? '')
+  );
+
+  /* ------------------------ الواجهة المشتركة ------------------------ */
+  section('الواجهة المشتركة (كل الأنظمة)');
+  const indexHtml = await readText('index.html');
+  check('الخط مدمج داخل التطبيق — لا تحميل خطوط من الإنترنت', !/fonts\.googleapis\.com/.test(indexHtml) && /@fontsource-variable\/cairo/.test(mainTsx));
+  check('منع إفلات الملفات من استبدال الواجهة (ويندوز/المتصفح)', /installDropGuard\(\)/.test(mainTsx));
+  check('لا حوارات confirm/prompt الأصلية (أزرار إنجليزية وprompt غير مدعوم في ويندوز)', !(await sourceUsesNativeDialogs()));
 
   /* ------------------------------ CI ------------------------------ */
   section('خط البناء المستمر');
@@ -324,6 +382,26 @@ async function main() {
     process.exit(1);
   }
   console.log('✔ تدقيق الأغلفة ناجح');
+}
+
+/** هل تستخدم شيفرة الواجهة confirm()/prompt()/alert() الأصلية؟ */
+async function sourceUsesNativeDialogs() {
+  let found = false;
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+      const text = await readFile(full, 'utf8');
+      // استدعاء فعلي (لا ذكر داخل تعليق): بداية سطر/مسافة ثم الاسم ثم (
+      if (/(^|[\s(!=&|?:,;])(window\.)?(confirm|prompt|alert)\(/m.test(text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ''))) found = true;
+    }
+  };
+  await walk(join(repoRoot, 'src'));
+  return found;
 }
 
 /** قراءة ملف نصي أو null إذا لم يوجد. */

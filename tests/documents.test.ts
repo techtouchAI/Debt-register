@@ -34,7 +34,9 @@ const items: InvoiceItem[] = [
 describe('قوالب المستندات', () => {
   it('يبني فاتورة بتخطيط ثابت وأرقام لا تنكسر', () => {
     const html = buildInvoicePrintHtml(invoice, items, settings);
-    expect(html).toContain('INV-1');
+    // الرقم القديم (INV-1) يُطبع بالبادئة العربية المقابلة مع الأرقام نفسها
+    expect(html).toContain('ف-1');
+    expect(html).not.toContain('INV-1');
     expect(html).toContain('سماد يوريا');
     expect(html).toContain('colgroup');
     // ورقة الأنماط المشتركة تفرض التخطيط الثابت ومنع انكسار الأرقام
@@ -67,13 +69,16 @@ describe('قوالب المستندات', () => {
       createdAt: '2026-09-20T09:00:00.000Z'
     };
     const receipt = buildReceiptPrintHtml(payment, settings, 5000);
-    expect(receipt).toContain('REC-1');
+    expect(receipt).toContain('ق-1');
+    expect(receipt).not.toContain('REC-1');
+    expect(receipt).toContain('نقدي');
     expect(receipt).toContain('وصل قبض');
 
     const customer: Customer = { fullName: 'زبون اختبار', createdAt: '', updatedAt: '' };
     const statement = buildCustomerStatementPrintHtml(customer, [invoice], [payment], settings, 5000);
     expect(statement).toContain('كشف حساب الزبون');
-    expect(statement).toContain('INV-1');
+    expect(statement).toContain('ف-1');
+    expect(statement).toContain('ق-1');
   });
 
   it('يبني وصل شراء بنفس قالب الطباعة والمعاينة', () => {
@@ -92,7 +97,8 @@ describe('قوالب المستندات', () => {
     };
     const purchaseItems: PurchaseItem[] = [{ purchaseId: 1, materialId: 1, materialName: 'مادة شراء', quantity: 2, purchasePrice: 6000, total: 12000 }];
     const html = buildPurchasePrintHtml(purchase, purchaseItems, settings);
-    expect(html).toContain('PUR-1');
+    expect(html).toContain('ش-1');
+    expect(html).not.toContain('PUR-1');
     expect(html).toContain('وصل شراء');
     expect(buildPrintDocument('PUR-1', html)).toContain('table-layout: fixed');
   });

@@ -13,8 +13,12 @@ pub fn run() {
         }
     }));
 
+    // fs قبل dialog: صندوق الحفظ يضيف المسار الذي يختاره المستخدم إلى نطاق
+    // الكتابة المسموح في إضافة fs (لا صلاحية كتابة عامة على القرص).
     builder
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("error while running the office manager application");
 }

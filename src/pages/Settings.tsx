@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Settings as SettingsIcon, Building, Moon, Sun, Save, Loader2, User, Shield, Database } from 'lucide-react';
+import { Settings as SettingsIcon, Building, Moon, Sun, Save, Loader2, Database } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { NumericTextInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
-import { db, getSettings, updateSettings, logActivity } from '@/lib/db';
+import { getSettings, updateSettings, logActivity } from '@/lib/db';
 import { toFiniteNumber } from '@/lib/utils';
 import {
   firstInvalidField,
@@ -20,10 +19,11 @@ import { useAsyncScope } from '@/hooks/useAsyncScope';
 import { useTheme } from '@/hooks/useTheme';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
-import { hashPin, isHashedPin, isValidPin, maskPin } from '@/lib/security';
-import { OfficeSettings, User as UserType } from '@/types';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { useModalCloser } from '@/hooks/useModalCloser';
+import { OfficeSettings } from '@/types';
+import { UsersManager } from '@/components/users/UsersManager';
+import { ActivityLogCard } from '@/components/users/ActivityLogCard';
+import { saveThemePreference } from '@/lib/themePreference';
+import { APP_VERSION } from '@/lib/appInfo';
 
 /** تفضيلات المخزن والنسخ — الأرقام تُحفظ نصاً أثناء التحرير (انظر أدناه). */
 interface SystemPrefs {
@@ -65,16 +65,11 @@ export function Settings() {
   const [dirty, setDirty] = useState(false);
   const [restoredDraft, setRestoredDraft] = useState(false);
   // السمة من المخزن المشترك (نفس ما يعرضه التخطيط) — لا حالة مكرّرة هنا
-  const { isDark, setTheme } = useTheme();
+  const { isDark } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
-  const [showUserForm, setShowUserForm] = useState(false);
-  const [editingUser, setEditingUser] = useState<UserType | null>(null);
-  const [userForm, setUserForm] = useState({ name: '', pin: '', role: 'sales' as 'admin' | 'sales' });
   const revisionRef = useRef(0);
   const fieldsRef = useRef<OfficeProfileFieldsHandle>(null);
   const scope = useAsyncScope();
-
-  const users = useLiveQuery(() => db.users.toArray(), []);
 
   /** تسجيل تعديل من المستخدم (يبطل أي نتيجة حفظ جارية عن الكتابة فوقه). */
   const markEdited = () => {
@@ -105,13 +100,6 @@ export function Settings() {
     const { logo: _logo, ...text } = profile;
     saveFormDraft<SettingsDraft>(SETTINGS_DRAFT_KEY, { profile: text, prefs });
   }, [loaded, dirty, profile, prefs]);
-
-  const closeUserForm = () => {
-    setShowUserForm(false);
-    setEditingUser(null);
-  };
-
-  useModalCloser(showUserForm, closeUserForm);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,81 +211,9 @@ export function Settings() {
   };
 
   const toggleTheme = () => {
-    // المخزن المشترك يطبّق الصنف على <html> ويحفظه فوراً — السمة تفضيل عرض
-    // لا تحتاج زر "حفظ"، وتُكتب في قاعدة البيانات مع الحفظ التالي.
-    setTheme(isDark ? 'light' : 'dark');
-  };
-
-  const handleUserSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const name = userForm.name.trim();
-    if (!name) {
-      toast.warning('اسم المستخدم مطلوب');
-      return;
-    }
-
-    const isEditing = Boolean(editingUser?.id);
-    const pinChanged = userForm.pin.trim().length > 0;
-    if (!isEditing && !pinChanged) {
-      toast.warning('رمز الدخول مطلوب', 'أدخل رمزاً من 4 إلى 8 أرقام');
-      return;
-    }
-    if (pinChanged && !isValidPin(userForm.pin)) {
-      toast.warning('رمز دخول غير صالح', 'يجب أن يكون من 4 إلى 8 أرقام فقط');
-      return;
-    }
-
-    const roleBlocked =
-      userForm.role !== 'admin' &&
-      editingUser?.role === 'admin' &&
-      (users ?? []).filter((user) => user.role === 'admin').length <= 1;
-    if (roleBlocked) {
-      toast.warning('لا يمكن التغيير', 'يجب بقاء مدير واحد على الأقل في النظام');
-      return;
-    }
-
-    try {
-      const now = new Date().toISOString();
-      const hashedPin = pinChanged ? await hashPin(userForm.pin.trim()) : undefined;
-
-      if (editingUser?.id) {
-        await db.users.update(editingUser.id, {
-          name,
-          role: userForm.role,
-          ...(hashedPin ? { pin: hashedPin } : {})
-        });
-        toast.success('تم تحديث المستخدم', name);
-      } else {
-        await db.users.add({ name, pin: hashedPin ?? '', role: userForm.role, createdAt: now });
-        toast.success('تمت إضافة المستخدم', name);
-      }
-
-      setShowUserForm(false);
-      setEditingUser(null);
-      setUserForm({ name: '', pin: '', role: 'sales' });
-    } catch (error) {
-      reportError('Settings.user.save', error, 'تعذّر حفظ المستخدم');
-    }
-  };
-
-  const handleDeleteUser = async (user: UserType) => {
-    if (!user.id) return;
-    if ((users ?? []).length <= 1) {
-      toast.warning('لا يمكن الحذف', 'يجب بقاء مستخدم واحد على الأقل');
-      return;
-    }
-    if (user.role === 'admin' && (users ?? []).filter((entry) => entry.role === 'admin').length <= 1) {
-      toast.warning('لا يمكن الحذف', 'يجب بقاء مدير واحد على الأقل في النظام');
-      return;
-    }
-    if (!confirm(`هل أنت متأكد من حذف المستخدم "${user.name}"؟`)) return;
-
-    try {
-      await db.users.delete(user.id);
-      toast.success('تم حذف المستخدم', user.name);
-    } catch (error) {
-      reportError('Settings.user.delete', error, 'تعذّر حذف المستخدم');
-    }
+    // السمة تُطبَّق فوراً وتُحفظ في إعدادات المكتب (تنتقل مع النسخة الاحتياطية)
+    // دون الحاجة لزر "حفظ".
+    saveThemePreference(isDark ? 'light' : 'dark');
   };
 
   return (
@@ -368,37 +284,11 @@ export function Settings() {
             </CardContent>
           </Card>
 
-          {/* Users - Offline */}
-          <Card className="border-0 shadow-md">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2 text-base"><User className="w-5 h-5" />إدارة المستخدمين (بدون انترنت)</CardTitle>
-                <Button size="sm" onClick={() => { setEditingUser(null); setUserForm({ name: '', pin: '', role: 'sales' }); setShowUserForm(true); }}>إضافة مستخدم</Button>
-              </div>
-              <p className="text-xs text-gray-500">نظام محلي - مدير يملك حذف وتعديل، موظف مبيعات فقط للبيع</p>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {users?.map((user) => (
-                  <div key={user.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold ${user.role === 'admin' ? 'bg-primary-600' : 'bg-gray-600 dark:bg-gray-700'}`}>
-                        {user.name.charAt(0)}
-                      </div>
-                      <div>
-                        <div className="font-medium text-sm flex items-center gap-2">{user.name} {user.role === 'admin' ? <Badge variant="destructive" className="text-[10px]"><Shield className="w-3 h-3 ml-1" />مدير</Badge> : <Badge variant="secondary" className="text-[10px]">مبيعات</Badge>}</div>
-                        <p className="text-xs text-gray-500">رمز الدخول: {maskPin()} • منذ {new Date(user.createdAt).toLocaleDateString('ar-EG')}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setEditingUser(user); setUserForm({ name: user.name, pin: '', role: user.role }); setShowUserForm(true); }}>تعديل</Button>
-                      <Button variant="ghost" size="sm" className="h-8 text-xs text-red-600" onClick={() => handleDeleteUser(user)}>حذف</Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          {/* المستخدمون والدخول برمز — نظام محلي بالكامل */}
+          <UsersManager />
+
+          {/* من فعل ماذا ومتى */}
+          <ActivityLogCard />
         </div>
 
         <div className="space-y-6">
@@ -434,10 +324,10 @@ export function Settings() {
               <CardTitle className="text-base">معلومات النظام</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">الإصدار</span><span className="font-bold">1.0.0</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">نوع التطبيق</span><Badge variant="success" className="text-[10px]">بدون انترنت - Offline</Badge></div>
-              <div className="flex justify-between"><span className="text-gray-500">قاعدة البيانات</span><span>IndexedDB</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">المنصات</span><span>Android + Windows 10/11</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">الإصدار</span><span className="font-bold">{APP_VERSION}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">نوع التطبيق</span><Badge variant="success" className="text-[10px]">يعمل بدون انترنت</Badge></div>
+              <div className="flex justify-between"><span className="text-gray-500">قاعدة البيانات</span><span>محلية داخل الجهاز</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">المنصات</span><span>أندرويد + ويندوز 10 و 11</span></div>
               <div className="h-px bg-gray-200 dark:bg-gray-700 my-2" />
               <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/30 rounded-xl p-3 text-xs text-green-800 dark:text-green-300">
                 <p className="font-bold">✓ آمن ومحلي 100%</p>
@@ -458,50 +348,6 @@ export function Settings() {
         </div>
       </div>
 
-      {showUserForm && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
-            <CardHeader>
-              <CardTitle>{editingUser ? 'تعديل مستخدم' : 'إضافة مستخدم جديد'}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleUserSubmit} className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium mb-1 block">اسم المستخدم</label>
-                  <Input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} placeholder="مثلاً: أحمد، موظف المبيعات" required />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">رمز الدخول PIN (4 إلى 8 أرقام)</label>
-                  <Input
-                    type="password"
-                    inputMode="numeric"
-                    autoComplete="new-password"
-                    value={userForm.pin}
-                    onChange={(e) => setUserForm({ ...userForm, pin: e.target.value })}
-                    placeholder={editingUser ? 'اتركه فارغاً للإبقاء على الرمز الحالي' : '1234'}
-                    required={!editingUser}
-                  />
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    يُحفظ كبصمة مشفّرة داخل الجهاز ولا يظهر لأي شخص.
-                    {editingUser && isHashedPin(editingUser.pin) ? '' : editingUser ? ' الرمز الحالي بصيغة قديمة وسيُحدَّث عند تغييره.' : ''}
-                  </p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">الصلاحية</label>
-                  <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value === 'admin' ? 'admin' : 'sales' })} className="flex h-10 w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
-                    <option value="sales">موظف مبيعات - بيع فقط</option>
-                    <option value="admin">مدير - كامل الصلاحيات</option>
-                  </select>
-                </div>
-                <div className="flex gap-2 pt-2">
-                  <Button type="submit" className="flex-1 bg-primary-600">{editingUser ? 'حفظ التعديل' : 'إضافة المستخدم'}</Button>
-                  <Button type="button" variant="outline" onClick={() => { setShowUserForm(false); setEditingUser(null); }}>إلغاء</Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }

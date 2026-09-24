@@ -98,8 +98,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        'cairo': ['Cairo', 'sans-serif'],
-        'tajawal': ['Tajawal', 'sans-serif']
+        // الخط مدمج محلياً (@fontsource-variable/cairo) — يعمل دون إنترنت
+        'cairo': ['"Cairo Variable"', 'Cairo', '"Segoe UI"', 'Tahoma', 'sans-serif']
       },
       colors: {
         // اللون الأساسي: برونزي مكتوم (يعمل مع نص أبيض في الدرجات 600+)
@@ -123,7 +123,17 @@ export default {
       animation: {
         'fade-in': 'fadeIn 0.5s ease-in-out',
         'slide-up': 'slideUp 0.3s ease-out',
-        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite'
+        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        // اهتزاز خانات الرمز السري عند إدخال رمز خاطئ (شاشة القفل)
+        'pin-shake': 'pinShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both'
+      },
+      keyframes: {
+        pinShake: {
+          '10%, 90%': { transform: 'translateX(-1px)' },
+          '20%, 80%': { transform: 'translateX(2px)' },
+          '30%, 50%, 70%': { transform: 'translateX(-4px)' },
+          '40%, 60%': { transform: 'translateX(4px)' }
+        }
       }
     },
   },

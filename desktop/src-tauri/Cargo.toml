@@ -16,6 +16,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
+# صندوق حفظ أصلي + كتابة الملف المختار (نسخ احتياطية، مستندات، تقارير) —
+# نفس تجربة الحفظ في نسخة ويندوز (Electron) وأندرويد
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

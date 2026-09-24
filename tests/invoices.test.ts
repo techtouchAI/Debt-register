@@ -286,7 +286,29 @@ describe('أرقام الفواتير', () => {
     const thirdNumber = await nextInvoiceNumber(new Date(dateISO));
     // لا يُعاد استخدام رقم فاتورة محذوفة ما زالت نسختها الورقية متداولة
     expect(thirdNumber).not.toBe(second.invoiceNumber);
-    expect(thirdNumber).toBe('INV-202603-0003');
+    // البادئة عربية (ف = فاتورة) — لا كلمات إنجليزية في أرقام المستندات
+    expect(thirdNumber).toBe('ف-202603-0003');
+  });
+
+  it('يكمل الترقيم من الأرقام القديمة (INV-) دون تكرار رقم في الشهر نفسه', async () => {
+    const now = new Date().toISOString();
+    // فاتورة محفوظة بصيغة الإصدارات السابقة
+    await db.invoices.add({
+      invoiceNumber: 'INV-202603-0007',
+      type: 'cash',
+      customerName: 'زبون قديم',
+      itemsCount: 0,
+      subtotal: 0,
+      discount: 0,
+      total: 0,
+      paidAmount: 0,
+      remaining: 0,
+      date: dateISO,
+      createdAt: now,
+      status: 'paid'
+    });
+    const next = await nextInvoiceNumber(new Date(dateISO));
+    expect(next).toBe('ف-202603-0008');
   });
 });
 

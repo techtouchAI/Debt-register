@@ -1,4 +1,5 @@
 import { logBackgroundFailure } from './lifecycle';
+import { assertPermission } from './session';
 import { db, logActivity } from './db';
 import { roundMoney, toFiniteNumber } from './utils';
 import type { Customer } from '@/types';
@@ -71,10 +72,12 @@ export function validateCustomerInput(
  *  - `createdAt` الأصلي يُحفظ عند التحديث.
  */
 export async function saveCustomer(input: Partial<CustomerInput>, id?: number): Promise<CustomerSaveResult> {
+  const isEdit = Number.isInteger(id) && (id as number) > 0;
+  assertPermission(isEdit ? 'customers.edit' : 'customers.create');
+
   const validation = validateCustomerInput(input);
   if (!validation.ok) return validation;
 
-  const isEdit = Number.isInteger(id) && (id as number) > 0;
   const now = new Date().toISOString();
 
   const result = await db.transaction('rw', [db.customers], async (): Promise<CustomerSaveResult> => {
@@ -128,6 +131,7 @@ export async function checkCustomerDeletion(customerId: number): Promise<Custome
  * المنع قابلاً للاختبار.
  */
 export async function deleteCustomer(customerId: number): Promise<CustomerDeleteResult> {
+  assertPermission('customers.delete');
   if (!Number.isInteger(customerId) || customerId <= 0) return blocked('not-found', 0, 0, 0);
 
   const outcome = await db.transaction('rw', [db.customers, db.invoices, db.payments], async () => {

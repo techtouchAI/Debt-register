@@ -1,4 +1,5 @@
 import { logBackgroundFailure } from './lifecycle';
+import { assertPermission } from './session';
 import { db, checkLowStock, getSettingsOrDefault, logActivity } from './db';
 import { nextPurchaseNumber } from './sequence';
 import { formatCurrency, roundMoney, toFiniteNumber, toISOStringOrNull } from './utils';
@@ -119,6 +120,7 @@ async function resolveMaterialInTransaction(item: PurchaseDraftItem, now: string
 }
 
 export async function savePurchase(draft: PurchaseDraft): Promise<PurchaseSaveResult> {
+  assertPermission('purchases.manage');
   const validation = validatePurchaseDraft(draft);
   if (!validation.ok) return validation;
 
@@ -250,6 +252,7 @@ export async function getPurchaseWithItems(purchaseId: number): Promise<Purchase
 }
 
 export async function deletePurchase(purchaseId: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  assertPermission('purchases.manage');
   const result = await db.transaction('rw', [db.purchases, db.purchaseItems, db.materials], async () => {
     const purchase = await db.purchases.get(purchaseId);
     if (!purchase) return { ok: false as const, error: 'وصل الشراء غير موجود' };

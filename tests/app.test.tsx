@@ -32,7 +32,7 @@ describe('إقلاع التطبيق', () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+        expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
       },
       { timeout: 4000 }
     );
@@ -73,7 +73,7 @@ describe('إقلاع التطبيق', () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+        expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
       },
       { timeout: 4000 }
     );

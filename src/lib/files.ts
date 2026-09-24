@@ -1,29 +1,30 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { getElectronAPI } from './platform';
+import { getElectronAPI, getTauri, isTauri } from './platform';
 import { sendSystemNotification } from './notify';
 
 /**
- * خدمة حفظ الملفات الموحّدة (نسخ احتياطية، PDF، تقارير).
+ * خدمة حفظ الملفات الموحّدة (نسخ احتياطية، مستندات، تقارير).
  *
  * المشكلة السابقة: الحفظ كان يعتمد على `window.Capacitor.Plugins` القديمة ثم
  * يسقط إلى تنزيل المتصفح (`<a download>`) الذي لا يفعل شيئاً داخل WebView
  * أندرويد — فيضغط المستخدم زر الحفظ/التخزين ولا يحدث شيء إطلاقاً.
  *
- * التصميم الجديد لكل منصة:
- *  - أندرويد: كتابة الملف عبر Filesystem الرسمية (مجلد OfficeManager داخل
+ * السلوك لكل منصة (الغاية واحدة: المستخدم يختار/يعرف مكان الملف دائماً):
+ *  - أندرويد: كتابة الملف عبر Filesystem الرسمية (مجلد التطبيق داخل
  *    المستندات، ثم بدائل آمنة)، وبعدها فتح نافذة المشاركة الأصلية ليحفظ
  *    المستخدم الملف في التنزيلات أو يرسله واتساب/إيميل، مع إشعار نظام يوضح
  *    مكان الملف. هذا هو السلوك المعتمد لأندرويد 10+ (Scoped Storage).
  *  - ويندوز (Electron): صندوق حفظ أصلي عبر العملية الرئيسية.
+ *  - ويندوز/لينكس (Tauri): صندوق حفظ أصلي عبر إضافتي dialog و fs.
  *  - المتصفح: تنزيل عادي عبر Blob.
  */
 
 export interface SaveFileInput {
   fileName: string;
   mimeType: string;
-  /** نص (للبانات النصية كـ JSON) أو Blob (للملفات الثنائية كـ PDF) */
+  /** نص (للبيانات النصية) أو Blob (للملفات الثنائية كالمستندات) */
   data: string | Blob;
   /** للملفات النصية فقط — الثنائية تُحوَّل تلقائياً إلى base64 */
   encoding?: 'utf8';
@@ -38,13 +39,29 @@ export interface SaveFileInput {
 export interface SaveFileResult {
   ok: boolean;
   /** أين حُفظ الملف */
-  via: 'native-documents' | 'native-cache-share' | 'electron' | 'browser' | 'none';
+  via: 'native-documents' | 'native-cache-share' | 'electron' | 'tauri' | 'browser' | 'none';
   /** مسار/رابط الملف عند توفره */
   path?: string;
   error?: string;
 }
 
-const APP_FOLDER = 'OfficeManager';
+/** اسم مجلد التطبيق (المستندات في أندرويد، التنزيلات في ويندوز). */
+export const APP_FOLDER = 'إدارة المكتب';
+
+/** وصف عربي لنوع الملف في صناديق الحفظ (بدل PDF/JSON). */
+export function fileTypeLabel(fileName: string): string {
+  const extension = (fileName.split('.').pop() || '').toLowerCase();
+  switch (extension) {
+    case 'pdf':
+      return 'مستند';
+    case 'json':
+      return 'ملف نسخة احتياطية';
+    case 'csv':
+      return 'جدول بيانات';
+    default:
+      return 'ملف';
+  }
+}
 
 function isNative(): boolean {
   try {
@@ -85,6 +102,34 @@ function toBlob(input: SaveFileInput): Blob {
 }
 
 /**
+ * Tauri: صندوق حفظ أصلي (المسار المختار يُضاف تلقائياً لنطاق الكتابة المسموح)
+ * ثم كتابة الملف. يُعيد null إن لم تكن الإضافات متاحة (فيسقط للمسار التالي).
+ */
+async function saveWithTauri(input: SaveFileInput): Promise<SaveFileResult | null> {
+  const tauri = getTauri();
+  if (!tauri?.dialog?.save || !tauri.fs?.writeFile) return null;
+
+  let defaultPath = input.fileName;
+  try {
+    if (tauri.path) defaultPath = await tauri.path.join(await tauri.path.downloadDir(), input.fileName);
+  } catch {
+    /* مجلد التنزيلات غير متاح — يُقترح الاسم فقط */
+  }
+
+  const extension = (input.fileName.split('.').pop() || '').toLowerCase();
+  const target = await tauri.dialog.save({
+    title: 'حفظ الملف',
+    defaultPath,
+    filters: extension ? [{ name: fileTypeLabel(input.fileName), extensions: [extension] }] : undefined
+  });
+  if (!target) return { ok: false, via: 'none', error: 'CANCELLED' };
+
+  const bytes = new Uint8Array(await toBlob(input).arrayBuffer());
+  await tauri.fs.writeFile(target, bytes);
+  return { ok: true, via: 'tauri', path: target };
+}
+
+/**
  * حفظ الملف على المنصة الحالية. لا يرمي استثناءً — يُعيد نتيجة صريحة
  * ليتمكن المستدعي من إظهار رسالة مناسبة للمستخدم.
  */
@@ -115,8 +160,8 @@ export async function saveFile(input: SaveFileInput): Promise<SaveFileResult> {
       if (input.shareAfterSave !== false && uri?.uri) {
         await Share.share({ title: input.shareTitle || input.fileName, url: uri.uri }).catch(() => undefined);
       }
-      await sendSystemNotification('تم حفظ الملف', `${input.fileName} — مجلد المستندات/${subDir}`);
-      return { ok: true, via: 'native-documents', path: uri?.uri || `المستندات/${relativePath}` };
+      await sendSystemNotification('تم حفظ الملف', `${input.fileName} — المستندات/${subDir}`);
+      return { ok: true, via: 'native-documents', path: `المستندات/${relativePath}` };
     } catch (error) {
       console.warn('تعذّر الحفظ في المستندات، سأستخدم المشاركة المباشرة:', error);
     }
@@ -137,7 +182,7 @@ export async function saveFile(input: SaveFileInput): Promise<SaveFileResult> {
         text: input.shareTitle || input.fileName,
         url: uri.uri
       });
-      return { ok: true, via: 'native-cache-share', path: uri.uri };
+      return { ok: true, via: 'native-cache-share', path: input.fileName };
     } catch (error) {
       console.warn('تعذّر حفظ الملف عبر المشاركة:', error);
       return { ok: false, via: 'none', error: 'تعذّر حفظ الملف على الجهاز' };
@@ -158,18 +203,45 @@ export async function saveFile(input: SaveFileInput): Promise<SaveFileResult> {
         return { ok: false, via: 'none', error: 'CANCELLED' };
       }
       // فشل الحفظ الأصلي — نسقط إلى تنزيل المتصفح بدل إظهار خطأ
-      console.warn('تعذّر الحفظ عبر Electron، سأستخدم التنزيل العادي:', result?.error);
+      console.warn('تعذّر الحفظ عبر غلاف ويندوز، سأستخدم التنزيل العادي:', result?.error);
     }
   } catch (error) {
-    console.warn('تعذّر الحفظ عبر Electron:', error);
+    console.warn('تعذّر الحفظ عبر غلاف ويندوز:', error);
   }
 
-  // ---------- 3) المتصفح ----------
+  // ---------- 3) Tauri (ويندوز/لينكس): صندوق حفظ أصلي ----------
+  if (isTauri()) {
+    try {
+      const result = await saveWithTauri(input);
+      if (result) return result;
+    } catch (error) {
+      console.warn('تعذّر الحفظ عبر غلاف سطح المكتب، سأستخدم التنزيل العادي:', error);
+    }
+  }
+
+  // ---------- 4) المتصفح ----------
   try {
     downloadInBrowser(input.fileName, toBlob(input));
     return { ok: true, via: 'browser' };
   } catch (error) {
     console.warn('تعذّر تنزيل الملف:', error);
     return { ok: false, via: 'none', error: 'تعذّر تنزيل الملف' };
+  }
+}
+
+/** وصف عربي لمكان حفظ الملف بعد نجاح الحفظ (لرسائل النجاح). */
+export function describeSavedLocation(result: SaveFileResult, fileName: string): string {
+  switch (result.via) {
+    case 'native-documents':
+      return `${fileName} — حُفظ في ${result.path ?? 'المستندات'}`;
+    case 'native-cache-share':
+      return `${fileName} — اختر مكان الحفظ أو التطبيق من نافذة المشاركة`;
+    case 'electron':
+    case 'tauri':
+      return `${fileName} — حُفظ في المكان الذي اخترته`;
+    case 'browser':
+      return `${fileName} — في مجلد التنزيلات`;
+    default:
+      return fileName;
   }
 }

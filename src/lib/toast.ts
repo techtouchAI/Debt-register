@@ -60,10 +60,17 @@ export function formatToastText(text: string | undefined, kind: ToastKind): stri
 }
 
 export function pushToast(kind: ToastKind, title: string, message?: string): number {
-  const id = nextId++
   const cleanTitle = formatToastText(title, kind) || 'تنبيه'
   const cleanMessage = formatToastText(message, kind)
 
+  // تنبيه مطابق ظاهر حالياً ⇒ لا نكرره (ضغطات رجوع متتالية، أو تأثير يُعاد
+  // تنفيذه) — كانت التنبيهات المتطابقة تتكدّس فوق بعضها وتحجب الشاشة
+  const duplicate = toasts.find(
+    (toast) => toast.kind === kind && toast.title === cleanTitle && toast.message === cleanMessage
+  )
+  if (duplicate) return duplicate.id
+
+  const id = nextId++
   toasts = [...toasts, { id, kind, title: cleanTitle, message: cleanMessage }].slice(-MAX_VISIBLE)
   emit()
   return id
@@ -79,4 +86,10 @@ export const toast = {
   success: (title: string, message?: string) => pushToast('success', title, message),
   info: (title: string, message?: string) => pushToast('info', title, message),
   warning: (title: string, message?: string) => pushToast('warning', title, message)
+}
+
+/** إزالة كل التنبيهات — للاختبارات (حالة وحدة لا تُفرَّغ بإلغاء التركيب). */
+export function resetToastsForTests(): void {
+  toasts = []
+  emit()
 }

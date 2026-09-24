@@ -4,7 +4,11 @@ import App from './App.tsx'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { isNativePlatform, getElectronAPI } from '@/lib/platform'
 import { installNativeBackGuard } from '@/lib/nativeBridge'
+import { installDropGuard } from '@/lib/dropGuard'
 import { initTheme } from '@/hooks/useTheme'
+// الخط مدمج داخل التطبيق (لا تحميل من الإنترنت): نفس المظهر على أندرويد
+// وويندوز ولينكس، متصلاً كان الجهاز أو دون اتصال
+import '@fontsource-variable/cairo'
 import './index.css'
 
 /**
@@ -54,6 +58,16 @@ initTheme()
 installNativeBackGuard()
 
 registerServiceWorker()
+
+// إفلات ملف فوق النافذة لا يستبدل التطبيق بمحتوى الملف (ويندوز/المتصفح)
+installDropGuard()
+
+/**
+ * طلب تخزين دائم: يمنع النظام من حذف قاعدة البيانات المحلية (الفواتير
+ * والديون) تلقائياً عند امتلاء مساحة الجهاز. صامت تماماً — إن رُفض الطلب
+ * يبقى التطبيق يعمل كالمعتاد.
+ */
+void navigator.storage?.persist?.().catch(() => undefined)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

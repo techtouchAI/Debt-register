@@ -101,10 +101,10 @@ function QuickAddPurchaseMaterialForm({
           <p className="text-xs text-gray-500 dark:text-gray-400">لا تُضاف كمية الآن؛ كمية الوصل ستُرحّل للمخزن عند الحفظ.</p>
         </CardHeader>
         <CardContent>
-          <form onSubmit={submit} className="space-y-4">
+          <form onSubmit={submit} noValidate className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-1 block">اسم المادة *</label>
-              <Input value={name} onChange={(event) => setName(event.target.value)} autoFocus required placeholder="اكتب اسم المادة" />
+              <Input value={name} onChange={(event) => setName(event.target.value)} autoFocus aria-required="true" placeholder="اكتب اسم المادة" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -121,7 +121,7 @@ function QuickAddPurchaseMaterialForm({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر الشراء ({currency}) *</label>
-                <NumericTextInput value={purchasePrice} onValueChange={setPurchasePrice} placeholder="0" required />
+                <NumericTextInput value={purchasePrice} onValueChange={setPurchasePrice} placeholder="0" aria-required="true" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر البيع المقترح</label>

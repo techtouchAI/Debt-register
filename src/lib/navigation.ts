@@ -22,6 +22,24 @@ export function canGoBackInApp(): boolean {
 }
 
 /**
+ * المسار الحالي من الرابط نفسه (مصدر الحقيقة في HashRouter).
+ *
+ * تحديثات الموجّه تمر عبر انتقالات React، فقد يسبق الرابطُ آخرَ مسار رُسم:
+ *  - أثناء فتح صفحة تُحمَّل عند الطلب يُبقي React الصفحة السابقة معروضة حتى
+ *    يكتمل تحميلها، بينما الرابط تغيّر فعلاً — فيرجع زر الرجوع من الصفحة
+ *    المطلوبة لا من التي قبلها.
+ *  - تنقّل في السجل قد يتجاوز تحويلاً معلّقاً — فيتحقق حارس الصلاحيات من
+ *    الرابط لا من الرسم وحده.
+ */
+export function currentRoutePath(fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return fallback;
+  const path = hash.split('?')[0] || '/';
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
+/**
  * الصفحة الأم في الهرم: `/invoices/5/edit` ← `/invoices/5` ← `/invoices` ← `/`.
  * تُستخدم عندما لا يوجد سجل (فتح مباشر على صفحة داخلية أو استعادة أندرويد
  * للتطبيق بعد إنهائه) حتى يتقدّم الرجوع نحو الرئيسية خطوة واحدة في كل مرة.

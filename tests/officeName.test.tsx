@@ -119,7 +119,7 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     // يظهر الاسم كاملاً في الترحيب
     await waitFor(
       () => {
-        expect(screen.getByText(`مرحباً بك في ${LONG_NAME}`)).toBeTruthy();
+        expect(screen.getByTestId('dashboard-office-name').textContent).toBe(LONG_NAME);
       },
       { timeout: 5000 }
     );
@@ -132,7 +132,10 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     // الاستعلام المتزامن كان يجعل هذا الاختبار متذبذباً (flaky).
     await waitFor(
       () => {
-        expect(screen.getByTitle(LONG_NAME).textContent).toBe(LONG_NAME);
+        // الشريط الجانبي + ترويسة الرئيسية (كلاهما يحمل التلميح والنص كاملاً)
+        const titled = screen.getAllByTitle(LONG_NAME);
+        expect(titled.length).toBeGreaterThanOrEqual(2);
+        for (const element of titled) expect(element.textContent).toBe(LONG_NAME);
       },
       { timeout: 5000 }
     );
@@ -141,14 +144,17 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
     cleanup();
     await new Promise((resolve) => setTimeout(resolve, 0));
     render(<App />);
-    await waitFor(() => expect(screen.getByText(`مرحباً بك في ${LONG_NAME}`)).toBeTruthy(), {
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name').textContent).toBe(LONG_NAME), {
       timeout: 5000
     });
     expect(screen.queryByText(/مرحباً بك في نظام إدارة المكتب/)).toBeNull();
     // بعد إعادة التركيب أيضاً: ننتظر التخطيط بدل افتراض جهوزيته الفورية
     await waitFor(
       () => {
-        expect(screen.getByTitle(LONG_NAME).textContent).toBe(LONG_NAME);
+        // الشريط الجانبي + ترويسة الرئيسية (كلاهما يحمل التلميح والنص كاملاً)
+        const titled = screen.getAllByTitle(LONG_NAME);
+        expect(titled.length).toBeGreaterThanOrEqual(2);
+        for (const element of titled) expect(element.textContent).toBe(LONG_NAME);
       },
       { timeout: 5000 }
     );
@@ -202,32 +208,34 @@ describe('اسم ملف النسخة الاحتياطية مع اسم مكتب �
     const fileName = backupFileName(LONG_NAME, date);
 
     // اسم الملف كامل البنية: الاسم + التاريخ + الوقت + الامتداد
-    expect(fileName.endsWith('_Backup_2026-05-03_09-08-07.json')).toBe(true);
+    expect(fileName.endsWith('_نسخة_احتياطية_2026-05-03_09-08-07.json')).toBe(true);
     expect(utf8ByteLength(fileName)).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES + 30);
     // الطوابع الزمنية والامتداد لا تُقتطع أبداً
-    expect(fileName).toMatch(/_Backup_2026-05-03_09-08-07\.json$/);
+    expect(fileName).toMatch(/_نسخة_احتياطية_2026-05-03_09-08-07\.json$/);
     // يبدأ ببداية اسم المكتب الحقيقي (لا اسم عام)
     expect(fileName.startsWith('مكتب الرافدين')).toBe(true);
-    expect(fileName).not.toContain('Office_Backup');
+    expect(fileName).not.toContain('المكتب_نسخة_احتياطية');
+    // لا كلمات إنجليزية في اسم الملف (عدا الامتداد التقني)
+    expect(fileName.replace(/\.json$/, '')).not.toMatch(/[A-Za-z]/);
 
     // الاسم الكامل يبقى في محتوى الملف ولو طال
-    expect(backupFileName(LONG_NAME_200, date).endsWith('_Backup_2026-05-03_09-08-07.json')).toBe(true);
+    expect(backupFileName(LONG_NAME_200, date).endsWith('_نسخة_احتياطية_2026-05-03_09-08-07.json')).toBe(true);
     expect(utf8ByteLength(backupFileName(LONG_NAME_200, date))).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES + 40);
   });
 
   it('يحتفظ بأسماء المكاتب القصيرة كما هي', () => {
     const date = new Date(2026, 4, 3, 9, 8, 7);
     expect(backupFileName('مكتب الرافدين الزراعي', date)).toBe(
-      'مكتب الرافدين الزراعي_Backup_2026-05-03_09-08-07.json'
+      'مكتب الرافدين الزراعي_نسخة_احتياطية_2026-05-03_09-08-07.json'
     );
-    expect(backupFileName('', date)).toBe('Office_Backup_2026-05-03_09-08-07.json');
+    expect(backupFileName('', date)).toBe('المكتب_نسخة_احتياطية_2026-05-03_09-08-07.json');
   });
 
   it('اسم ملف الاستيراد محدود أيضاً بالبايتات', () => {
     const imported = importedBackupFileName(`${LONG_NAME_200}.json`);
     expect(utf8ByteLength(imported)).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES);
     expect(imported.endsWith('.json')).toBe(true);
-    expect(imported).toContain('_Imported_');
+    expect(imported).toContain('_مستوردة_');
   });
 
   it('الاقتطاع لا يكسر المحارف ولا يترك فواصل معلّقة', () => {

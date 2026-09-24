@@ -1,10 +1,17 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import { db, closeDatabase, initializeDB, openDatabase } from '@/lib/db';
 import { resetSettingsStore } from '@/lib/settingsStore';
 import { resetModalStackForTests } from '@/lib/modalStack';
 import { resetHistoryTrapForTests } from '@/lib/historyTrap';
 import { setNativeBackSubscriber } from '@/lib/nativeBridge';
+import { resetSessionForTests } from '@/lib/session';
+import { cancelAllConfirms } from '@/lib/confirm';
+import { resetToastsForTests } from '@/lib/toast';
+
+// jsdom لا يطبّق التمرير (يطبع "Not implemented: window.scrollTo" في كل تنقّل)
+window.scrollTo = (() => undefined) as typeof window.scrollTo;
 
 /**
  * بيئة اختبار موحّدة:
@@ -16,6 +23,10 @@ import { setNativeBackSubscriber } from '@/lib/nativeBridge';
  */
 beforeEach(async () => {
   setNativeBackSubscriber(null);
+  // جلسة الدخول وحوارات التأكيد حالة وحدة: تُصفَّر بين الاختبارات
+  resetSessionForTests();
+  cancelAllConfirms();
+  resetToastsForTests();
   resetModalStackForTests();
   resetHistoryTrapForTests();
   // مخزن الإعدادات ذاكرة وحدة، فيجب تصفيره بين الاختبارات كما تُفرَّغ القاعدة
@@ -28,6 +39,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // إلغاء تركيب أي واجهة ما زالت مركّبة قبل إغلاق القاعدة: بقاء التطبيق
+  // مركّباً بعد آخر اختبار في الملف كان يترك مؤقتات واستعلامات حيّة تُحدّث
+  // الحالة بعد تفكيك بيئة jsdom (window is not defined).
+  cleanup();
+  resetSessionForTests();
+  cancelAllConfirms();
   resetModalStackForTests();
   resetHistoryTrapForTests();
   resetSettingsStore();

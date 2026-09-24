@@ -1,4 +1,5 @@
 import { logBackgroundFailure } from './lifecycle';
+import { assertPermission } from './session';
 import { db, logActivity, createNotification, checkLowStock, getSettingsOrDefault } from './db';
 import { nextInvoiceNumber, nextReceiptNumber } from './sequence';
 import { formatCurrency, roundMoney, toFiniteNumber } from './utils';
@@ -132,10 +133,21 @@ export async function reallocateCustomerInvoices(customerId: number): Promise<vo
     const allocated = Math.max(0, Math.min(pool, total));
     pool = roundMoney(pool - allocated);
     const remaining = roundMoney(total - allocated);
+    const status = invoiceStatusFor(total, allocated);
+    // لا كتابة إن لم يتغيّر شيء: كانت كل فاتورة آجلة تُكتب (ويتغيّر تاريخ
+    // آخر تعديل لها) بعد كل تسديد أو استعادة نسخة احتياطية، فيضيع التاريخ
+    // الحقيقي لآخر تعديل وتتكرر عمليات كتابة بلا داعٍ.
+    if (
+      roundMoney(toFiniteNumber(invoice.paidAmount)) === allocated &&
+      roundMoney(toFiniteNumber(invoice.remaining)) === remaining &&
+      invoice.status === status
+    ) {
+      continue;
+    }
     await db.invoices.update(invoice.id, {
       paidAmount: allocated,
       remaining,
-      status: invoiceStatusFor(total, allocated),
+      status,
       updatedAt: now
     });
   }
@@ -157,10 +169,13 @@ export async function getInvoiceWithItems(invoiceId: number): Promise<InvoiceWit
  * ------------------------------------------------------------------ */
 
 export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResult> {
+  const isEdit = Number.isInteger(draft.id) && (draft.id as number) > 0;
+  // موظف المبيعات ينشئ فواتير فقط؛ التعديل للمدير (دفاع ثانٍ خلف الواجهة)
+  assertPermission(isEdit ? 'invoices.edit' : 'sales.create');
+
   const validation = validateInvoiceDraft(draft);
   if (!validation.ok) return validation;
 
-  const isEdit = Number.isInteger(draft.id) && (draft.id as number) > 0;
   const customerName = draft.customerName.trim();
   const { subtotal, discount, total } = computeInvoiceTotals(draft.items, draft.discount);
   const dateISO = new Date(draft.dateISO).toISOString();
@@ -435,6 +450,7 @@ async function syncDownPayment(args: {
  * ------------------------------------------------------------------ */
 
 export async function deleteInvoice(invoiceId: number): Promise<InvoiceDeleteResult> {
+  assertPermission('invoices.delete');
   let affectedCustomerIds: number[] = [];
   let invoiceNumber = '';
 

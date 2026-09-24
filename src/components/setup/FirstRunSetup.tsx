@@ -15,6 +15,7 @@ import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { OfficeProfileFields, type OfficeProfileFieldsHandle } from '@/components/setup/OfficeProfileFields';
 import type { OfficeSettings } from '@/types';
+import { SETUP_COMPLETED_META_KEY } from '@/lib/metaKeys';
 
 /**
  * معالج إعداد المكتب في التشغيل الأول.
@@ -31,7 +32,7 @@ interface FirstRunSetupProps {
   onDone: (settings: OfficeSettings) => void;
 }
 
-export const SETUP_COMPLETED_KEY = 'office-setup-completed';
+export const SETUP_COMPLETED_KEY = SETUP_COMPLETED_META_KEY;
 
 export function FirstRunSetup({ initial, onDone }: FirstRunSetupProps) {
   // حالة واحدة للنموذج كله: كل تغيير يُطبَّق كتحديث وظيفي على أحدث قيمة،

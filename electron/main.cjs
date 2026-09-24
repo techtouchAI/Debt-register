@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const { pathToFileURL } = require('url');
 
 /**
  * نافذة سطح المكتب لنظام إدارة المكتب.
@@ -15,7 +16,18 @@ const fsp = require('fs/promises');
  */
 
 const APP_ICON = path.join(__dirname, '../public/pwa-192x192.png');
+const APP_INDEX = path.join(__dirname, '../dist/index.html');
+/** اسم مجلد التطبيق المقترح داخل "التنزيلات" (مطابق لأندرويد: المستندات/إدارة المكتب). */
+const APP_FOLDER = 'إدارة المكتب';
 let mainWindow = null;
+
+/* ----------------------------- لغة الواجهة ----------------------------- */
+/**
+ * لغة Chromium الداخلية عربية مهما كانت لغة ويندوز: رسائل التحقق في الحقول،
+ * منتقي التاريخ، وقوائم النظام الافتراضية — فلا تظهر أي عبارة إنجليزية.
+ * يجب ضبطها قبل جاهزية التطبيق (قبل `app.whenReady`).
+ */
+app.commandLine.appendSwitch('lang', 'ar');
 
 /**
  * وضع اختبار الدخان (Smoke test) للتشغيل في CI:
@@ -77,16 +89,80 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('com.agrioffice.debtregister');
 }
 
-/** هل الرابط جزء من التطبيق نفسه؟ */
+/**
+ * هل الرابط هو صفحة التطبيق نفسها؟
+ * سابقاً كان أي رابط file:// مسموحاً، فإفلات ملف (نسخة احتياطية مثلاً) فوق
+ * النافذة يستبدل التطبيق بمحتوى الملف. الآن: صفحة التطبيق فقط (بأي مسار #).
+ */
 function isInternalUrl(target) {
   try {
     const url = new URL(target);
-    if (url.protocol === 'file:') return true;
     if (isDev && url.hostname === 'localhost') return true;
-    return false;
+    if (url.protocol !== 'file:') return false;
+    return decodeURIComponent(url.pathname) === decodeURIComponent(pathToFileURL(APP_INDEX).pathname);
   } catch {
     return false;
   }
+}
+
+/* ------------------------------ حالة النافذة ------------------------------ */
+/**
+ * مستوى التكبير يُحفظ بين مرات التشغيل (Ctrl + عجلة الفأرة، Ctrl و + / - / 0)
+ * — تفصيل مهم على شاشات ويندوز الصغيرة أو الكبيرة جداً.
+ */
+const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
+const MIN_ZOOM_LEVEL = -3;
+const MAX_ZOOM_LEVEL = 4;
+
+function readWindowState() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(WINDOW_STATE_FILE(), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeWindowState(patch) {
+  try {
+    const next = { ...readWindowState(), ...patch };
+    fs.writeFileSync(WINDOW_STATE_FILE(), JSON.stringify(next));
+  } catch (error) {
+    console.warn('تعذّر حفظ حالة النافذة:', error);
+  }
+}
+
+function applyZoom(contents, level) {
+  const clamped = Math.min(MAX_ZOOM_LEVEL, Math.max(MIN_ZOOM_LEVEL, Math.round(level * 2) / 2));
+  contents.setZoomLevel(clamped);
+  writeWindowState({ zoomLevel: clamped });
+}
+
+/* ------------------------- قائمة الزر الأيمن (عربية) ------------------------- */
+/**
+ * Electron لا يعرض أي قائمة عند النقر بالزر الأيمن، ومستخدم ويندوز يتوقع
+ * "قص/نسخ/لصق" في الحقول. القائمة هنا عربية بالكامل وتظهر فقط حيث تفيد:
+ * في حقول الكتابة، أو عند تحديد نص. (بلا عناصر تقنية مثل "فحص العنصر").
+ */
+function buildContextMenu(contents, params) {
+  const { editFlags, isEditable, selectionText } = params;
+  const hasSelection = Boolean(selectionText && selectionText.trim());
+  const template = [];
+  if (isEditable) {
+    template.push(
+      { label: 'تراجع', enabled: editFlags.canUndo, click: () => contents.undo() },
+      { label: 'إعادة', enabled: editFlags.canRedo, click: () => contents.redo() },
+      { type: 'separator' },
+      { label: 'قص', enabled: editFlags.canCut, click: () => contents.cut() },
+      { label: 'نسخ', enabled: editFlags.canCopy, click: () => contents.copy() },
+      { label: 'لصق', enabled: editFlags.canPaste, click: () => contents.paste() },
+      { type: 'separator' },
+      { label: 'تحديد الكل', enabled: editFlags.canSelectAll, click: () => contents.selectAll() }
+    );
+  } else if (hasSelection) {
+    template.push({ label: 'نسخ', enabled: editFlags.canCopy, click: () => contents.copy() });
+  }
+  return template.length ? Menu.buildFromTemplate(template) : null;
 }
 
 function createWindow() {
@@ -115,8 +191,38 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(APP_INDEX);
   }
+
+  const contents = mainWindow.webContents;
+
+  // قائمة الزر الأيمن العربية (قص/نسخ/لصق) في الحقول والنص المحدد
+  contents.on('context-menu', (_event, params) => {
+    const menu = buildContextMenu(contents, params);
+    if (menu && mainWindow) menu.popup({ window: mainWindow });
+  });
+
+  // التكبير: Ctrl + عجلة الفأرة، و Ctrl و + / - / 0 من لوحة المفاتيح
+  contents.on('did-finish-load', () => {
+    const { zoomLevel } = readWindowState();
+    if (Number.isFinite(zoomLevel)) contents.setZoomLevel(zoomLevel);
+  });
+  contents.on('zoom-changed', (_event, direction) => {
+    applyZoom(contents, contents.getZoomLevel() + (direction === 'in' ? 0.5 : -0.5));
+  });
+  contents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    if (input.key === '=' || input.key === '+' || input.code === 'NumpadAdd') {
+      event.preventDefault();
+      applyZoom(contents, contents.getZoomLevel() + 0.5);
+    } else if (input.key === '-' || input.code === 'NumpadSubtract') {
+      event.preventDefault();
+      applyZoom(contents, contents.getZoomLevel() - 0.5);
+    } else if (input.key === '0' || input.code === 'Numpad0') {
+      event.preventDefault();
+      applyZoom(contents, 0);
+    }
+  });
 
   /* ------------------------- أذونات الويب -------------------------
    * تطبيق محلي بالكامل: لا يحتاج الموقع/الكاميرا/الميكروفون/القرص.
@@ -158,7 +264,8 @@ function createWindow() {
     console.error('did-fail-load:', errorCode, errorDescription, validatedURL);
     if (errorCode === -3) return; // ERR_ABORTED (تنقّل سريع) — تجاهل
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    const safeUrl = String(validatedURL || '').replace(/[&<>"']/g, '');
+    // الوصف التقني من Chromium إنجليزي: نعرض رمز الخطأ الرقمي فقط (يكفي للدعم الفني)
+    const safeCode = Number.isFinite(errorCode) ? String(errorCode) : '';
     mainWindow
       .loadURL(
         'data:text/html;charset=utf-8,' +
@@ -167,10 +274,10 @@ function createWindow() {
        body{font-family:Segoe UI,Tahoma,sans-serif;background:#111827;color:#e5e7eb;display:flex;align-items:center;justify-content:center;min-height:90vh;margin:0}
        .card{max-width:560px;padding:28px;background:#1f2937;border-radius:16px;border:1px solid #374151;text-align:center}
        button{margin:6px;padding:10px 22px;border-radius:10px;border:0;background:#16a34a;color:#fff;font-size:15px;cursor:pointer}
-       pre{font-size:11px;color:#9ca3af;text-align:left;overflow:auto}</style></head>
+       .code{font-size:12px;color:#9ca3af}</style></head>
        <body><div class="card"><h1>⚠️ تعذّر تحميل واجهة التطبيق</h1>
-       <p>فشل تحميل الملف المطلوب داخل التطبيق المُجمّع.</p>
-       <pre>${errorCode} — ${errorDescription}\n${safeUrl}</pre>
+       <p>فشل تحميل ملفات الواجهة داخل التطبيق. أعد التحميل، وإن تكرر الخطأ أعد تثبيت التطبيق — بياناتك محفوظة ولن تتأثر.</p>
+       <p class="code">رمز الخطأ: ${safeCode}</p>
        <button onclick="location.reload()">إعادة التحميل</button>
        <button onclick="window.close()">إغلاق</button></div></body></html>`
           )
@@ -304,6 +411,10 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    // لا قائمة تطبيق: قائمة Electron الافتراضية إنجليزية (File/Edit/View...)
+    // ولا حاجة لها — التنقل كله داخل الواجهة، واختصارات التحرير (Ctrl+C/V/X/Z/A)
+    // تعمل في الحقول دون قائمة على ويندوز، والتكبير معالج أعلاه.
+    Menu.setApplicationMenu(null);
     createWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -336,14 +447,16 @@ ipcMain.handle('save-backup', async (_event, payload) => {
     if (!fileName) return { success: false, error: 'اسم الملف غير صالح' };
     if (typeof payload?.data !== 'string') return { success: false, error: 'لا توجد بيانات للحفظ' };
 
-    const downloads = app.getPath('downloads');
-    const suggestedDir = path.join(downloads, 'OfficeManager');
+    const suggestedDir = path.join(app.getPath('downloads'), APP_FOLDER);
     await fsp.mkdir(suggestedDir, { recursive: true }).catch(() => {});
 
-    const { filePath } = await dialog.showSaveDialog({
+    const options = {
+      title: 'حفظ النسخة الاحتياطية',
+      buttonLabel: 'حفظ',
       defaultPath: path.join(suggestedDir, fileName),
-      filters: [{ name: 'JSON', extensions: ['json'] }]
-    });
+      filters: [{ name: 'ملف نسخة احتياطية', extensions: ['json'] }]
+    };
+    const { filePath } = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
 
     if (!filePath) return { success: false, cancelled: true };
 
@@ -367,20 +480,24 @@ ipcMain.handle('save-file', async (_event, payload) => {
       return { success: false, error: 'لا توجد بيانات للحفظ' };
     }
 
+    // أسماء أنواع الملفات بالعربية في صندوق حفظ ويندوز (بدل PDF/JSON)
     const extension = (fileName.split('.').pop() || '').toLowerCase();
     const filters = [];
-    if (extension === 'pdf') filters.push({ name: 'PDF', extensions: ['pdf'] });
-    else if (extension === 'json') filters.push({ name: 'JSON', extensions: ['json'] });
+    if (extension === 'pdf') filters.push({ name: 'مستند', extensions: ['pdf'] });
+    else if (extension === 'json') filters.push({ name: 'ملف نسخة احتياطية', extensions: ['json'] });
+    else if (extension === 'csv') filters.push({ name: 'جدول بيانات', extensions: ['csv'] });
     else filters.push({ name: 'ملفات', extensions: [extension || '*'] });
 
-    const downloads = app.getPath('downloads');
-    const suggestedDir = path.join(downloads, 'OfficeManager');
+    const suggestedDir = path.join(app.getPath('downloads'), APP_FOLDER);
     await fsp.mkdir(suggestedDir, { recursive: true }).catch(() => {});
 
-    const { filePath } = await dialog.showSaveDialog({
+    const options = {
+      title: 'حفظ الملف',
+      buttonLabel: 'حفظ',
       defaultPath: path.join(suggestedDir, fileName),
       filters
-    });
+    };
+    const { filePath } = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
 
     if (!filePath) return { success: false, cancelled: true };
 
@@ -401,11 +518,19 @@ ipcMain.handle('show-notification', async (_event, payload) => {
     const title = String(payload?.title || 'إدارة المكتب').slice(0, 200);
     const body = String(payload?.body || '').slice(0, 500);
     if (Notification.isSupported()) {
-      new Notification({
+      const notification = new Notification({
         title,
         body,
         icon: fs.existsSync(APP_ICON) ? APP_ICON : undefined
-      }).show();
+      });
+      // النقر على الإشعار يُظهر التطبيق (نفس سلوك أندرويد: النقر يفتح التطبيق)
+      notification.on('click', () => {
+        if (!mainWindow) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      });
+      notification.show();
       return { success: true };
     }
     return { success: false, error: 'الإشعارات غير مدعومة' };

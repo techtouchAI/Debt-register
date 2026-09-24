@@ -16,6 +16,8 @@ import { reportError } from '@/lib/errors';
 import { Material, Customer, OfficeSettings, Invoice } from '@/types';
 import { generateInvoicePDF } from '@/lib/pdf';
 import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialDialog';
+import { formatDocumentNumber } from '@/lib/labels';
+import { usePermission } from '@/hooks/useSession';
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 
 /**
@@ -58,6 +60,10 @@ export function InvoiceForm() {
   const [showCustomerList, setShowCustomerList] = useState(false);
   // الإضافة السريعة لمادة جديدة من داخل الفاتورة + معاينة المسودة
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  // إضافة مادة جديدة للمخزن من داخل الفاتورة للمدير فقط (موظف المبيعات يبيع
+  // من المواد المسجّلة)
+  const can = usePermission();
+  const canAddMaterial = can('materials.manage');
   const [quickAddName, setQuickAddName] = useState('');
   const [previewBody, setPreviewBody] = useState<string | null>(null);
   const [loadedInvoice, setLoadedInvoice] = useState<Invoice | null>(null);
@@ -271,7 +277,7 @@ export function InvoiceForm() {
         await generateInvoicePDF(result.invoice, result.items, s, customer);
       }
 
-      toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم حفظ الفاتورة', `رقم الفاتورة: ${result.invoiceNumber}`);
+      toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم حفظ الفاتورة', `رقم الفاتورة: ${formatDocumentNumber(result.invoiceNumber)}`);
       // استبدال/رجوع لا دفع: الرجوع بعد الحفظ لا يعيد فتح نموذج مُرسَل
       // من عرض الفاتورة ← تعديل: نعود إلى العرض نفسه؛ وإلا إلى القائمة
       returnTo('/invoices', [`/invoices/${result.invoiceId}`]);
@@ -472,15 +478,19 @@ export function InvoiceForm() {
                 {showMaterialList && searchMaterial.trim() && filteredMaterials.length === 0 && (
                   <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 text-sm">
                     <p className="text-gray-500 mb-2">لا توجد مادة بهذا الاسم</p>
-                    <Button type="button" size="sm" className="w-full bg-primary-600 hover:bg-primary-700" onClick={() => openQuickAdd(searchMaterial)}>
-                      <Plus className="w-4 h-4 ml-1" />
-                      إضافة &quot;{searchMaterial.trim()}&quot; كمادة جديدة
-                    </Button>
+                    {canAddMaterial ? (
+                      <Button type="button" size="sm" className="w-full bg-primary-600 hover:bg-primary-700" onClick={() => openQuickAdd(searchMaterial)}>
+                        <Plus className="w-4 h-4 ml-1" />
+                        إضافة &quot;{searchMaterial.trim()}&quot; كمادة جديدة
+                      </Button>
+                    ) : (
+                      <p className="text-xs text-gray-400">إضافة مادة جديدة للمخزن من صلاحية المدير</p>
+                    )}
                   </div>
                 )}
                 {showMaterialList && filteredMaterials.length > 0 && (
                   <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl max-h-80 overflow-y-auto">
-                    {searchMaterial.trim() && !filteredMaterials.some((m) => m.name.trim().toLowerCase() === searchMaterial.trim().toLowerCase()) && (
+                    {canAddMaterial && searchMaterial.trim() && !filteredMaterials.some((m) => m.name.trim().toLowerCase() === searchMaterial.trim().toLowerCase()) && (
                       <button
                         type="button"
                         onClick={() => openQuickAdd(searchMaterial)}
@@ -627,7 +637,7 @@ export function InvoiceForm() {
                 </Button>
                 <div className="grid grid-cols-2 gap-2">
                   <Button variant="outline" onClick={() => handleSave(true)} disabled={cart.length === 0 || isSaving}>
-                    <Download className="w-4 h-4 ml-1" />حفظ و PDF
+                    <Download className="w-4 h-4 ml-1" />حفظ مع مستند
                   </Button>
                   <Button variant="outline" onClick={handlePreview} disabled={cart.length === 0 || isSaving}>
                     <Eye className="w-4 h-4 ml-1" />معاينة
@@ -660,9 +670,9 @@ export function InvoiceForm() {
       {previewBody && (
         <DocumentPreviewDialog
           open={previewBody !== null}
-          title={loadedInvoice?.invoiceNumber || 'معاينة الفاتورة'}
+          title={loadedInvoice?.invoiceNumber ? `فاتورة ${formatDocumentNumber(loadedInvoice.invoiceNumber)}` : 'معاينة الفاتورة'}
           bodyHtml={previewBody}
-          fileNameBase={loadedInvoice ? `${loadedInvoice.invoiceNumber}_${customerName.trim() || 'فاتورة'}` : `مسودة_${customerName.trim() || 'فاتورة'}`}
+          fileNameBase={loadedInvoice ? `فاتورة_${formatDocumentNumber(loadedInvoice.invoiceNumber)}_${customerName.trim() || 'زبون'}` : `مسودة_${customerName.trim() || 'فاتورة'}`}
           shareTitle="معاينة الفاتورة"
           onClose={() => setPreviewBody(null)}
         />

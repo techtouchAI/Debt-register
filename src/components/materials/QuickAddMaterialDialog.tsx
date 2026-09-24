@@ -115,10 +115,10 @@ function QuickAddMaterialForm({
           <p className="text-xs text-gray-500 dark:text-gray-400">ستُحفظ في سجل المواد وتُضاف للفاتورة الحالية فوراً</p>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-1 block">اسم المادة *</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="اكتب اسم المادة" required autoFocus />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="اكتب اسم المادة" aria-required="true" autoFocus />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -143,11 +143,11 @@ function QuickAddMaterialForm({
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block">الكمية *</label>
-                <NumericTextInput value={quantity} onValueChange={setQuantity} required />
+                <NumericTextInput value={quantity} onValueChange={setQuantity} aria-required="true" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر البيع *</label>
-                <NumericTextInput value={salePrice} onValueChange={setSalePrice} required placeholder="0" />
+                <NumericTextInput value={salePrice} onValueChange={setSalePrice} aria-required="true" placeholder="0" />
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">سعر الشراء</label>

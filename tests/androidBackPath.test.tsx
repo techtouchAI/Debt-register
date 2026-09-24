@@ -221,7 +221,7 @@ describe('القرار الموحّد بعد جاهزية الواجهة', () =>
     const exitApp = pressBack();
 
     await expectHash('#/');
-    await waitFor(() => expect(screen.getByText(/مرحباً بك في/)).toBeTruthy(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByTestId('dashboard-office-name')).toBeTruthy(), { timeout: 5000 });
     expect(exitApp).not.toHaveBeenCalled();
   });
 
@@ -264,7 +264,7 @@ describe('القرار الموحّد بعد جاهزية الواجهة', () =>
     // ضغطة ثانية تُغلق الحوار وحده
     pressBack();
     await waitFor(() => expect(screen.queryByText('الخروج من التطبيق؟')).toBeNull(), { timeout: 5000 });
-    expect(screen.getByText(/مرحباً بك في/)).toBeTruthy();
+    expect(screen.getByTestId('dashboard-office-name')).toBeTruthy();
 
     delete (window as { electronAPI?: unknown }).electronAPI;
   });

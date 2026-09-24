@@ -21,9 +21,14 @@ import { getCustomerBalances } from '@/lib/debts';
 import { logBackgroundFailure } from '@/lib/lifecycle';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useOfficeSettings } from '@/hooks/useOfficeSettings';
+import { OverflowMarquee } from '@/components/ui/OverflowMarquee';
+import { usePermission } from '@/hooks/useSession';
+import { formatDocumentNumber } from '@/lib/labels';
+import type { Permission } from '@/lib/permissions';
 import { formatCurrency, formatLocalDateInput, getStockStatus, isSameLocalDay, roundMoney, toFiniteNumber } from '@/lib/utils';
 export function Dashboard() {
   const settings = useOfficeSettings();
+  const can = usePermission();
   const officeName = settings?.officeName?.trim() || '';
   const today = formatLocalDateInput();
 
@@ -101,13 +106,16 @@ export function Dashboard() {
     };
   }, [settings?.lowStockThreshold]);
 
-  const quickActions = [
-    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null },
-    { title: 'وصل شراء جديد', desc: 'إدخال مواد وتحديث المخزن', icon: ShoppingCart, color: 'bg-gray-900 dark:bg-white', href: '/purchases/new', count: null },
-    { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null },
-    { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials },
-    { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers },
+  // الإجراءات السريعة حسب صلاحية المستخدم (موظف المبيعات لا يرى وصل الشراء
+  // ولا إضافة مادة) — نفس المصفوفة التي تحرس المسارات وطبقة البيانات
+  const allQuickActions: Array<{ title: string; desc: string; icon: typeof FileText; color: string; href: string; count: number | null; permission: Permission }> = [
+    { title: 'فاتورة بيع جديدة', desc: 'إنشاء فاتورة نقدية أو آجلة', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null, permission: 'sales.create' },
+    { title: 'وصل شراء جديد', desc: 'إدخال مواد وتحديث المخزن', icon: ShoppingCart, color: 'bg-gray-900 dark:bg-white', href: '/purchases/new', count: null, permission: 'purchases.manage' },
+    { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null, permission: 'payments.create' },
+    { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials, permission: 'materials.manage' },
+    { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers, permission: 'customers.view' },
   ];
+  const quickActions = allQuickActions.filter((action) => can(action.permission));
 
   const statCards = [
     { title: 'مبيعات اليوم', value: formatCurrency(stats.todayCash, settings?.currency), icon: Wallet, change: `${stats.todayInvoices} فاتورة`, color: 'text-green-600 bg-green-50 dark:bg-green-900/20', trend: 'up' },
@@ -125,12 +133,14 @@ export function Dashboard() {
         <div className="relative z-10">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <h1
-                className="text-2xl lg:text-3xl font-bold mb-2 truncate max-w-full"
-                title={officeName ? `مرحباً بك في ${officeName}` : 'مرحباً بك في النظام'}
-              >
-                {officeName ? `مرحباً بك في ${officeName}` : 'مرحباً بك في النظام'}
-              </h1>
+              {/* اسم المكتب وحده بخط أصغر؛ إن تجاوز عرض الترويسة يتحرك
+                  (شريط متحرك) بدل أن يُقتطع — انظر OverflowMarquee */}
+              <OverflowMarquee
+                as="h1"
+                text={officeName || 'إدارة المكتب'}
+                className="text-lg sm:text-xl font-bold mb-2 leading-relaxed"
+                data-testid="dashboard-office-name"
+              />
               <div className="flex min-w-0 items-center gap-2 text-white/80 text-sm lg:text-base whitespace-nowrap overflow-hidden">
                 <span className="truncate">نظام إدارة متكامل - دون اتصال بالانترنت</span>
                 <span className="bg-red-500 w-2 h-2 rounded-full shrink-0 animate-pulse" aria-hidden="true" />
@@ -151,7 +161,7 @@ export function Dashboard() {
       {/* Quick Actions - Big Buttons */}
       <div>
         <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">إجراءات سريعة</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+        <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${quickActions.length >= 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-3'}`}>
           {quickActions.map((action, idx) => (
             <Link key={idx} to={action.href}>
               <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer group border-0 shadow-md h-full">
@@ -216,7 +226,7 @@ export function Dashboard() {
                       {inv.type === 'cash' ? <Wallet className="w-5 h-5" /> : <CreditCard className="w-5 h-5" />}
                     </div>
                     <div>
-                      <p className="font-medium text-sm text-gray-900 dark:text-white">{inv.invoiceNumber}</p>
+                      <p className="font-medium text-sm text-gray-900 dark:text-white">{formatDocumentNumber(inv.invoiceNumber)}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">{inv.customerName} • {new Date(inv.date).toLocaleDateString('ar-EG')}</p>
                     </div>
                   </div>
