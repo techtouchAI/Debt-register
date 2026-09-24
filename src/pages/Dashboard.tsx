@@ -123,9 +123,14 @@ export function Dashboard() {
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-black/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
         <div className="relative z-10">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div>
-              <h1 className="text-2xl lg:text-3xl font-bold mb-2">{settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'}</h1>
-              <p className="text-white/80 text-sm lg:text-base">نظام إدارة متكامل — جميع بياناتك آمنة ومحفوظة محلياً</p>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl lg:text-3xl font-bold mb-2 truncate max-w-full" title={settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'}>
+                {settings?.officeName ? `مرحباً بك في ${settings.officeName}` : 'مرحباً بك في النظام'}
+              </h1>
+              <div className="flex items-center gap-2 text-white/80 text-sm lg:text-base whitespace-nowrap overflow-hidden">
+                <span className="truncate">نظام إدارة متكامل - دون اتصال بالانترنت</span>
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+              </div>
             </div>
             <div className="flex gap-2">
               <Link to="/invoices/new">

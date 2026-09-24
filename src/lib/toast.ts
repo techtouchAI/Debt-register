@@ -1,3 +1,5 @@
+import { getArabicErrorMessage } from './errors'
+
 /**
  * نظام تنبيهات خفيف داخل التطبيق (بدون مكتبات خارجية).
  * يُستخدم لإظهار الأخطاء للبدل من الصمت التام أو alert() الذي يحجب الواجهة.
@@ -38,9 +40,33 @@ export function subscribeToasts(listener: Listener): () => void {
   }
 }
 
+/** تنظيف وترجمة أي نص أو عنوان بالإنجليزية قبل إرساله إلى التوست */
+function sanitizeToastText(text: string | undefined): string | undefined {
+  if (!text) return undefined
+  const trimmed = text.trim()
+  const lower = trimmed.toLowerCase()
+
+  if (lower === 'error') return 'خطأ'
+  if (lower === 'success') return 'نجاح'
+  if (lower === 'info') return 'معلومات'
+  if (lower === 'warning') return 'تنبيه'
+  if (lower === 'ok') return 'موافق'
+  if (lower === 'cancel') return 'إلغاء'
+
+  // إذا كان النص يحتوي على خطأ إنجليزي أو كود
+  if (/^[a-z0-9_\-\s:.,!?()]+$/i.test(trimmed) && !trimmed.includes('PDF') && !trimmed.includes('JSON')) {
+    return getArabicErrorMessage(trimmed)
+  }
+
+  return trimmed
+}
+
 export function pushToast(kind: ToastKind, title: string, message?: string): number {
   const id = nextId++
-  toasts = [...toasts, { id, kind, title, message }].slice(-MAX_VISIBLE)
+  const cleanTitle = sanitizeToastText(title) || 'تنبيه'
+  const cleanMessage = sanitizeToastText(message)
+
+  toasts = [...toasts, { id, kind, title: cleanTitle, message: cleanMessage }].slice(-MAX_VISIBLE)
   emit()
   return id
 }
