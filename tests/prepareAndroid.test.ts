@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, cp } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   FILE_PROVIDER_AUTHORITY,
   FILE_PROVIDER_CLASS,
   FILE_PROVIDER_PATHS_SOURCE,
+  LAUNCHER_RES_SOURCE,
   NOTIFICATION_ICON_SOURCE,
   PERMISSIONS,
   ensureApplicationAttribute,
@@ -26,6 +28,10 @@ import {
  *
  * كذلك تغطي مزوّد الملفات (FileProvider): بدونه يفشل `Share.share({ url: 'file://…' })`
  * وقت التشغيل لأن @capacitor/share يبحث عن سلطة `${applicationId}.fileprovider`.
+ *
+ * وأيقونة التطبيق وشاشة البدء: القالب يأتي بأيقونة Capacitor الافتراضية وصور
+ * splash.png؛ بقاء `drawable/splash.png` بجانب `drawable/splash.xml` يُفشل البناء
+ * (resource 'drawable/splash' has a conflicting value).
  */
 
 const CAPACITOR_CONFIG = {
@@ -66,10 +72,38 @@ async function createFakeAndroidProject(strings = CAPACITOR_STRINGS, manifest = 
   await writeFile(join(root, 'android/app/src/main/AndroidManifest.xml'), manifest, 'utf8');
   await writeFile(join(root, 'android/app/src/main/res/values/strings.xml'), strings, 'utf8');
   await writeFile(join(root, 'capacitor.config.json'), JSON.stringify(CAPACITOR_CONFIG, null, 2), 'utf8');
-  // مثل المستودع: أصول أندرويد (الأيقونة ومسارات المزوّد) مصدرها resources/android
+  // مثل المستودع: أصول أندرويد (الأيقونات ومسارات المزوّد) مصدرها resources/android
   await cp(join(process.cwd(), NOTIFICATION_ICON_SOURCE), join(root, NOTIFICATION_ICON_SOURCE));
   await cp(join(process.cwd(), FILE_PROVIDER_PATHS_SOURCE), join(root, FILE_PROVIDER_PATHS_SOURCE));
+  await cp(join(process.cwd(), LAUNCHER_RES_SOURCE), join(root, LAUNCHER_RES_SOURCE), { recursive: true });
+  // ملفات قالب Capacitor التي يجب أن تُستبدل أو تُحذف (أو تبقى كما هي)
+  for (const [file, content] of Object.entries(TEMPLATE_RES)) {
+    await mkdir(join(root, 'android/app/src/main/res', file, '..'), { recursive: true });
+    await writeFile(join(root, 'android/app/src/main/res', file), content);
+  }
   return root;
+}
+
+/** عيّنة من موارد قالب Capacitor: الأيقونة الافتراضية وصور شاشة البدء. */
+const TEMPLATE_RES: Record<string, string> = {
+  'mipmap-hdpi/ic_launcher.png': 'capacitor-default-icon',
+  'mipmap-anydpi-v26/ic_launcher.xml': '<adaptive-icon><foreground android:drawable="@mipmap/ic_launcher_foreground"/></adaptive-icon>',
+  'values/ic_launcher_background.xml': '<resources><color name="ic_launcher_background">#FFFFFF</color></resources>',
+  'drawable/splash.png': 'capacitor-splash',
+  'drawable-port-xxhdpi/splash.png': 'capacitor-splash-port',
+  'drawable-land-hdpi/splash.png': 'capacitor-splash-land',
+  'drawable-v24/ic_launcher_foreground.xml': '<vector />'
+};
+
+/** كل الملفات تحت مجلد (مسارات نسبية). */
+async function listFiles(dir: string, prefix = ''): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...(await listFiles(join(dir, entry.name), relative)));
+    else files.push(relative);
+  }
+  return files.sort();
 }
 
 describe('مزامنة app_name (السبب الجذري لفشل بناء APK)', () => {
@@ -249,6 +283,13 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
       expect(first.fileProviderAdded).toBe(true);
       expect(first.fileProviderRepaired).toBe(false);
       expect(first.appName).toBe('إدارة المكتب');
+      const launcherFiles = await listFiles(join(process.cwd(), LAUNCHER_RES_SOURCE));
+      expect(first.launcherFilesWritten).toHaveLength(launcherFiles.length);
+      expect([...first.splashImagesRemoved].sort()).toEqual([
+        'drawable-land-hdpi/splash.png',
+        'drawable-port-xxhdpi/splash.png',
+        'drawable/splash.png'
+      ]);
 
       const manifestText = await readFile(join(root, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
       expect(manifestText).toContain(`android:authorities="${FILE_PROVIDER_AUTHORITY}"`);
@@ -268,6 +309,8 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
       expect(second.fileProviderAdded).toBe(false);
       expect(second.fileProviderRepaired).toBe(false);
       expect(second.duplicatesRemoved).toBe(0);
+      expect(second.launcherFilesWritten).toHaveLength(0);
+      expect(second.splashImagesRemoved).toHaveLength(0);
 
       expect(await readFile(manifestPath, 'utf8')).toBe(manifestAfterFirst);
       expect(await readFile(stringsPath, 'utf8')).toBe(stringsAfterFirst);
@@ -307,6 +350,43 @@ describe('التشغيل الفعلي على مشروع مؤقت', () => {
     try {
       await rm(join(root, FILE_PROVIDER_PATHS_SOURCE));
       await expect(prepareAndroid({ root })).rejects.toThrow(/مسارات مزوّد الملفات/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('يستبدل أيقونة Capacitor الافتراضية وشاشة البدء بموارد المستودع حرفياً', async () => {
+    const root = await createFakeAndroidProject();
+    try {
+      await prepareAndroid({ root });
+      const res = join(root, 'android/app/src/main/res');
+      const source = join(process.cwd(), LAUNCHER_RES_SOURCE);
+      // كل ملف في resources/android/res منسوخ بايتاً ببايت (الأيقونة التكيفية والقديمة وشاشة البدء)
+      for (const file of await listFiles(source)) {
+        expect((await readFile(join(res, file))).equals(await readFile(join(source, file))), file).toBe(true);
+      }
+      const adaptive = await readFile(join(res, 'mipmap-anydpi-v26/ic_launcher.xml'), 'utf8');
+      expect(adaptive).toContain('@drawable/ic_launcher_monochrome');
+      expect(await readFile(join(res, 'values/ic_launcher_background.xml'), 'utf8')).not.toContain('#FFFFFF');
+      // صور القالب حُذفت ومجلدات port/land الفارغة أُزيلت، وsplash.xml هو شاشة البدء الوحيدة
+      expect(existsSync(join(res, 'drawable/splash.png'))).toBe(false);
+      expect(existsSync(join(res, 'drawable-port-xxhdpi'))).toBe(false);
+      expect(existsSync(join(res, 'drawable-land-hdpi'))).toBe(false);
+      expect(await readFile(join(res, 'drawable/splash.xml'), 'utf8')).toContain('@drawable/splash_logo');
+      expect(existsSync(join(res, 'drawable-night/splash.xml'))).toBe(true);
+      // ما لا يخص الأيقونة أو شاشة البدء يبقى كما هو
+      expect(await readFile(join(res, 'drawable-v24/ic_launcher_foreground.xml'), 'utf8')).toBe('<vector />');
+      expect(existsSync(join(res, 'values/strings.xml'))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('يفشل برسالة واضحة إذا غابت موارد أيقونة التطبيق', async () => {
+    const root = await createFakeAndroidProject();
+    try {
+      await rm(join(root, LAUNCHER_RES_SOURCE), { recursive: true });
+      await expect(prepareAndroid({ root })).rejects.toThrow(/موارد أيقونة التطبيق/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

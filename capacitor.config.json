@@ -8,7 +8,7 @@
   "plugins": {
     "LocalNotifications": {
       "smallIcon": "ic_stat_agri",
-      "iconColor": "#16a34a"
+      "iconColor": "#5a7447"
     },
     "Filesystem": {
       "androidRequestPermissions": true

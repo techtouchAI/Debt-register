@@ -17,7 +17,16 @@ const { randomUUID } = require('crypto');
  *  - نسخة وحيدة من التطبيق حتى لا تكتب نافذتان على نفس قاعدة البيانات.
  */
 
-const APP_ICON = path.join(__dirname, '../public/pwa-192x192.png');
+/**
+ * أيقونة النافذة (شريط العنوان وشريط المهام): على ويندوز ملف ICO متعدد المقاسات —
+ * فيه نسخة مبسّطة واضحة لأحجام 16–32 بكسل — بدل تصغير PNG واحد فيصير ضبابياً.
+ * أيقونة الإشعار PNG لأن إشعارات ويندوز لا تعرض ملفات ICO.
+ */
+const WINDOW_ICON = path.join(
+  __dirname,
+  process.platform === 'win32' ? '../resources/icon/app.ico' : '../public/pwa-192x192.png'
+);
+const NOTIFICATION_ICON = path.join(__dirname, '../public/pwa-192x192.png');
 const APP_INDEX = path.join(__dirname, '../dist/index.html');
 /** اسم مجلد التطبيق المقترح داخل "التنزيلات" (مطابق لأندرويد: المستندات/إدارة المكتب). */
 const APP_FOLDER = 'إدارة المكتب';
@@ -192,7 +201,7 @@ function createWindow() {
     height: 900,
     minWidth: 1000,
     minHeight: 700,
-    icon: fs.existsSync(APP_ICON) ? APP_ICON : undefined,
+    icon: fs.existsSync(WINDOW_ICON) ? WINDOW_ICON : undefined,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -610,7 +619,7 @@ ipcMain.handle('show-notification', async (event, payload) => {
       const notification = new Notification({
         title,
         body,
-        icon: fs.existsSync(APP_ICON) ? APP_ICON : undefined
+        icon: fs.existsSync(NOTIFICATION_ICON) ? NOTIFICATION_ICON : undefined
       });
       // النقر على الإشعار يُظهر التطبيق (نفس سلوك أندرويد: النقر يفتح التطبيق)
       notification.on('click', () => {

@@ -15,13 +15,16 @@
  *   - مزوّد الملفات (FileProvider) الذي يتطلبه @capacitor/share: بلا إعلانه في
  *     المانيفست بسلطة `${applicationId}.fileprovider` تفشل مشاركة ملف محلي
  *     (`file://`) كلياً — أي أن حفظ/مشاركة PDF والنسخ الاحتياطية يفشل على الجهاز.
+ *   - أيقونة التطبيق وشاشة البدء: القالب يأتي بأيقونة Capacitor الافتراضية
+ *     وصورة بدء ممطوطة؛ تُنسخ موارد `resources/android/res` (المولَّدة بـ
+ *     `npm run icons`) وتُحذف صور splash.png من القالب.
  *
  * التشغيل المتكرر آمن: لا يُكرر أي وسم ولا يستبدل شيئاً موجوداً إلا القيم
  * المقصودة. الدوال مُصدَّرة لتُختبر مباشرة على مشروع مؤقت في `tests/`.
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -70,6 +73,73 @@ export const FILE_PROVIDER_PATHS_SOURCE = 'resources/android/file_paths.xml';
 
 /** مورد المسارات الذي يشير إليه المزوّد. */
 export const FILE_PROVIDER_PATHS_RESOURCE = '@xml/file_paths';
+
+/**
+ * موارد أيقونة التطبيق وشاشة البدء الجاهزة (مولَّدة بـ `npm run icons`):
+ * تُنسخ بالمسارات نفسها إلى `android/app/src/main/res` (مصدر واحد للحقيقة).
+ */
+export const LAUNCHER_RES_SOURCE = 'resources/android/res';
+
+/**
+ * صور شاشة البدء في قالب Capacitor. شاشة البدء صارت `drawable/splash.xml`:
+ * بقاء `drawable/splash.png` بجانبها مورد مكرر يُفشل البناء، وصور
+ * `drawable-port-*`/`drawable-land-*` تتقدّم عليها فتعود الصورة الممطوطة القديمة.
+ */
+const TEMPLATE_SPLASH_IMAGE = /^splash\.(png|9\.png|jpe?g|webp)$/i;
+
+/** كل الملفات تحت مجلد (مسارات نسبية بفواصل /)، مرتبة لنتيجة حتمية. */
+async function listFilesRecursive(dir, prefix = '') {
+  const files = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...(await listFilesRecursive(join(dir, entry.name), relative)));
+    else if (entry.isFile()) files.push(relative);
+  }
+  return files.sort();
+}
+
+/**
+ * ينسخ موارد الأيقونة وشاشة البدء ويحذف صور البدء القديمة من القالب.
+ * متكرر: لا يكتب ملفاً مطابقاً ولا يحذف إلا صور splash.* في مجلدات drawable.
+ */
+export async function installLauncherResources(root, resDir) {
+  const sourceDir = join(root, LAUNCHER_RES_SOURCE);
+  if (!existsSync(sourceDir)) {
+    throw new Error(`لم يُعثر على موارد أيقونة التطبيق: ${LAUNCHER_RES_SOURCE} (نفّذ npm run icons)`);
+  }
+  const files = await listFilesRecursive(sourceDir);
+  if (!files.some((file) => file === 'mipmap-anydpi-v26/ic_launcher.xml')) {
+    throw new Error(`موارد أيقونة التطبيق ناقصة في ${LAUNCHER_RES_SOURCE} (نفّذ npm run icons)`);
+  }
+
+  const written = [];
+  for (const file of files) {
+    const source = await readFile(join(sourceDir, file));
+    const target = join(resDir, file);
+    const previous = existsSync(target) ? await readFile(target) : null;
+    if (previous && previous.equals(source)) continue;
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, source);
+    written.push(file);
+  }
+
+  const removed = [];
+  const shipped = new Set(files);
+  for (const entry of await readdir(resDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^drawable(-|$)/.test(entry.name)) continue;
+    const dir = join(resDir, entry.name);
+    let removedHere = 0;
+    for (const file of await readdir(dir)) {
+      if (!TEMPLATE_SPLASH_IMAGE.test(file) || shipped.has(`${entry.name}/${file}`)) continue;
+      await rm(join(dir, file));
+      removed.push(`${entry.name}/${file}`);
+      removedHere += 1;
+    }
+    // مجلدات drawable-port-*/land-* لم يعد فيها شيء بعد حذف صورة القالب
+    if (removedHere > 0 && (await readdir(dir)).length === 0) await rm(dir, { recursive: true });
+  }
+  return { files: files.length, written, removed };
+}
 
 /**
  * أي وسم <provider>: ذاتي الإغلاق أو مقترن حتى نهايته.
@@ -339,6 +409,17 @@ export async function prepareAndroid({ root = repoRoot, log = () => undefined } 
   if (pathsWritten) await writeFile(pathsPath, pathsSource, 'utf8');
   log(pathsWritten ? 'كُتب res/xml/file_paths.xml' : 'res/xml/file_paths.xml موجود ومطابق');
 
+  /* 2ج) أيقونة التطبيق (تكيفية + أحادية اللون + قديمة) وشاشة البدء */
+  const launcher = await installLauncherResources(root, join(androidDir, 'app/src/main/res'));
+  log(
+    launcher.written.length > 0
+      ? `كُتبت موارد أيقونة التطبيق وشاشة البدء: ${launcher.written.length} من ${launcher.files} ملفاً`
+      : `موارد أيقونة التطبيق وشاشة البدء موجودة ومطابقة (${launcher.files} ملفاً)`
+  );
+  if (launcher.removed.length > 0) {
+    log(`حُذفت صور شاشة البدء القديمة من القالب (${launcher.removed.length}): استُبدلت بـ drawable/splash.xml`);
+  }
+
   /* 3) اسم التطبيق في strings.xml + التحقق من إعداد Capacitor */
   const config = JSON.parse(await readFile(join(root, 'capacitor.config.json'), 'utf8'));
   const { appName } = validateCapacitorConfig(config);
@@ -357,6 +438,8 @@ export async function prepareAndroid({ root = repoRoot, log = () => undefined } 
     duplicatesRemoved: synced.duplicates,
     iconWritten,
     pathsWritten,
+    launcherFilesWritten: launcher.written,
+    splashImagesRemoved: launcher.removed,
     fileProviderAdded: provider.added,
     fileProviderRepaired: provider.repaired
   };
@@ -372,7 +455,7 @@ if (isDirectRun) {
     .catch((error) => {
       // الرسائل المتوقعة تُطبع وحدها؛ غيرها يُطبع مع التفاصيل للتشخيص
       console.error(`✖ ${error instanceof Error ? error.message : String(error)}`);
-      if (error instanceof Error && !error.message.match(/مجلد android|لم يُعثر|يجب أن|appName|iconColor|sound|allowMixedContent|أصل أيقونة/)) {
+      if (error instanceof Error && !error.message.match(/مجلد android|لم يُعثر|يجب أن|appName|iconColor|sound|allowMixedContent|أصل أيقونة|موارد أيقونة/)) {
         console.error(error);
       }
       process.exit(1);

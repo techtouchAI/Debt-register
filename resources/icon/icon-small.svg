@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- نسخة مبسّطة من أيقونة «إدارة المكتب» للأحجام الصغيرة جداً (16–40 بكسل):
+       عناصر أقل وأسمك وبلا ظلال، وكل حافة مستقيمة على مضاعفات 64 وحدة
+       (= بكسل كامل عند 16×16 وبكسلان عند 32×32) فتقع حواف الوصل وأسطره على
+       حدود البكسل وتظهر حادة بدل أن تذوب في ضباب رمادي. عند التعديل حافظ على
+       هذه القاعدة (x وy والعرض والارتفاع من مضاعفات 64). -->
+  <defs>
+    <linearGradient id="sm-fill" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#839d6b"/>
+      <stop offset="0.55" stop-color="#5a7447"/>
+      <stop offset="1" stop-color="#34452b"/>
+    </linearGradient>
+    <linearGradient id="sm-paper" gradientUnits="userSpaceOnUse" x1="0" y1="128" x2="0" y2="832">
+      <stop offset="0" stop-color="#fefcf8"/>
+      <stop offset="1" stop-color="#f1ebdf"/>
+    </linearGradient>
+    <linearGradient id="sm-seal" gradientUnits="userSpaceOnUse" x1="240" y1="592" x2="528" y2="880">
+      <stop offset="0" stop-color="#dcbf8a"/>
+      <stop offset="0.5" stop-color="#b8945b"/>
+      <stop offset="1" stop-color="#8a6a42"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#sm-fill)"/>
+  <!-- الوصل: من 5 إلى 13 بكسل أفقياً عند 16×16، وأسنان الحافة السفلية بكسل كامل -->
+  <path d="M384,128 H768 Q832,128 832,192 V768 L768,832 L704,768 L640,832 L576,768 L512,832 L448,768 L384,832 L320,768 V192 Q320,128 384,128 Z" fill="url(#sm-paper)"/>
+  <!-- العنوان وسطران: كل سطر بكسل كامل ارتفاعاً وبينها بكسل فارغ -->
+  <rect x="512" y="256" width="256" height="64" fill="#b8965f"/>
+  <rect x="448" y="384" width="320" height="64" fill="#57534c" opacity="0.78"/>
+  <rect x="576" y="512" width="192" height="64" fill="#57534c" opacity="0.78"/>
+  <!-- ختم «تم التسديد» -->
+  <circle cx="384" cy="736" r="176" fill="#fbf9f4"/>
+  <circle cx="384" cy="736" r="144" fill="url(#sm-seal)"/>
+  <path d="M322,739 L368,785 L452,692" fill="none" stroke="#ffffff" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

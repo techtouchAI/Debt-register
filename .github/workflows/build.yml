@@ -151,8 +151,11 @@ jobs:
           node scripts/prepare-android.mjs
           # إعادة التشغيل للتأكد من أن السكربت قابل للتكرار دون تكرار الوسوم
           cp android/app/src/main/AndroidManifest.xml /tmp/manifest.first.xml
+          (cd android/app/src/main/res && find . -type f -print0 | sort -z | xargs -0 sha256sum) > /tmp/res.first.txt
           node scripts/prepare-android.mjs
           diff -q /tmp/manifest.first.xml android/app/src/main/AndroidManifest.xml
+          # ولا يغيّر أي مورد (أيقونات/شاشة بدء) في التشغيل الثاني
+          (cd android/app/src/main/res && find . -type f -print0 | sort -z | xargs -0 sha256sum) | diff - /tmp/res.first.txt
       - name: التحقق من صلاحيات المصدر قبل البناء
         run: |
           set -euo pipefail
@@ -167,6 +170,23 @@ jobs:
           # أيقونة الإشعارات ومسارات المزوّد منسوخة من أصل المستودع بلا تعديل
           diff -q resources/android/ic_stat_agri.xml android/app/src/main/res/drawable/ic_stat_agri.xml
           diff -q resources/android/file_paths.xml android/app/src/main/res/xml/file_paths.xml
+          # أيقونة التطبيق وشاشة البدء منسوخة كما هي من resources/android/res
+          # (وإلا يُبنى الـ APK بأيقونة Capacitor الافتراضية)
+          RES=android/app/src/main/res
+          ICON_DIFF="$(diff -rq resources/android/res "$RES" | grep -v "^Only in $RES" || true)"
+          if [ -n "$ICON_DIFF" ]; then
+            echo "::error::موارد أيقونة التطبيق غير منسوخة كما هي من resources/android/res"
+            echo "$ICON_DIFF"
+            exit 1
+          fi
+          grep -q '<monochrome android:drawable="@drawable/ic_launcher_monochrome"' "$RES/mipmap-anydpi-v26/ic_launcher.xml"
+          # صور splash.png من القالب محذوفة: بقاؤها بجانب splash.xml مورد مكرر يُفشل البناء
+          LEFTOVER_SPLASH="$(find "$RES" -path '*/drawable*' -name 'splash.png')"
+          if [ -n "$LEFTOVER_SPLASH" ]; then
+            echo "::error::بقيت صور شاشة البدء القديمة من قالب Capacitor"
+            echo "$LEFTOVER_SPLASH"
+            exit 1
+          fi
           # مزوّد الملفات الذي يتطلبه @capacitor/share (بدونه تفشل مشاركة PDF/النسخ)
           grep -q 'androidx.core.content.FileProvider' "$MANIFEST"
           grep -qF 'android:authorities="${applicationId}.fileprovider"' "$MANIFEST"
@@ -240,6 +260,12 @@ jobs:
           "$AAPT2" dump resources "$APK" > apk-resources.txt
           require apk-resources.txt 'ic_stat_agri' 'أيقونة الإشعارات ضمن الموارد'
           require apk-resources.txt 'xml/file_paths' 'مورد مسارات المزوّد ضمن الموارد'
+          # أيقونة التطبيق من المستودع (الطبقة أحادية اللون وشعار البدء لا يوجدان في قالب Capacitor)
+          require apk-resources.txt 'drawable/ic_launcher_monochrome' 'طبقة الأيقونة أحادية اللون (الأيقونات ذات السمة)'
+          require apk-resources.txt 'mipmap/ic_launcher_round' 'الأيقونة الدائرية'
+          require apk-resources.txt 'drawable/splash_logo' 'شعار شاشة البدء'
+          grep -A3 -E ' drawable/splash$' apk-resources.txt > apk-splash.txt || true
+          require apk-splash.txt 'type=XML' 'شاشة البدء متجهة (splash.xml) لا صورة ممطوطة'
 
           "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > apk-manifest.txt
           require apk-manifest.txt 'usesCleartextTraffic' 'منع النص الصريح'
@@ -302,7 +328,7 @@ jobs:
           # asar list تطبع الفواصل بنمط النظام (\ على ويندوز) فنوحّدها قبل المقارنة
           $entries = Get-Content asar-list.txt | ForEach-Object { $_.Trim() -replace '\\', '/' }
           $entries | Select-Object -First 12
-          foreach ($required in @('/dist/index.html', '/electron/main.cjs', '/electron/preload.cjs')) {
+          foreach ($required in @('/dist/index.html', '/electron/main.cjs', '/electron/preload.cjs', '/resources/icon/app.ico')) {
             if ($entries -notcontains $required) { Write-Error "محتوى asar ينقصه: $required" }
           }
           Copy-Item $setup -Destination artifacts/windows

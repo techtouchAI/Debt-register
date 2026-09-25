@@ -1,0 +1,7 @@
+# نواتج أيقونة التطبيق النصية (SVG/XML) مولَّدة بـ `npm run icons` وتُقارَن بايتاً ببايت
+# (tests/appIcons.test.ts و `npm run icons -- --check`): تبقى بنهايات LF على كل الأنظمة،
+# وإلا يحوّلها git على ويندوز (core.autocrlf) إلى CRLF فتبدو قديمة ويفشل الاختبار.
+resources/icon/*.svg text eol=lf
+resources/android/**/*.xml text eol=lf
+public/favicon.svg text eol=lf
+desktop/src-tauri/icons/**/*.xml text eol=lf
