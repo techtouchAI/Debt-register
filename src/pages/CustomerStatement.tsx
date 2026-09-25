@@ -9,13 +9,13 @@ import { db, getSettings } from '@/lib/db';
 import { getCustomerBalance } from '@/lib/debts';
 import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
-import { buildCustomerStatementPrintHtml, printCustomerStatement } from '@/lib/print';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { printDocument, statementDocument } from '@/lib/print';
+import { openDocumentPreview } from '@/lib/documentPreview';
 import { Invoice, Payment } from '@/types';
-import { generateCustomerStatementPDF } from '@/lib/pdf';
+import { saveDocumentPdf } from '@/lib/pdf';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { toast } from '@/lib/toast';
-import { formatDocumentNumber, paymentMethodLabel } from '@/lib/labels';
+import { formatDocumentNumber, paymentMethodLabel, saleTypeLabel } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
 
 export function CustomerStatement() {
@@ -23,7 +23,6 @@ export function CustomerStatement() {
   const goBack = useGoBack();
   const can = usePermission();
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
-  const [showPreview, setShowPreview] = useState(false);
 
   const statement = useLiveQuery(async () => {
     const customerId = Number(id);
@@ -45,16 +44,23 @@ export function CustomerStatement() {
   const payments = statement?.payments ?? [];
   const debt = statement?.debt ?? 0;
 
+  /** وصف الكشف: يُبنى مرة ويُستخدم في المعاينة والطباعة والحفظ */
+  const currentStatementDocument = () =>
+    customer && settings ? statementDocument(customer, invoices, payments, settings, debt) : null;
+
   const handlePrint = async () => {
-    if (!customer || !settings) return;
-    const opened = await printCustomerStatement(customer, invoices, payments, settings, debt);
-    if (!opened) setShowPreview(true); // البديل: معاينة مع زر حفظ المستند
+    const document = currentStatementDocument();
+    if (!document) return;
+    // طباعة النظام، أو معاينة الكشف مع بديل الحفظ إن لم يتوفر حوار طباعة
+    await printDocument(document);
   };
 
   const handleExportPDF = async () => {
     if (!customer || !settings) return;
     try {
-      const saved = await generateCustomerStatementPDF(customer, invoices, payments, settings, debt);
+      const document = currentStatementDocument();
+      if (!document) return;
+      const saved = await saveDocumentPdf(document);
       if (saved) toast.success('تم حفظ كشف الحساب كمستند', saved.message);
     } catch (error) {
       reportError('CustomerStatement.pdf', error, 'تعذّر حفظ كشف الحساب كمستند');
@@ -116,7 +122,7 @@ export function CustomerStatement() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button className="bg-primary-600 hover:bg-primary-700" onClick={() => setShowPreview(true)}><Eye className="w-4 h-4 ml-2" />معاينة</Button>
+              <Button className="bg-primary-600 hover:bg-primary-700" onClick={() => { const document = currentStatementDocument(); if (document) openDocumentPreview(document); }}><Eye className="w-4 h-4 ml-2" />معاينة</Button>
               <Button variant="outline" onClick={handlePrint}><Printer className="w-4 h-4 ml-2" />طباعة</Button>
               <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 ml-2" />حفظ كمستند</Button>
               {can('sales.create') && <Link to={`/invoices/new?customerId=${customer.id}`}><Button className="bg-primary-600 hover:bg-primary-700">فاتورة جديدة</Button></Link>}
@@ -152,7 +158,7 @@ export function CustomerStatement() {
       {/* Filter */}
       <Card className="border-0 shadow-md">
         <CardContent className="p-4">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant={filter === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('all')}>الكل ({timeline.length})</Button>
             <Button variant={filter === 'invoices' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('invoices')}>الفواتير ({invoices.length})</Button>
             <Button variant={filter === 'payments' ? 'default' : 'outline'} size="sm" onClick={() => setFilter('payments')}>التسديدات ({payments.length})</Button>
@@ -166,65 +172,85 @@ export function CustomerStatement() {
           <CardTitle className="flex items-center gap-2"><FileText className="w-5 h-5" />السجل الزمني التفصيلي</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {filteredTimeline.length ? filteredTimeline.map((item, idx) => (
-              <div key={idx} className="relative flex gap-4">
-                <div className="flex flex-col items-center">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${item.type === 'invoice' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600' : 'bg-green-100 dark:bg-green-900/30 text-green-600'}`}>
+          <div className="space-y-4" data-testid="statement-timeline">
+            {filteredTimeline.length ? filteredTimeline.map((item, idx) => {
+              const entryInvoice = item.type === 'invoice' ? (item.data as Invoice) : null;
+              const entryPayment = item.type === 'payment' ? (item.data as Payment) : null;
+              const carried = entryInvoice ? Math.max(0, roundMoney(toFiniteNumber(entryInvoice.previousBalance))) : 0;
+              return (
+              <div key={idx} className="relative flex gap-3 sm:gap-4" data-testid="statement-timeline-item">
+                <div className="flex shrink-0 flex-col items-center">
+                  <div className={`flex h-9 w-9 items-center justify-center rounded-full sm:h-10 sm:w-10 ${item.type === 'invoice' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600' : 'bg-green-100 dark:bg-green-900/30 text-green-600'}`}>
                     {item.type === 'invoice' ? <FileText className="w-5 h-5" /> : <CreditCard className="w-5 h-5" />}
                   </div>
-                  {idx !== filteredTimeline.length - 1 && <div className="w-px h-full bg-gray-200 dark:bg-gray-700 mt-2" />}
+                  {idx !== filteredTimeline.length - 1 && <div className="mt-2 w-px flex-1 bg-gray-200 dark:bg-gray-700" />}
                 </div>
-                <div className="flex-1 pb-6">
-                  <div className={`p-4 rounded-xl border ${item.type === 'invoice' ? 'bg-amber-50/50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800/30' : 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800/30'}`}>
-                    {item.type === 'invoice' ? (
-                      <>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <p className="font-bold">{formatDocumentNumber((item.data as Invoice).invoiceNumber)}</p>
-                            <Badge variant={(item.data as Invoice).status === 'paid' ? 'success' : (item.data as Invoice).status === 'partial' ? 'warning' : 'destructive'} className="text-[10px]">
-                              {(item.data as Invoice).status === 'paid' ? 'مدفوعة' : (item.data as Invoice).status === 'partial' ? 'جزئية' : 'غير مدفوعة'}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-gray-500">{formatDate(item.date, true)}</p>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="text-sm">فاتورة آجلة • {(item.data as Invoice).itemsCount} مادة</p>
-                            {(item.data as Invoice).notes && <p className="text-xs text-gray-500 mt-1">{(item.data as Invoice).notes}</p>}
-                          </div>
-                          <div className="text-left">
-                            <p className="font-bold text-amber-600">{formatCurrency((item.data as Invoice).total, settings?.currency)}</p>
-                            {(item.data as Invoice).remaining > 0 && <p className="text-xs text-red-600">متبقي: {formatCurrency((item.data as Invoice).remaining, settings?.currency)}</p>}
-                          </div>
-                        </div>
-                        <Link to={`/invoices/${(item.data as Invoice).id}`} className="inline-block mt-2 text-xs text-primary-600 hover:underline">عرض تفاصيل الفاتورة ←</Link>
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <p className="font-bold">{formatDocumentNumber((item.data as Payment).receiptNumber)}</p>
-                            <Badge variant="success" className="text-[10px]">تسديد</Badge>
-                          </div>
-                          <p className="text-sm text-gray-500">{formatDate(item.date, true)}</p>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="text-sm">تسديد دين • {paymentMethodLabel((item.data as Payment).method)}</p>
-                            {(item.data as Payment).notes && <p className="text-xs text-gray-500 mt-1">{(item.data as Payment).notes}</p>}
-                          </div>
-                          <div className="text-left">
-                            <p className="font-bold text-green-600">{formatCurrency((item.data as Payment).amount, settings?.currency)}</p>
-                            {(item.data as Payment).remainingAfter !== undefined && <p className="text-xs text-gray-500">متبقي بعده: {formatCurrency((item.data as Payment).remainingAfter!, settings?.currency)}</p>}
-                          </div>
-                        </div>
-                      </>
+
+                {/* min-w-0 ضروري: بدونه يمنع عرض المحتوى الأدنى العمود من الانضغاط
+                    فتخرج البطاقة عن حدود الحاوية على شاشات الهاتف الضيقة. */}
+                <div className="min-w-0 flex-1 pb-6">
+                  <div className={`rounded-xl border p-3 sm:p-4 ${item.type === 'invoice' ? 'bg-amber-50/50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800/30' : 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800/30'}`}>
+                    {/* الرأس يلتف سطراً عند الحاجة: الرقم والباقة في جهة، والتاريخ في جهة أخرى */}
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <p className="min-w-0 font-bold [overflow-wrap:anywhere]">
+                          {entryInvoice ? formatDocumentNumber(entryInvoice.invoiceNumber) : entryPayment ? formatDocumentNumber(entryPayment.receiptNumber) : ''}
+                        </p>
+                        {entryInvoice ? (
+                          <Badge variant={entryInvoice.status === 'paid' ? 'success' : entryInvoice.status === 'partial' ? 'warning' : 'destructive'} className="shrink-0 text-[10px]">
+                            {entryInvoice.status === 'paid' ? 'مدفوعة' : entryInvoice.status === 'partial' ? 'جزئية' : 'غير مدفوعة'}
+                          </Badge>
+                        ) : (
+                          <Badge variant="success" className="shrink-0 text-[10px]">تسديد</Badge>
+                        )}
+                      </div>
+                      <p className="shrink-0 whitespace-nowrap text-xs text-gray-500 sm:text-sm">{formatDate(item.date, true)}</p>
+                    </div>
+
+                    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                      <div className="min-w-0 flex-1 basis-40">
+                        {entryInvoice ? (
+                          <>
+                            <p className="break-words text-sm">فاتورة {saleTypeLabel(entryInvoice.type)} • {entryInvoice.itemsCount} مادة</p>
+                            {entryInvoice.notes && <p className="mt-1 break-words text-xs text-gray-500 [overflow-wrap:anywhere]">{entryInvoice.notes}</p>}
+                          </>
+                        ) : entryPayment ? (
+                          <>
+                            <p className="break-words text-sm">تسديد دين • {paymentMethodLabel(entryPayment.method)}</p>
+                            {entryPayment.notes && <p className="mt-1 break-words text-xs text-gray-500 [overflow-wrap:anywhere]">{entryPayment.notes}</p>}
+                          </>
+                        ) : null}
+                      </div>
+                      <div className="shrink-0 text-left">
+                        {entryInvoice ? (
+                          <>
+                            <p className="whitespace-nowrap font-bold text-amber-600">{formatCurrency(entryInvoice.total, settings?.currency)}</p>
+                            {carried > 0 && (
+                              <p className="whitespace-nowrap text-xs text-amber-700 dark:text-amber-400">
+                                منها رصيد سابق: {formatCurrency(carried, settings?.currency)}
+                              </p>
+                            )}
+                            {entryInvoice.remaining > 0 && <p className="whitespace-nowrap text-xs text-red-600">متبقي: {formatCurrency(entryInvoice.remaining, settings?.currency)}</p>}
+                          </>
+                        ) : entryPayment ? (
+                          <>
+                            <p className="whitespace-nowrap font-bold text-green-600">{formatCurrency(entryPayment.amount, settings?.currency)}</p>
+                            {entryPayment.remainingAfter !== undefined && (
+                              <p className="whitespace-nowrap text-xs text-gray-500">متبقي بعده: {formatCurrency(entryPayment.remainingAfter, settings?.currency)}</p>
+                            )}
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {entryInvoice && (
+                      <Link to={`/invoices/${entryInvoice.id}`} className="mt-2 inline-block text-xs text-primary-600 hover:underline">عرض تفاصيل الفاتورة ←</Link>
                     )}
                   </div>
                 </div>
               </div>
-            )) : (
+              );
+            }) : (
               <div className="text-center py-12">
                 <Calendar className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
                 <p className="text-sm text-gray-500">لا يوجد سجل لهذا الفلتر</p>
@@ -243,12 +269,12 @@ export function CustomerStatement() {
           <CardContent>
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {invoices.map(inv => (
-                <div key={inv.id} className="flex justify-between items-center p-2.5 bg-gray-50 dark:bg-gray-800/50 rounded-lg text-sm">
-                  <div>
-                    <p className="font-medium">{formatDocumentNumber(inv.invoiceNumber)}</p>
+                <div key={inv.id} className="flex items-center justify-between gap-2 p-2.5 bg-gray-50 dark:bg-gray-800/50 rounded-lg text-sm">
+                  <div className="min-w-0">
+                    <p className="font-medium break-words [overflow-wrap:anywhere]">{formatDocumentNumber(inv.invoiceNumber)}</p>
                     <p className="text-xs text-gray-500">{formatDate(inv.date)} • {inv.itemsCount} مادة</p>
                   </div>
-                  <p className="font-bold">{formatCurrency(inv.total, settings?.currency)}</p>
+                  <p className="shrink-0 font-bold whitespace-nowrap">{formatCurrency(inv.total, settings?.currency)}</p>
                 </div>
               ))}
               {invoices.length === 0 && <p className="text-center text-sm text-gray-500 py-6">لا توجد فواتير آجلة</p>}
@@ -263,12 +289,12 @@ export function CustomerStatement() {
           <CardContent>
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {payments.map(p => (
-                <div key={p.id} className="flex justify-between items-center p-2.5 bg-green-50 dark:bg-green-900/20 rounded-lg text-sm border border-green-200 dark:border-green-800/30">
-                  <div>
-                    <p className="font-medium">{formatDocumentNumber(p.receiptNumber)}</p>
+                <div key={p.id} className="flex items-center justify-between gap-2 p-2.5 bg-green-50 dark:bg-green-900/20 rounded-lg text-sm border border-green-200 dark:border-green-800/30">
+                  <div className="min-w-0">
+                    <p className="font-medium break-words [overflow-wrap:anywhere]">{formatDocumentNumber(p.receiptNumber)}</p>
                     <p className="text-xs text-gray-500">{formatDate(p.date)} • {paymentMethodLabel(p.method)}</p>
                   </div>
-                  <p className="font-bold text-green-600">{formatCurrency(p.amount, settings?.currency)}</p>
+                  <p className="shrink-0 font-bold text-green-600 whitespace-nowrap">{formatCurrency(p.amount, settings?.currency)}</p>
                 </div>
               ))}
               {payments.length === 0 && <p className="text-center text-sm text-gray-500 py-6">لا توجد تسديدات</p>}
@@ -277,16 +303,6 @@ export function CustomerStatement() {
         </Card>
       </div>
 
-      {showPreview && customer && settings && (
-        <DocumentPreviewDialog
-          open={showPreview}
-          title={`كشف حساب ${customer.fullName}`}
-          bodyHtml={buildCustomerStatementPrintHtml(customer, invoices, payments, settings, debt)}
-          fileNameBase={`كشف_حساب_${customer.fullName}`}
-          shareTitle={`كشف حساب ${customer.fullName}`}
-          onClose={() => setShowPreview(false)}
-        />
-      )}
     </div>
   );
 }

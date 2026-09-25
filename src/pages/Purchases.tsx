@@ -1,25 +1,27 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, Download, Edit, Eye, FileText, Plus, Printer, Search, Trash2 } from 'lucide-react';
+import { ClipboardList, Download, Edit, Eye, FileText, HelpCircle, Plus, Printer, Search, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { deletePurchase, getPurchaseWithItems } from '@/lib/purchases';
-import { generatePurchasePDF } from '@/lib/pdf';
-import { printPurchase } from '@/lib/print';
+import { saveDocumentPdf } from '@/lib/pdf';
+import { printDocument, purchaseDocument } from '@/lib/print';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/lib/confirm';
 import { documentNumberMatches, formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 export function Purchases() {
   const settings = useLiveQuery(() => getSettingsOrDefault(), []);
   const [search, setSearch] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   const purchases = useLiveQuery(async () => {
     const all = await db.purchases.orderBy('date').reverse().toArray();
@@ -38,8 +40,8 @@ export function Purchases() {
         toast.error('وصل الشراء غير موجود');
         return;
       }
-      const printed = await printPurchase(found.purchase, found.items, s);
-      if (!printed) toast.info('لا يوجد حوار طباعة هنا', 'افتح الوصل ثم استخدم زر "حفظ كمستند"');
+      // طباعة النظام، أو معاينة المستند مع بديل الحفظ إن لم يتوفر حوار طباعة
+      await printDocument(purchaseDocument(found.purchase, found.items, s));
     } catch (error) {
       reportError('Purchases.print', error, 'تعذّرت طباعة وصل الشراء');
     } finally {
@@ -57,7 +59,7 @@ export function Purchases() {
         toast.error('وصل الشراء غير موجود');
         return;
       }
-      const saved = await generatePurchasePDF(found.purchase, found.items, s);
+      const saved = await saveDocumentPdf(purchaseDocument(found.purchase, found.items, s));
       if (saved) toast.success('تم حفظ وصل الشراء كمستند', saved.message);
     } catch (error) {
       reportError('Purchases.pdf', error, 'تعذّر حفظ المستند');
@@ -100,9 +102,17 @@ export function Purchases() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><ClipboardList className="w-7 h-7 text-primary-600" />وصول الشراء</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">إدخال المشتريات وتحديث مواد المخزن من مكان واحد</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            مشترياتك من الموردين: تدخل المواد إلى المخزن وتُسجَّل نقداً أو ديناً للمورد — أما بيع المواد للزبائن فيُسجَّل في الفواتير.
+          </p>
         </div>
-        <Link to="/purchases/new"><Button className="bg-primary-600 hover:bg-primary-700"><Plus className="w-4 h-4 ml-2" />وصل شراء جديد</Button></Link>
+        <div className="flex w-full flex-wrap gap-2 lg:w-auto">
+          <Button variant="outline" className="flex-1 lg:flex-none" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق بينه وبين فاتورة البيع؟
+          </Button>
+          <Link to="/purchases/new" className="flex-1 lg:flex-none"><Button className="bg-primary-600 hover:bg-primary-700 w-full"><Plus className="w-4 h-4 ml-2" />وصل شراء جديد</Button></Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -126,6 +136,8 @@ export function Purchases() {
           </CardContent></Card>
         ))}
       </div>
+
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       {purchases?.length === 0 && <Card className="border-0 shadow-md"><CardContent className="text-center py-16"><ClipboardList className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" /><h3 className="font-bold mb-2">لا توجد وصول شراء</h3><p className="text-sm text-gray-500 mb-4">ابدأ بإدخال أول فاتورة شراء، ويمكنك تسجيل مادة جديدة من داخلها.</p><Link to="/purchases/new"><Button><Plus className="w-4 h-4 ml-2" />وصل شراء جديد</Button></Link></CardContent></Card>}
     </div>

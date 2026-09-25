@@ -1,18 +1,29 @@
-import { escapeHtml, formatDate } from './utils';
+import { escapeHtml, formatDate, formatLocalDateInput, roundMoney, toFiniteNumber } from './utils';
 import { officeNameFontSize } from './officeName';
 import { formatDocumentNumber, paymentMethodLabel, saleTypeLabel } from './labels';
+import { getElectronAPI, isNativePlatform } from './platform';
+import { A4_SHEET, sheetFor, sheetRenderWidthPx, type PdfFormat } from './pageLayout';
+import { openDocumentPreview } from './documentPreview';
 import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase, PurchaseItem } from '@/types';
 
 /**
  * مستندات الطباعة والمعاينة وملفات PDF.
  *
- * مبدأ التصميم: قالب HTML واحد لكل مستند يُستخدم في ثلاثة مسارات
- * (معاينة داخل التطبيق + طباعة + توليد PDF) حتى تكون المخرجات متطابقة
- * دائماً بدل ثلاثة تنسيقات مختلفة تتباين مع كل تعديل.
+ * مبدأ التصميم: **ورقة واحدة** (`.doc .page`) تُرسم بها المستندات الثلاثة
+ * — المعاينة والطباعة وتوليد PDF — بنفس عرض الورقة وارتفاعها وهوامشها
+ * (انظر `pageLayout.ts`). فالمحتوى يُخطَّط دائماً داخل صندوق محتوى واحد
+ * بالملّيمتر (A4: 190×277 مم)، ومن ثمّ تتطابق الأعمدة والالتفافات والفواصل
+ * في المخرجات الثلاثة بدل ثلاثة تخطيطات متباينة:
+ *  - المعاينة: الورقة كاملة داخل إطار، مُحجَّمة لتناسب عرض الحاوية.
+ *  - الطباعة: إطار **بمقاس الورقة** (794×1123 بكسل) خارج الشاشة مع
+ *    `@page { size: A4; margin: 10mm }` — كان الإطار 0×0 فينهار التخطيط.
+ *  - PDF: تُصوَّر الورقة نفسها بعرضها الحقيقي وتُرسم بهوامشها (بلا تكبير).
  *
- * الطباعة تتم عبر iframe مخفي (لا `window.open`):
- *  - النوافذ المنبثقة محظورة في WebView أندرويد ومرفوضة في Electron
- *    (setWindowOpenHandler يرفضها) فكانت الطباعة لا تعمل إطلاقاً هناك.
+ * الطباعة تتم عبر iframe (لا `window.open`): النوافذ المنبثقة محظورة في
+ * WebView أندرويد ومرفوضة في Electron (setWindowOpenHandler يرفضها) فكانت
+ * الطباعة لا تعمل إطلاقاً هناك. ولا نُعلن النجاح إلا بدليل: ننتظر حدث
+ * `beforeprint` من الإطار — فبعض البيئات (WebView، أو إطار مُقيَّد بحاجب
+ * sandbox) تُهمل `print()` بصمت بلا استثناء، فلا يظهر للمستخدم شيء أبداً.
  *
  * كل قيمة ديناميكية تُهرَّب عبر escapeHtml لأن أسماء الزبائن والمواد
  * والملاحظات تُدخل يدوياً وقد تصل من ملف نسخة احتياطية مستورد؛ إدراجها
@@ -30,15 +41,24 @@ import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase,
  *    تخرج عن حد الخلية (overflow-wrap: break-word).
  *  - صفوف الجدول لا تنشطر بين صفحتين (break-inside: avoid).
  *  - أزواج (التسمية: القيمة) القصيرة لا تنفصل عن بعضها.
+  - ارتفاع السطر لا يقلّ عن الارتفاع الطبيعي للخط المدمج (Cairo ≈ 1.6em):
+    كان عنوان الترويسة بارتفاع 1.4em فيفيض الحبر عن صندوق السطر، ويختلف
+    موضعه بين محرّك الطباعة ومحرّك التصوير (فرق ≈ 3 مم في أعلى الصفحة).
  * ------------------------------------------------------------------ */
 
 const DOCUMENT_CSS = `
+html, body { margin: 0; padding: 0; background: #fff; }
 .doc { font-family: 'Cairo Variable', 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif; color: #111827; direction: rtl; line-height: 1.7; }
 .doc * { box-sizing: border-box; }
 .doc h1, .doc h2, .doc h3, .doc p { margin: 0; }
-.doc .page { max-width: 770px; margin: 0 auto; background: #fff; }
+
+/* ---- الورقة: مصدر واحد للتخطيط في المعاينة والطباعة و PDF ----
+   المقاسات بالملّيمتر لا بالبكسل، فيرسم المتصفح المستند نفسه في كل مسار
+   داخل صندوق محتوى واحد (190×277 مم في A4). */
+.doc .page { width: ${A4_SHEET.widthMm}mm; min-height: ${A4_SHEET.heightMm}mm; padding: ${A4_SHEET.marginMm}mm; margin: 0 auto; background: #fff; }
+
 .doc-header { text-align: center; border-bottom: 2px solid #8f7048; padding-bottom: 12px; margin-bottom: 14px; }
-.doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.4; overflow-wrap: anywhere; word-break: normal; white-space: normal; }
+.doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.6; overflow-wrap: anywhere; word-break: normal; white-space: normal; }
 .doc-header h1.office-name, .doc.receipt h2.office-name { display: block; overflow: visible; -webkit-line-clamp: unset; line-clamp: unset; }
 .doc-header .sub { color: #6b7280; font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .doc-header img { max-height: 60px; max-width: 180px; margin-top: 8px; object-fit: contain; }
@@ -50,6 +70,7 @@ const DOCUMENT_CSS = `
 .doc table.grid { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 14px; font-size: 13px; }
 .doc table.grid th, .doc table.grid td { border: 1px solid #d1d5db; padding: 7px 8px; vertical-align: top; }
 .doc table.grid thead th { background: #f0fdf4; font-size: 12.5px; }
+.doc table.grid thead { display: table-header-group; }
 .doc table.grid tbody tr { break-inside: avoid; page-break-inside: avoid; }
 .doc table.grid td.name { word-break: normal; overflow-wrap: anywhere; }
 .doc .num { white-space: nowrap; direction: ltr; unicode-bidi: embed; font-variant-numeric: tabular-nums; }
@@ -62,19 +83,34 @@ const DOCUMENT_CSS = `
 .doc .doc-footer { text-align: center; margin-top: 20px; padding-top: 10px; border-top: 1px dashed #d1d5db; color: #6b7280; font-size: 12px; }
 .doc .section-title { font-size: 14px; font-weight: 800; margin: 0 0 6px; }
 .doc .balance { font-size: 15px; font-weight: 800; white-space: nowrap; }
-/* وصل حراري 80مم */
-.doc.receipt .page { max-width: 300px; font-size: 13px; }
+
+/* ---- وصل حراري 80مم: ورقته 80مم أيضاً حتى يتطابق ما يُرى مع ما يُطبع ---- */
+.doc.receipt .page { width: ${sheetFor('receipt80').widthMm}mm; min-height: 0; padding: ${sheetFor('receipt80').marginMm}mm 2.5mm; font-size: 13px; }
 .doc.receipt h2 { font-size: 17px; }
 .doc.receipt hr { border: 0; border-top: 1px dashed #9ca3af; margin: 10px 0; }
 .doc.receipt .lines { text-align: right; line-height: 2; }
 .doc.receipt .lines p { word-break: normal; overflow-wrap: anywhere; }
 .doc.receipt .amount { font-size: 18px; font-weight: 800; color: #8f7048; white-space: nowrap; }
 .doc.receipt .muted { color: #6b7280; font-size: 12px; }
+
+/* ---- هيكل المعاينة (لا يُستخدم في الطباعة ولا في PDF) ----
+   خلفية رمادية وورقة كاملة في الوسط: المستخدم يرى الورقة كما ستُطبع.
+   و--doc-zoom تحدّده نافذة المعاينة ليظهر عرض الورقة كاملاً على الشاشات
+   الضيقة. تُطبَّق على الورقة وحدها، ومسار الطباعة لا يستخدم .doc-view. */
+.doc-view { margin: 0; background: #eef0f3; padding: 12px 8px; }
+.doc-view .page { zoom: var(--doc-zoom, 1); box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18); }
+
 @media print {
-  body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .doc .page { max-width: none; }
+  body { margin: 0; background: #fff; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* هيكل المعاينة (خلفية رمادية وحشوة) لا يُطبع إطلاقاً — فقط الورقة ومحتواها */
+  .doc-view { background: #fff !important; padding: 0 !important; }
+  .doc { width: auto; }
+  /* الطباعة تُبرز المحتوى بلا ورق إضافي: هوامش الورقة الأربعة تتولاها @page */
+  .doc .page { width: auto; min-height: 0; padding: 0; zoom: 1; box-shadow: none; margin: 0; }
+  /* الوصل الحراري يحتفظ بعرض ورقته (80مم) وحشوتها عند الطباعة */
+  .doc.receipt .page { width: ${sheetFor('receipt80').widthMm}mm; padding: ${sheetFor('receipt80').marginMm}mm 2.5mm; margin: 0 auto; }
 }
-@page { size: A4; margin: 10mm; }
+@page { size: A4; margin: ${A4_SHEET.marginMm}mm; }
 `;
 
 /**
@@ -133,8 +169,35 @@ function collectFontFaceCss(): string {
   return rules.join('\n');
 }
 
+/** خيارات بناء وثيقة العرض. */
+export interface PrintDocumentOptions {
+  /**
+   * `preview`: إضافة هيكل المعاينة (خلفية رمادية وورقة مظلَّلة في الوسط)
+   * — لا يُستخدم في مسار الطباعة إطلاقاً، لأن الخلفية الرمادية كانت
+   * تُطبع فعلاً فتظهر الورقة رمادية وتبدو الهوامش مختلفة.
+   * `print`: الورقة وحدها على أبيض (الافتراضي).
+   */
+  view?: 'print' | 'preview';
+  /**
+   * عرض الحاوية المتاح بالبكسل (نافذة المعاينة): تُحجَّم ورقة A4 لتناسبه
+   * فلا يحتاج المستخدم إلى تمرير أفقي لرؤية عرض الورقة كاملاً.
+   */
+  fitWidthPx?: number;
+}
+
+/** أقصى تصغير مسموح به في المعاينة (ورقة A4 = 794 بكسل). */
+const PREVIEW_HORIZONTAL_PADDING_PX = 24;
+
 /** وثيقة HTML كاملة وجاهزة (لـ iframe المعاينة/الطباعة). */
-export function buildPrintDocument(title: string, bodyHtml: string): string {
+export function buildPrintDocument(title: string, bodyHtml: string, options: PrintDocumentOptions = {}): string {
+  const isPreview = options.view === 'preview';
+  const available = options.fitWidthPx;
+  // عروض الورق بالبكسل: A4 (794) أو الوصل الحراري (302) — التصغير بأيّهما أوسع
+  const widestSheetPx = Math.max(sheetRenderWidthPx('a4'), sheetRenderWidthPx('receipt80'));
+  const zoom =
+    isPreview && typeof available === 'number' && available > 0
+      ? Math.min(1, available / (widestSheetPx + PREVIEW_HORIZONTAL_PADDING_PX))
+      : 1;
   return `<!doctype html>
 <html dir="rtl" lang="ar">
 <head>
@@ -143,18 +206,38 @@ export function buildPrintDocument(title: string, bodyHtml: string): string {
 <title>${escapeHtml(title)}</title>
 <style>${collectFontFaceCss()}${DOCUMENT_CSS}</style>
 </head>
-<body style="margin:0;padding:16px;background:#fff;">${bodyHtml}</body>
+<body class="${isPreview ? 'doc-view' : ''}" style="--doc-zoom:${zoom.toFixed(3)};">${bodyHtml}</body>
 </html>`;
 }
 
-/** أنماط + جسم جاهزة للحقن داخل حاوية (لتوليد PDF عبر الرسم). */
-export function buildEmbeddableDocument(bodyHtml: string): string {
-  return `<style>${DOCUMENT_CSS}</style>${bodyHtml}`;
+/* ------------------------------------------------------------------ *
+ * الطباعة عبر iframe بمقاس الورقة — تعمل في المتصفح وElectron
+ * ------------------------------------------------------------------ */
+
+/**
+ * نتيجة محاولة الطباعة:
+ *  - `printed`: فُتح حوار الطباعة (بدليل من الإطار).
+ *  - `unsupported`: هذه البيئة لا تنفّذ `window.print` (WebView أندرويد/iOS).
+ *  - `blocked`: المتصفح منع الحوار (نافذة/إطار مُقيَّد بحاجب sandbox).
+ */
+export type PrintOutcome = 'printed' | 'unsupported' | 'blocked';
+
+/**
+ * هل يمكن فتح حوار طباعة في هذه البيئة؟
+ * - سطح المكتب (Electron): عبر جسر `webContents.print` — فـ Electron لا
+ *   ينفّذ `window.print` إطلاقاً.
+ * - المتصفح: `window.print`.
+ * - WebView أندرويد وiOS: لا حوار طباعة أصلاً.
+ */
+export function systemPrintAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (getElectronAPI()?.printDocument) return true;
+  if (typeof window.print !== 'function') return false;
+  return !isNativePlatform();
 }
 
-/* ------------------------------------------------------------------ *
- * الطباعة عبر iframe مخفي — تعمل في المتصفح وElectron وWebView
- * ------------------------------------------------------------------ */
+/** مهلة انتظار دليل الطباعة (beforeprint) قبل اعتبار الحوار محجوباً. */
+const PRINT_EVIDENCE_TIMEOUT_MS = 700;
 
 function waitForIframeReady(iframe: HTMLIFrameElement, timeoutMs = 4000): Promise<void> {
   return new Promise((resolve) => {
@@ -166,6 +249,17 @@ function waitForIframeReady(iframe: HTMLIFrameElement, timeoutMs = 4000): Promis
       }
     };
     const timer = window.setTimeout(done, timeoutMs);
+    // الكتابة عبر document.write تكتمل فوراً في معظم الحالات: لا داعي لانتظار حدث load
+    try {
+      if (iframe.contentDocument?.readyState === 'complete') {
+        window.clearTimeout(timer);
+        // مهلة قصيرة لتحميل الصور (الشعار) قبل الطباعة
+        window.setTimeout(done, 250);
+        return;
+      }
+    } catch {
+      /* الوصول ممنوع؟ نكمل بانتظار load */
+    }
     iframe.addEventListener(
       'load',
       () => {
@@ -178,20 +272,51 @@ function waitForIframeReady(iframe: HTMLIFrameElement, timeoutMs = 4000): Promis
   });
 }
 
-/**
- * طباعة مستند HTML. تُعيد true عند فتح حوار الطباعة بنجاح.
- * في أندرويد الأصلي لا يوجد حوار طباعة داخل WebView — يُعيد false
- * ليستخدم المستدعي بديل PDF (حفظ/مشاركة) بدل إظهار لا شيء.
- */
-export async function printHtmlDocument(title: string, bodyHtml: string): Promise<boolean> {
+/** انتظار جاهزية خطوط المستند (Cairo) قبل الطباعة أو التصوير. */
+async function waitForDocumentFonts(targetWindow: Window, timeoutMs = 1500): Promise<void> {
   try {
-    const iframe = document.createElement('iframe');
+    const fonts = targetWindow.document?.fonts;
+    if (!fonts?.ready) return;
+    await Promise.race([fonts.ready, new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs))]);
+  } catch {
+    /* الخطوط غير حرجة — نتابع بالبدائل */
+  }
+}
+
+/**
+ * طباعة مستند HTML. لا تُعيد `printed` إلا إذا وصل حدث `beforeprint` من
+ * الإطار: بعض البيئات تُهمل `print()` بصمت (بلا استثناء ولا حوار)، وحينها
+ * يعرض المستدعي وثيقة المعاينة بدل أن لا يرى المستخدم شيئاً.
+ */
+export async function printHtmlDocument(title: string, bodyHtml: string): Promise<PrintOutcome> {
+  if (!systemPrintAvailable()) return 'unsupported';
+
+  // سطح المكتب: الطباعة عبر العملية الرئيسية (window.print لا يعمل في Electron)
+  const electronPrint = getElectronAPI()?.printDocument;
+  if (electronPrint) {
+    try {
+      const result = await electronPrint(buildPrintDocument(title, bodyHtml), title);
+      if (result?.success) return 'printed';
+      if (result?.cancelled) return 'blocked';
+      console.warn('تعذّرت الطباعة من سطح المكتب:', result?.error);
+      return 'blocked';
+    } catch (error) {
+      console.warn('تعذّرت الطباعة من سطح المكتب:', error);
+      return 'blocked';
+    }
+  }
+
+  let iframe: HTMLIFrameElement | null = null;
+  try {
+    iframe = document.createElement('iframe');
     iframe.setAttribute('title', title);
+    // **بمقاس الورقة**: كان الإطار 0×0 فينهار التخطيط داخل نافذة الطباعة
+    // (عرض الجدول بكسل واحد والأرقام مكدّسة). العرض هنا = 210مم بالبكسل.
     iframe.style.position = 'fixed';
     iframe.style.left = '-10000px';
     iframe.style.top = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
+    iframe.style.width = `${sheetRenderWidthPx('a4')}px`;
+    iframe.style.height = `${Math.round((A4_SHEET.heightMm as number) * (sheetRenderWidthPx('a4') / A4_SHEET.widthMm))}px`;
     iframe.style.border = '0';
     iframe.setAttribute('aria-hidden', 'true');
     document.body.appendChild(iframe);
@@ -199,7 +324,7 @@ export async function printHtmlDocument(title: string, bodyHtml: string): Promis
     const doc = iframe.contentDocument;
     if (!doc) {
       iframe.remove();
-      return false;
+      return 'blocked';
     }
 
     doc.open();
@@ -207,24 +332,77 @@ export async function printHtmlDocument(title: string, bodyHtml: string): Promis
     doc.close();
 
     await waitForIframeReady(iframe);
-
     const frameWindow = iframe.contentWindow;
     if (!frameWindow || typeof frameWindow.print !== 'function') {
       iframe.remove();
-      return false;
+      return 'blocked';
     }
+    await waitForDocumentFonts(frameWindow);
+
+    // دليل الطباعة: يُرسل `beforeprint` (و`afterprint`) داخل الإطار عند
+    // فتح الحوار فعلاً. لا نعتمد على عدم وقوع استثناء فقط.
+    let evidence = false;
+    const markPrinted = () => {
+      evidence = true;
+    };
+    frameWindow.addEventListener('beforeprint', markPrinted);
+    frameWindow.addEventListener('afterprint', markPrinted);
 
     frameWindow.focus();
     frameWindow.print();
+    await new Promise((resolve) => window.setTimeout(resolve, PRINT_EVIDENCE_TIMEOUT_MS));
+    frameWindow.removeEventListener('beforeprint', markPrinted);
+    frameWindow.removeEventListener('afterprint', markPrinted);
 
     // إزالة متأخرة حتى لا يُجهَض حوار الطباعة في بعض المتصفحات
-    window.setTimeout(() => iframe.remove(), 2000);
-    return true;
+    const frameToRemove = iframe;
+    window.setTimeout(() => frameToRemove.remove(), 2000);
+    return evidence ? 'printed' : 'blocked';
   } catch (error) {
     console.warn('تعذّر الطباعة:', error);
-    return false;
+    iframe?.remove();
+    return 'blocked';
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * وثيقة موصوفة: تُبنى مرة وتُستخدم في المعاينة والطباعة والحفظ
+ * ------------------------------------------------------------------ */
+
+/**
+ * وصف مستند جاهز: يحتوي كل ما تحتاجه المسارات الثلاثة معاً.
+ * وجودها يمنع تكرار بناء نفس المستند في كل صفحة، ويمنع تباين اسم الملف
+ * أو العنوان بين الطباعة والحفظ.
+ */
+export interface DocumentDescriptor {
+  title: string;
+  bodyHtml: string;
+  fileNameBase: string;
+  shareTitle: string;
+  pdfFormat: PdfFormat;
+}
+
+/** رسالة توضيحية تُعرض داخل المعاينة عندما لا يمكن فتح حوار طباعة النظام. */
+export const PRINT_FALLBACK_NOTICE: Record<Exclude<PrintOutcome, 'printed'>, string> = {
+  unsupported:
+    'لا يوجد حوار طباعة في هذا الجهاز (أندرويد/iPhone): التطبيق يعرض المستند هنا، واحفظه أو شاركه ثم اطبع الملف من أي تطبيق يعرض المستندات.',
+  blocked:
+    'منع المتصفح فتح حوار الطباعة في هذه النافذة. اضغط «حفظ كمستند» ثم اطبع الملف، أو افتح التطبيق في نافذة مستقلة.'
+};
+
+/**
+ * طباعة وثيقة. إذا لم يُفتح حوار الطباعة (جهاز لا يدعمه، أو نافذة مُقيَّدة)
+ * تُعرض الوثيقة في نافذة المعاينة مع رسالة توضّح البديل — فلا يبقى الضغط
+ * على «طباعة» بلا أي أثر مرئي.
+ */
+export async function printDocument(document: DocumentDescriptor): Promise<PrintOutcome> {
+  const outcome = await printHtmlDocument(document.title, document.bodyHtml);
+  if (outcome !== 'printed') {
+    openDocumentPreview({ ...document, notice: PRINT_FALLBACK_NOTICE[outcome] });
+  }
+  return outcome;
+}
+
 
 /* ------------------------------------------------------------------ *
  * قوالب المستندات
@@ -246,6 +424,11 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
     .join('');
 
   const statusText = invoice.status === 'paid' ? 'مدفوعة' : invoice.status === 'partial' ? 'مدفوعة جزئياً' : 'غير مدفوعة';
+  // الدين القديم المحمول على الفاتورة: يُعرض سطراً مستقلاً ثم يُجمع في
+  // «إجمالي المطلوب» — ولا يُضاف إلى «الإجمالي» حتى لا تحتسبه أرصدة
+  // الزبائن والتقارير مرتين (دين الفواتير السابقة محفوظ على فواتيرها).
+  const previousBalance = Math.max(0, toFiniteNumber(invoice.previousBalance));
+  const totalDue = roundMoney(invoice.total + previousBalance);
 
   return `
     <div class="doc"><div class="page">
@@ -285,7 +468,21 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
         <p>المجموع: <span class="num">${escapeHtml(invoice.subtotal.toLocaleString('ar-IQ'))}</span> ${currency}</p>
         ${invoice.discount > 0 ? `<p>الخصم: <span class="num">${escapeHtml(invoice.discount.toLocaleString('ar-IQ'))}</span> ${currency}</p>` : ''}
         <p class="grand">الإجمالي: <span class="num">${escapeHtml(invoice.total.toLocaleString('ar-IQ'))}</span> ${currency}</p>
-        ${invoice.type === 'credit' ? `<p>المدفوع: <span class="num">${escapeHtml(invoice.paidAmount.toLocaleString('ar-IQ'))}</span> | المتبقي: <span class="num">${escapeHtml(invoice.remaining.toLocaleString('ar-IQ'))}</span></p>` : ''}
+        ${
+          previousBalance > 0
+            ? `<p>الرصيد السابق: <span class="num">${escapeHtml(previousBalance.toLocaleString('ar-IQ'))}</span> ${currency}</p>
+        <p class="grand">إجمالي المطلوب: <span class="num">${escapeHtml(totalDue.toLocaleString('ar-IQ'))}</span> ${currency}</p>`
+            : ''
+        }
+        ${
+          invoice.type === 'credit'
+            ? `<p>المدفوع: <span class="num">${escapeHtml(invoice.paidAmount.toLocaleString('ar-IQ'))}</span> | المتبقي على هذه الفاتورة: <span class="num">${escapeHtml(invoice.remaining.toLocaleString('ar-IQ'))}</span></p>${
+                previousBalance > 0
+                  ? `<p class="notes">الرصيد السابق هو دين قديم على الزبون قبل هذه الفاتورة، ويُسدَّد معها في نفس الوصل.</p>`
+                  : ''
+              }`
+            : ''
+        }
       </div>
 
       ${invoice.notes ? `<p class="notes">ملاحظات: ${escapeHtml(invoice.notes)}</p>` : ''}
@@ -293,8 +490,16 @@ export function buildInvoicePrintHtml(invoice: Invoice, items: InvoiceItem[], se
     </div></div>`;
 }
 
-export async function printInvoice(invoice: Invoice, items: InvoiceItem[], settings: OfficeSettings): Promise<boolean> {
-  return printHtmlDocument(`فاتورة ${formatDocumentNumber(invoice.invoiceNumber)}`, buildInvoicePrintHtml(invoice, items, settings));
+/** وصف فاتورة بيع: يُستخدم في المعاينة والطباعة والحفظ بلا تكرار. */
+export function invoiceDocument(invoice: Invoice, items: InvoiceItem[], settings: OfficeSettings): DocumentDescriptor {
+  const number = formatDocumentNumber(invoice.invoiceNumber);
+  return {
+    title: `فاتورة ${number}`,
+    bodyHtml: buildInvoicePrintHtml(invoice, items, settings),
+    fileNameBase: `فاتورة_${number}_${invoice.customerName}`,
+    shareTitle: `فاتورة ${number}`,
+    pdfFormat: 'a4'
+  };
 }
 
 export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings, remainingDebt?: number): string {
@@ -321,8 +526,16 @@ export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings
     </div></div>`;
 }
 
-export async function printReceipt(payment: Payment, settings: OfficeSettings, remainingDebt?: number): Promise<boolean> {
-  return printHtmlDocument(`وصل قبض ${formatDocumentNumber(payment.receiptNumber)}`, buildReceiptPrintHtml(payment, settings, remainingDebt));
+/** وصف وصل قبض: ورقته حرارية 80مم (معاينةً وطباعةً وملفاً). */
+export function receiptDocument(payment: Payment, settings: OfficeSettings, remainingDebt?: number): DocumentDescriptor {
+  const number = formatDocumentNumber(payment.receiptNumber);
+  return {
+    title: `وصل قبض ${number}`,
+    bodyHtml: buildReceiptPrintHtml(payment, settings, remainingDebt),
+    fileNameBase: `وصل_قبض_${number}_${payment.customerName}`,
+    shareTitle: `وصل قبض ${number}`,
+    pdfFormat: 'receipt80'
+  };
 }
 
 export function buildCustomerStatementPrintHtml(
@@ -392,17 +605,21 @@ export function buildCustomerStatementPrintHtml(
     </div></div>`;
 }
 
-export async function printCustomerStatement(
+/** وصف كشف حساب الزبون. */
+export function statementDocument(
   customer: Customer,
   invoices: Invoice[],
   payments: Payment[],
   settings: OfficeSettings,
   totalDebt: number
-): Promise<boolean> {
-  return printHtmlDocument(
-    `كشف حساب - ${customer.fullName}`,
-    buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt)
-  );
+): DocumentDescriptor {
+  return {
+    title: `كشف حساب - ${customer.fullName}`,
+    bodyHtml: buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt),
+    fileNameBase: `كشف_حساب_${customer.fullName}_${formatLocalDateInput()}`,
+    shareTitle: `كشف حساب ${customer.fullName}`,
+    pdfFormat: 'a4'
+  };
 }
 
 export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): string {
@@ -469,6 +686,14 @@ export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[]
     </div></div>`;
 }
 
-export async function printPurchase(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): Promise<boolean> {
-  return printHtmlDocument(`وصل شراء ${formatDocumentNumber(purchase.purchaseNumber)}`, buildPurchasePrintHtml(purchase, items, settings));
+/** وصف وصل شراء. */
+export function purchaseDocument(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): DocumentDescriptor {
+  const number = formatDocumentNumber(purchase.purchaseNumber);
+  return {
+    title: `وصل شراء ${number}`,
+    bodyHtml: buildPurchasePrintHtml(purchase, items, settings),
+    fileNameBase: `وصل_شراء_${number}_${purchase.supplierName}`,
+    shareTitle: `وصل شراء ${number}`,
+    pdfFormat: 'a4'
+  };
 }

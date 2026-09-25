@@ -1,6 +1,7 @@
 import { logBackgroundFailure } from './lifecycle';
 import { assertPermission } from './session';
 import { db, logActivity, createNotification, checkLowStock, getSettingsOrDefault } from './db';
+import { previousBalanceFromLedger } from './debts';
 import { nextInvoiceNumber, nextReceiptNumber } from './sequence';
 import { formatCurrency, roundMoney, toFiniteNumber } from './utils';
 import type { Invoice, InvoiceItem } from '@/types';
@@ -180,6 +181,9 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
   const { subtotal, discount, total } = computeInvoiceTotals(draft.items, draft.discount);
   const dateISO = new Date(draft.dateISO).toISOString();
 
+  /** الرصيد السابق المثبَّت على الفاتورة (يُقرأ بعد المعاملة لتسجيل النشاط). */
+  let carriedBalance = 0;
+
   // db.meta ضمن النطاق لأن مولّد الأرقام التسلسلية يحفظ علامته فيه
   const result = await db.transaction(
     'rw',
@@ -197,6 +201,31 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
 
       const existing = isEdit ? await db.invoices.get(draft.id as number) : undefined;
       if (isEdit && !existing) return { ok: false, error: 'الفاتورة المطلوب تعديلها غير موجودة' };
+
+      /* --- 0) الرصيد السابق (الدين القديم) ---
+       *
+       * لقطة تُثبَّت وقت الإنشاء: كم كان على الزبون من دين قبل هذه الفاتورة.
+       * لا تُعاد حسابها في تعديل عادي — إعادة الحساب بعد تسديدات لاحقة كانت
+       * ستغيّر فاتورة سبق تسليمها للزبون. الاستثناء الوحيد نقل الفاتورة إلى
+       * زبون آخر: اللقطة القديمة تخص زبوناً غير زبون الفاتورة الآن، فتُحسب
+       * للزبون الجديد (مع استثناء الفاتورة نفسها حتى لا تُحتسب على نفسها).
+       * والحساب داخل المعاملة نفسها يمنع قراءة أرصدة قديمة أو موازية.
+       */
+      const sameCustomerAsStored = isEdit && existing?.customerId === draft.customerId;
+      const previousBalance =
+        draft.type === 'credit' && typeof draft.customerId === 'number'
+          ? sameCustomerAsStored
+            ? Math.max(0, roundMoney(toFiniteNumber(existing?.previousBalance)))
+            : previousBalanceFromLedger(
+                draft.customerId,
+                await db.invoices.where('customerId').equals(draft.customerId).toArray(),
+                await db.payments.where('customerId').equals(draft.customerId).toArray(),
+                isEdit ? (draft.id as number) : undefined
+              )
+          : 0;
+      // المطلوب من الزبون عند إصدار الفاتورة: قيمة الفاتورة + دينه القديم
+      const totalDue = roundMoney(total + previousBalance);
+      carriedBalance = previousBalance;
 
       /* --- 1) تجميع الكميات المطلوبة والكميات السابقة لهذه الفاتورة --- */
       const requested = new Map<number, number>();
@@ -259,8 +288,11 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
       const invoiceNumber =
         isEdit && existing?.invoiceNumber ? existing.invoiceNumber : await nextInvoiceNumber(new Date(dateISO));
 
+      // الدفعة المقدمة تُقيَّد بالمطلوب كاملاً (فاتورة + رصيد سابق): الزبون
+      // قد يسدد دينه القديم مع الفاتورة الجديدة في وصل واحد، والتوزيع على
+      // أقدم الفواتير (reallocateCustomerInvoices) يتولى الباقي.
       const requestedPaid = roundMoney(toFiniteNumber(draft.paidAmount));
-      const downPayment = draft.type === 'credit' ? Math.max(0, Math.min(requestedPaid, total)) : 0;
+      const downPayment = draft.type === 'credit' ? Math.max(0, Math.min(requestedPaid, totalDue)) : 0;
 
       let invoiceId = draft.id as number;
       const { id: _existingId, ...existingFields } = existing ?? {};
@@ -281,7 +313,9 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
         updatedAt: now,
         notes: draft.notes?.trim() ? draft.notes.trim() : undefined,
         status: draft.type === 'cash' ? 'paid' : invoiceStatusFor(total, 0),
-        downPaymentId: existing?.downPaymentId
+        downPaymentId: existing?.downPaymentId,
+        // 0 تعني «لا دين سابق»: لا نكتب الحقل أصلاً حتى تبقى السجلات نظيفة
+        previousBalance: previousBalance > 0 ? previousBalance : undefined
       };
 
       if (isEdit) {
@@ -351,7 +385,8 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
     const verb = isEdit ? 'تعديل' : 'إنشاء';
     await logActivity(
       `${verb} فاتورة`,
-      `تم ${verb} الفاتورة ${result.invoiceNumber} للزبون ${customerName} بمبلغ ${formatCurrency(total, settings.currency)}`,
+      `تم ${verb} الفاتورة ${result.invoiceNumber} للزبون ${customerName} بمبلغ ${formatCurrency(total, settings.currency)}` +
+        (carriedBalance > 0 ? ` — برصيد سابق ${formatCurrency(carriedBalance, settings.currency)}` : ''),
       'invoice',
       result.invoiceId
     ).catch((error) => logBackgroundFailure('تعذّر تسجيل النشاط:', error));

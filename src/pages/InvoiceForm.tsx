@@ -1,24 +1,28 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
-import { FileText, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
+import { FileText, HelpCircle, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
+import { CartCell } from '@/components/ui/cart-cell';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
-import { buildInvoicePrintHtml } from '@/lib/print';
+import { getCustomerPreviousBalance } from '@/lib/debts';
+import { logBackgroundFailure } from '@/lib/lifecycle';
+import { buildInvoicePrintHtml, invoiceDocument } from '@/lib/print';
 import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { Material, Customer, OfficeSettings, Invoice } from '@/types';
-import { generateInvoicePDF } from '@/lib/pdf';
+import { saveDocumentPdf } from '@/lib/pdf';
 import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialDialog';
 import { formatDocumentNumber } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { openDocumentPreview } from '@/lib/documentPreview';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 /**
  * سطر في السلة. الكمية والسعر `null` أثناء تفريغ الحقل للكتابة من جديد:
@@ -65,7 +69,6 @@ export function InvoiceForm() {
   const can = usePermission();
   const canAddMaterial = can('materials.manage');
   const [quickAddName, setQuickAddName] = useState('');
-  const [previewBody, setPreviewBody] = useState<string | null>(null);
   const [loadedInvoice, setLoadedInvoice] = useState<Invoice | null>(null);
 
   const [invoiceType, setInvoiceType] = useState<'cash' | 'credit'>('cash');
@@ -77,6 +80,10 @@ export function InvoiceForm() {
   const [date, setDate] = useState(formatLocalDateTimeInput());
   const [paidAmount, setPaidAmount] = useState<number | null>(0);
   const [isSaving, setIsSaving] = useState(false);
+  // دين الزبون المختار (يُقرأ من الأرصدة الفعلية ويظهر في الملخص قبل الحفظ)
+  // مع معرّف صاحبه: تغيير الزبون يجعل القراءة القديمة غير صالحة فتُهمل تلقائياً
+  const [customerDebt, setCustomerDebt] = useState<{ customerId: number; amount: number } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,6 +168,34 @@ export function InvoiceForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * دين الزبون المختار: يُقرأ لحظة اختياره حتى يُضاف إلى الفاتورة الجديدة
+   * كرصيد سابق. الحساب من السجلات الأصلية (لا قيم مخزنة) فيطابق تماماً ما
+   * سيُثبَّت على الفاتورة عند الحفظ، والحفظ نفسه يعيد الحساب داخل المعاملة
+   * فلا تعتمد سلامة البيانات على الواجهة.
+   */
+  useEffect(() => {
+    const customerId = selectedCustomer?.id;
+    if (isEdit || !customerId) return;
+    let cancelled = false;
+    // نفس الدالة التي يُحسب بها الرصيد عند الحفظ: ما تراه في الملخص هو ما
+    // سيُثبَّت على الفاتورة حرفياً (مصدر حساب واحد للواجهة ولطبقة البيانات).
+    void getCustomerPreviousBalance(customerId)
+      .then((debt) => {
+        if (!cancelled) setCustomerDebt({ customerId, amount: debt });
+      })
+      .catch((error) => {
+        if (!cancelled) logBackgroundFailure('تعذّر حساب دين الزبون السابق:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, selectedCustomer?.id]);
+
+  /** دين الزبون المختار فعلاً (يُهمَل أي قراءة تخص زبوناً آخر بعد تبديله). */
+  const liveCustomerDebt =
+    !isEdit && customerDebt && customerDebt.customerId === selectedCustomer?.id ? customerDebt.amount : 0;
+
   const filteredMaterials = useMemo(() => {
     const query = searchMaterial.trim().toLowerCase();
     if (!query) return [];
@@ -217,12 +252,31 @@ export function InvoiceForm() {
   const invalidLine = cart.find((item) => cartLineError(item) !== null);
   const safeDiscount = Math.min(Math.max(roundMoney(toFiniteNumber(discount)), 0), subtotal);
   const total = roundMoney(subtotal - safeDiscount);
-  const safePaid = Math.min(Math.max(roundMoney(toFiniteNumber(paidAmount)), 0), total);
-  const remaining = invoiceType === 'credit' ? roundMoney(total - safePaid) : 0;
+  /**
+   * الرصيد السابق المحمول على هذه الفاتورة:
+   *  - عند الإنشاء: دين الزبون الحالي (طالما الفاتورة آجلة ومرتبطة بزبون مسجل)
+   *  - عند التعديل: اللقطة المثبَّتة على الفاتورة — لا تُعاد حسابها بعد
+   *    تسديدات لاحقة حتى لا يتغيّر مستند سبق تسليمه.
+   */
+  const previousBalance =
+    invoiceType === 'credit'
+      ? isEdit
+        ? Math.max(0, roundMoney(toFiniteNumber(loadedInvoice?.previousBalance)))
+        : liveCustomerDebt
+      : 0;
+  const totalDue = roundMoney(total + previousBalance);
+  const safePaid = Math.min(Math.max(roundMoney(toFiniteNumber(paidAmount)), 0), totalDue);
+  // المتبقي بعد هذه الدفعة على مستوى الزبون: المطلوب كاملاً ناقص المدفوع
+  // (التوزيع على أقدم الفواتير عند الحفظ قد يجعل متبقي الفاتورة وحدها أقل)
+  const remaining = invoiceType === 'credit' ? roundMoney(totalDue - safePaid) : 0;
   // حدود الخصم والدفعة تظهر كتحقّق مرئي بدل قصّ القيمة بصمت أثناء الكتابة
   const discountError = discount !== null && roundMoney(discount) > subtotal ? `الخصم أكبر من المجموع (${subtotal})` : null;
   const paidError =
-    invoiceType === 'credit' && paidAmount !== null && roundMoney(paidAmount) > total ? `المدفوع أكبر من الإجمالي (${total})` : null;
+    invoiceType === 'credit' && paidAmount !== null && roundMoney(paidAmount) > totalDue
+      ? `المدفوع أكبر من إجمالي المطلوب (${totalDue})`
+      : null;
+  // الدين الظاهر في التنبيه: الدين الحالي للزبون عند الإنشاء، واللقطة المثبَّتة عند التعديل
+  const outstandingDebt = roundMoney(Math.max(previousBalance, liveCustomerDebt));
 
   const handleSave = async (shouldPDF = false) => {
     if (isSaving) return;
@@ -273,8 +327,8 @@ export function InvoiceForm() {
 
       if (shouldPDF) {
         const s = await getSettingsOrDefault();
-        const customer = draft.customerId ? await db.customers.get(draft.customerId) : undefined;
-        await generateInvoicePDF(result.invoice, result.items, s, customer);
+        // «حفظ مع مستند» = نفس ملف الحفظ اليدوي تماماً (وصف واحد للمستند)
+        await saveDocumentPdf(invoiceDocument(result.invoice, result.items, s));
       }
 
       toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم حفظ الفاتورة', `رقم الفاتورة: ${formatDocumentNumber(result.invoiceNumber)}`);
@@ -310,6 +364,8 @@ export function InvoiceForm() {
         subtotal,
         discount: safeDiscount,
         total,
+        // المسودة تعرض ما ستحفظه الفاتورة تماماً: الرصيد السابق سطر مستقل
+        previousBalance: previousBalance > 0 ? previousBalance : undefined,
         paidAmount: invoiceType === 'cash' ? total : safePaid,
         remaining,
         date: previewDate,
@@ -329,7 +385,14 @@ export function InvoiceForm() {
         })),
         s
       );
-      setPreviewBody(bodyHtml);
+      openDocumentPreview({
+        title: loadedInvoice?.invoiceNumber ? `فاتورة ${formatDocumentNumber(loadedInvoice.invoiceNumber)}` : 'معاينة الفاتورة',
+        bodyHtml,
+        fileNameBase: loadedInvoice
+          ? `فاتورة_${formatDocumentNumber(loadedInvoice.invoiceNumber)}_${customerName.trim() || 'زبون'}`
+          : `مسودة_${customerName.trim() || 'فاتورة'}`,
+        shareTitle: 'معاينة الفاتورة'
+      });
     } catch (error) {
       reportError('InvoiceForm.preview', error, 'تعذّر إنشاء المعاينة');
     }
@@ -360,9 +423,17 @@ export function InvoiceForm() {
             <FileText className="w-7 h-7 text-primary-600" />
             {isEdit ? 'تعديل فاتورة' : 'فاتورة بيع جديدة'}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">الفاتورة الذكية - بحث سريع وحساب تلقائي</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            بيع للزبون: تخرج المواد من المخزن وتُسجَّل مبيعاتك نقداً أو ديناً — ولشراء المواد من مورد استخدم وصل الشراء.
+          </p>
         </div>
-        <Button variant="outline" onClick={() => goBack('/invoices')}>رجوع للفواتير</Button>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق؟
+          </Button>
+          <Button variant="outline" onClick={() => goBack('/invoices')}>رجوع للفواتير</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -450,6 +521,18 @@ export function InvoiceForm() {
                       الفواتير الآجلة تحتاج زبوناً مسجلاً حتى يُحسب الدين بشكل صحيح.
                     </p>
                   )}
+                  {outstandingDebt > 0 && (
+                    <p
+                      className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                      data-testid="invoice-previous-balance-note"
+                    >
+                      {isEdit
+                        ? `رصيد سابق مثبَّت على هذه الفاتورة: ${formatCurrency(outstandingDebt, settings?.currency)} (دين قديم كان على الزبون قبل إصدارها).`
+                        : invoiceType === 'credit'
+                          ? `على هذا الزبون دين سابق بقيمة ${formatCurrency(outstandingDebt, settings?.currency)} — أُضيف إلى الفاتورة ضمن «إجمالي المطلوب».`
+                          : `على هذا الزبون دين سابق بقيمة ${formatCurrency(outstandingDebt, settings?.currency)} — يُسدَّد بوصل قبض، والفاتورة النقدية تبقى مدفوعة بالكامل.`}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1 block">تاريخ الفاتورة</label>
@@ -528,46 +611,48 @@ export function InvoiceForm() {
                   </div>
                 ) : (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-                    <div className="bg-gray-50 dark:bg-gray-800/50 p-3 grid grid-cols-12 gap-2 text-[11px] font-bold text-gray-600 dark:text-gray-400">
+                    {/* رأس الجدول للشاشات المتوسطة فأعلى؛ على الجوال يحمل كل حقل
+                        عنوانه داخل السطر (CartCell) فيبقى العرض كافياً للأرقام. */}
+                    <div className="hidden bg-gray-50 dark:bg-gray-800/50 p-3 text-[11px] font-bold text-gray-600 dark:text-gray-400 sm:grid sm:grid-cols-12 sm:gap-2">
                       <div className="col-span-5">المادة</div>
                       <div className="col-span-2 text-center">الكمية</div>
                       <div className="col-span-2 text-center">السعر المفرد</div>
-                      <div className="col-span-2 text-center">المجموع</div>
-                      <div className="col-span-1"></div>
+                      <div className="col-span-3 text-center">المجموع</div>
                     </div>
                     {cart.map((item) => {
                       const lineError = cartLineError(item);
                       const errorId = `invoice-line-error-${item.material.id}`;
                       return (
-                      <div key={item.material.id} className="p-3 grid grid-cols-12 gap-2 items-center border-t border-gray-100 dark:border-gray-800 text-sm">
-                        <div className="col-span-5">
+                      <div key={item.material.id} className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-gray-100 p-3 text-sm dark:border-gray-800 sm:grid-cols-12 sm:items-center sm:gap-2">
+                        <div className="col-span-2 min-w-0 sm:col-span-5">
                           <p className="font-medium truncate">{item.material.name}</p>
                           <p className="text-[11px] text-gray-500">متوفر: {item.material.quantity}</p>
                         </div>
-                        <div className="col-span-2">
+                        <CartCell label="الكمية" className="sm:col-span-2">
                           <NumberInput
                             value={item.quantity}
                             onValueChange={(quantity) => updateLine(item.material.id as number, { quantity })}
                             aria-label={`كمية ${item.material.name}`}
                             aria-invalid={lineError !== null}
                             aria-describedby={lineError ? errorId : undefined}
-                            className={`h-8 text-center ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                            className={`h-9 w-full px-2 text-center text-sm sm:h-8 sm:text-xs ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                           />
-                        </div>
-                        <div className="col-span-2">
+                        </CartCell>
+                        <CartCell label="السعر المفرد" className="sm:col-span-2">
                           <NumberInput
                             value={item.unitPrice}
                             onValueChange={(unitPrice) => updateLine(item.material.id as number, { unitPrice })}
                             aria-label={`سعر ${item.material.name}`}
-                            className="h-8 text-center text-xs"
+                            className="h-9 w-full px-2 text-center text-sm sm:h-8 sm:text-xs"
                           />
-                        </div>
-                        <div className="col-span-2 text-center font-bold text-green-600">{formatCurrency(lineTotal(item), settings?.currency)}</div>
-                        <div className="col-span-1 text-center">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${item.material.name}`} onClick={() => setCart((prev) => prev.filter((c) => c.material.id !== item.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button>
+                        </CartCell>
+                        <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 sm:col-span-3 sm:gap-1">
+                          <span className="shrink-0 text-[11px] text-gray-500 sm:hidden">المجموع:</span>
+                          <span className="font-bold text-green-600 whitespace-nowrap">{formatCurrency(lineTotal(item), settings?.currency)}</span>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500 sm:h-7 sm:w-7" aria-label={`حذف ${item.material.name}`} onClick={() => setCart((prev) => prev.filter((c) => c.material.id !== item.material.id))}><Trash2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" /></Button>
                         </div>
                         {lineError && (
-                          <p id={errorId} role="alert" className="col-span-12 text-[11px] text-red-600 dark:text-red-400">{lineError}</p>
+                          <p id={errorId} role="alert" className="col-span-2 text-[11px] text-red-600 dark:text-red-400 sm:col-span-12">{lineError}</p>
                         )}
                       </div>
                       );
@@ -604,6 +689,19 @@ export function InvoiceForm() {
                 <div className="h-px bg-gray-200 dark:bg-gray-700 my-2" />
                 <div className="flex justify-between text-base"><span className="font-bold">الإجمالي النهائي:</span><span className="font-bold text-primary-600 text-lg">{formatCurrency(total, settings?.currency)}</span></div>
 
+                {previousBalance > 0 && (
+                  <>
+                    <div className="flex justify-between" data-testid="invoice-previous-balance-row">
+                      <span className="text-gray-500">الرصيد السابق (دين قديم):</span>
+                      <span className="font-bold text-amber-600">{formatCurrency(previousBalance, settings?.currency)}</span>
+                    </div>
+                    <div className="flex justify-between text-base">
+                      <span className="font-bold">إجمالي المطلوب:</span>
+                      <span className="font-bold text-primary-600 text-lg">{formatCurrency(totalDue, settings?.currency)}</span>
+                    </div>
+                  </>
+                )}
+
                 {invoiceType === 'credit' && (
                   <>
                     <div className="flex items-center justify-between gap-2">
@@ -617,9 +715,9 @@ export function InvoiceForm() {
                       />
                     </div>
                     {paidError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{paidError}</p>}
-                    <div className="flex justify-between"><span className="text-gray-500">المتبقي:</span><span className={`font-bold ${remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(remaining, settings?.currency)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">المتبقي على الزبون:</span><span className={`font-bold ${remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(remaining, settings?.currency)}</span></div>
                     <p className="text-[11px] text-gray-500 leading-relaxed">
-                      تُسجَّل الدفعة كوصل قبض، ويُوزَّع المسدد تلقائياً على أقدم فواتير الزبون.
+                      تُسجَّل الدفعة كوصل قبض، ويُوزَّع المسدد تلقائياً على أقدم فواتير الزبون (يشمل الرصيد السابق).
                     </p>
                   </>
                 )}
@@ -658,6 +756,8 @@ export function InvoiceForm() {
         </div>
       </div>
 
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
+
       <QuickAddMaterialDialog
         open={showQuickAdd}
         initialName={quickAddName}
@@ -667,16 +767,6 @@ export function InvoiceForm() {
         onCreated={handleQuickAddCreated}
       />
 
-      {previewBody && (
-        <DocumentPreviewDialog
-          open={previewBody !== null}
-          title={loadedInvoice?.invoiceNumber ? `فاتورة ${formatDocumentNumber(loadedInvoice.invoiceNumber)}` : 'معاينة الفاتورة'}
-          bodyHtml={previewBody}
-          fileNameBase={loadedInvoice ? `فاتورة_${formatDocumentNumber(loadedInvoice.invoiceNumber)}_${customerName.trim() || 'زبون'}` : `مسودة_${customerName.trim() || 'فاتورة'}`}
-          shareTitle="معاينة الفاتورة"
-          onClose={() => setPreviewBody(null)}
-        />
-      )}
     </div>
   );
 }

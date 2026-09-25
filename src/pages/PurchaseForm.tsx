@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
-import { ArrowRight, Eye, FileText, Loader2, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
+import { ArrowRight, Eye, FileText, HelpCircle, Loader2, Package, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
+import { CartCell } from '@/components/ui/cart-cell';
 import { QuickAddPurchaseMaterialDialog } from '@/components/materials/QuickAddPurchaseMaterialDialog';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { openDocumentPreview } from '@/lib/documentPreview';
+import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { getPurchaseWithItems, savePurchase, computePurchaseTotals, type PurchaseDraft } from '@/lib/purchases';
 import { buildPurchasePrintHtml } from '@/lib/print';
@@ -57,10 +59,10 @@ export function PurchaseForm() {
   const [showMaterialList, setShowMaterialList] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickAddName, setQuickAddName] = useState('');
-  const [previewBody, setPreviewBody] = useState<string | null>(null);
   const [loadedPurchase, setLoadedPurchase] = useState<Purchase | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,7 +249,7 @@ export function PurchaseForm() {
         remaining,
         notes: notes.trim() || undefined
       };
-      setPreviewBody(buildPurchasePrintHtml(
+      const bodyHtml = buildPurchasePrintHtml(
         previewPurchase,
         cart.map((entry) => ({
           purchaseId: 0,
@@ -258,7 +260,15 @@ export function PurchaseForm() {
           total: lineTotal(entry)
         })),
         s
-      ));
+      );
+      openDocumentPreview({
+        title: loadedPurchase?.purchaseNumber ? `وصل شراء ${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : 'معاينة وصل الشراء',
+        bodyHtml,
+        fileNameBase: loadedPurchase?.purchaseNumber
+          ? `وصل_شراء_${formatDocumentNumber(loadedPurchase.purchaseNumber)}`
+          : `مسودة_شراء_${supplierName || 'وصل'}`,
+        shareTitle: 'معاينة وصل الشراء'
+      });
     } catch (error) {
       reportError('PurchaseForm.preview', error, 'تعذّر إنشاء المعاينة');
     }
@@ -275,10 +285,18 @@ export function PurchaseForm() {
           <Button variant="ghost" size="icon" onClick={() => goBack('/purchases')} aria-label="رجوع لوصول الشراء"><ArrowRight className="w-5 h-5" /></Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><FileText className="w-7 h-7 text-primary-600" />{isEdit ? 'تعديل وصل شراء' : 'وصل شراء جديد'}</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">أدخل المواد مباشرة؛ المادة الجديدة تُسجّل في المخزن تلقائياً عند الحفظ.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              شراء من مورد: تدخل المواد إلى المخزن وتُسجَّل مشترياتك نقداً أو ديناً عليه — أما بيع المواد للزبائن فيُسجَّل في فاتورة البيع.
+            </p>
           </div>
         </div>
-        <Badge variant="secondary">إدخال مخزن</Badge>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Badge variant="secondary">إدخال مخزن</Badge>
+          <Button variant="outline" onClick={() => setShowHelp(true)}>
+            <HelpCircle className="w-4 h-4 ml-1" />
+            ما الفرق؟
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -333,35 +351,41 @@ export function PurchaseForm() {
 
               {cart.length ? (
                 <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 grid grid-cols-12 gap-2 text-[11px] font-bold text-gray-600 dark:text-gray-400">
-                    <div className="col-span-5">المادة</div><div className="col-span-2 text-center">الكمية</div><div className="col-span-3 text-center">سعر الشراء</div><div className="col-span-2 text-center">المجموع</div>
+                  {/* رأس الجدول للشاشات المتوسطة فأعلى؛ على الجوال يحمل كل حقل
+                      عنوانه داخل السطر (CartCell) فيبقى العرض كافياً للأرقام. */}
+                  <div className="hidden bg-gray-50 dark:bg-gray-800/50 p-3 text-[11px] font-bold text-gray-600 dark:text-gray-400 sm:grid sm:grid-cols-12 sm:gap-2">
+                    <div className="col-span-5">المادة</div><div className="col-span-2 text-center">الكمية</div><div className="col-span-2 text-center">سعر الشراء</div><div className="col-span-3 text-center">المجموع</div>
                   </div>
                   {cart.map((entry) => {
                     const lineError = cartLineError(entry);
                     const errorId = `purchase-line-error-${entry.material.id}`;
                     return (
-                    <div key={entry.material.id} className="p-3 grid grid-cols-12 gap-2 items-center border-t border-gray-100 dark:border-gray-800 text-sm">
-                      <div className="col-span-5 min-w-0"><p className="font-medium truncate">{entry.material.name}</p><p className="text-[11px] text-gray-500">{entry.material.unit || 'قطعة'} • الرصيد الحالي: {entry.material.quantity}</p></div>
-                      <div className="col-span-2">
+                    <div key={entry.material.id} className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-gray-100 p-3 text-sm dark:border-gray-800 sm:grid-cols-12 sm:items-center sm:gap-2">
+                      <div className="col-span-2 min-w-0 sm:col-span-5"><p className="font-medium truncate">{entry.material.name}</p><p className="text-[11px] text-gray-500">{entry.material.unit || 'قطعة'} • الرصيد الحالي: {entry.material.quantity}</p></div>
+                      <CartCell label="الكمية" className="sm:col-span-2">
                         <NumberInput
                           value={entry.quantity}
                           onValueChange={(quantity) => updateLine(entry.material.id as number, { quantity })}
                           aria-label={`كمية ${entry.material.name}`}
                           aria-invalid={lineError !== null}
                           aria-describedby={lineError ? errorId : undefined}
-                          className={`h-8 text-center ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                          className={`h-9 w-full px-2 text-center text-sm sm:h-8 sm:text-xs ${lineError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                         />
-                      </div>
-                      <div className="col-span-3">
+                      </CartCell>
+                      <CartCell label="سعر الشراء" className="sm:col-span-2">
                         <NumberInput
                           value={entry.purchasePrice}
                           onValueChange={(purchasePrice) => updateLine(entry.material.id as number, { purchasePrice })}
                           aria-label={`سعر شراء ${entry.material.name}`}
-                          className="h-8 text-center text-xs"
+                          className="h-9 w-full px-2 text-center text-sm sm:h-8 sm:text-xs"
                         />
+                      </CartCell>
+                      <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 sm:col-span-3 sm:gap-1">
+                        <span className="shrink-0 text-[11px] text-gray-500 sm:hidden">المجموع:</span>
+                        <span className="font-bold text-green-600 whitespace-nowrap text-xs">{formatCurrency(lineTotal(entry), settings?.currency)}</span>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-red-500 sm:h-7 sm:w-7" aria-label={`حذف ${entry.material.name}`} onClick={() => setCart((prev) => prev.filter((item) => item.material.id !== entry.material.id))}><Trash2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" /></Button>
                       </div>
-                      <div className="col-span-2 flex items-center justify-between gap-1"><span className="font-bold text-green-600 text-xs whitespace-nowrap">{formatCurrency(lineTotal(entry), settings?.currency)}</span><Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" aria-label={`حذف ${entry.material.name}`} onClick={() => setCart((prev) => prev.filter((item) => item.material.id !== entry.material.id))}><Trash2 className="w-3.5 h-3.5" /></Button></div>
-                      {lineError && <p id={errorId} role="alert" className="col-span-12 text-[11px] text-red-600 dark:text-red-400">{lineError}</p>}
+                      {lineError && <p id={errorId} role="alert" className="col-span-2 text-[11px] text-red-600 dark:text-red-400 sm:col-span-12">{lineError}</p>}
                     </div>
                     );
                   })}
@@ -397,7 +421,7 @@ export function PurchaseForm() {
       </div>
 
       <QuickAddPurchaseMaterialDialog open={showQuickAdd} initialName={quickAddName} currency={settings?.currency} defaultMinQuantity={settings?.lowStockThreshold} onClose={() => setShowQuickAdd(false)} onCreated={handleCreatedMaterial} />
-      {previewBody && <DocumentPreviewDialog open={previewBody !== null} title={loadedPurchase?.purchaseNumber ? `وصل شراء ${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : 'معاينة وصل الشراء'} bodyHtml={previewBody} fileNameBase={loadedPurchase?.purchaseNumber ? `وصل_شراء_${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : `مسودة_شراء_${supplierName || 'وصل'}`} shareTitle="معاينة وصل الشراء" onClose={() => setPreviewBody(null)} />}
+      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
 }

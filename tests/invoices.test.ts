@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '@/lib/db';
-import { saveInvoice, deleteInvoice, getInvoiceWithItems, computeInvoiceTotals, validateInvoiceDraft } from '@/lib/invoices';
+import {
+  saveInvoice,
+  deleteInvoice,
+  getInvoiceWithItems,
+  computeInvoiceTotals,
+  validateInvoiceDraft,
+  reallocateCustomerInvoices
+} from '@/lib/invoices';
 import { nextInvoiceNumber } from '@/lib/sequence';
 import { getCustomerBalance } from '@/lib/debts';
 import type { Material } from '@/types';
@@ -390,5 +397,175 @@ describe('الفواتير الآجلة ودفعة المقدمة', () => {
     expect(firstInvoice?.invoice.paidAmount).toBe(4000);
     expect(firstInvoice?.invoice.status).toBe('partial');
     expect(second.invoice.paidAmount).toBe(0);
+  });
+});
+
+describe('الرصيد السابق (الدين القديم) على الفاتورة الجديدة', () => {
+  /** ينشئ فاتورة آجلة بسيطة ويعيد نتيجتها. */
+  async function createCreditInvoice(args: {
+    customerId: number;
+    customerName: string;
+    materialId: number;
+    quantity: number;
+    paidAmount?: number;
+    dateISO?: string;
+  }) {
+    const result = await saveInvoice({
+      type: 'credit',
+      customerId: args.customerId,
+      customerName: args.customerName,
+      dateISO: args.dateISO ?? dateISO,
+      discount: 0,
+      paidAmount: args.paidAmount ?? 0,
+      items: [{ materialId: args.materialId, materialName: 'سماد', quantity: args.quantity, unitPrice: 1000 }]
+    });
+    if (!result.ok) throw new Error(result.error);
+    return result;
+  }
+
+  it('يضيف دين الزبون القديم إلى الفاتورة الجديدة ولا يحتسبه مرتين في الرصيد', async () => {
+    const materialId = await addMaterial({ name: 'سماد', quantity: 100, salePrice: 1000 });
+    const customerId = await addCustomer('أبو محمد');
+
+    const first = await createCreditInvoice({ customerId, customerName: 'أبو محمد', materialId, quantity: 2 });
+    // لا دين سابق: الحقل لا يُكتب أصلاً
+    expect(first.invoice.previousBalance).toBeUndefined();
+
+    const second = await createCreditInvoice({
+      customerId,
+      customerName: 'أبو محمد',
+      materialId,
+      quantity: 1,
+      dateISO: '2026-03-11T09:00:00.000Z'
+    });
+
+    // الإجمالي يبقى قيمة الفاتورة وحدها، والدين القديم سطر مستقل عليها
+    expect(second.invoice.total).toBe(1000);
+    expect(second.invoice.previousBalance).toBe(2000);
+
+    // الرصيد الفعلي = مجموع الفواتير − التسديدات (دون احتساب الدين القديم مرتين)
+    const balance = await getCustomerBalance(customerId);
+    expect(balance.credit).toBe(3000);
+    expect(balance.debt).toBe(3000);
+  });
+
+  it('يسمح بدفعة مقدمة تسدد الدين القديم مع الفاتورة الجديدة في وصل واحد', async () => {
+    const materialId = await addMaterial({ name: 'سماد', quantity: 100, salePrice: 1000 });
+    const customerId = await addCustomer('أبو محمد');
+
+    await createCreditInvoice({ customerId, customerName: 'أبو محمد', materialId, quantity: 2 });
+    const second = await createCreditInvoice({
+      customerId,
+      customerName: 'أبو محمد',
+      materialId,
+      quantity: 1,
+      paidAmount: 3000,
+      dateISO: '2026-03-11T09:00:00.000Z'
+    });
+
+    expect(second.invoice.previousBalance).toBe(2000);
+    const payments = await db.payments.toArray();
+    expect(payments).toHaveLength(1);
+    expect(payments[0].amount).toBe(3000);
+    expect((await getCustomerBalance(customerId)).debt).toBe(0);
+
+    // التوزيع على أقدم الفواتير: الفاتورتان مدفوعتان بالكامل
+    const invoices = await db.invoices.orderBy('id').toArray();
+    expect(invoices.map((invoice) => invoice.status)).toEqual(['paid', 'paid']);
+  });
+
+  it('يثبّت اللقطة عند التعديل ولا يعيد حسابها بعد تسديد لاحق', async () => {
+    const materialId = await addMaterial({ name: 'سماد', quantity: 100, salePrice: 1000 });
+    const customerId = await addCustomer('أبو محمد');
+
+    await createCreditInvoice({ customerId, customerName: 'أبو محمد', materialId, quantity: 2 });
+    const second = await createCreditInvoice({
+      customerId,
+      customerName: 'أبو محمد',
+      materialId,
+      quantity: 1,
+      dateISO: '2026-03-11T09:00:00.000Z'
+    });
+    expect(second.invoice.previousBalance).toBe(2000);
+
+    // تسديد لاحق يخفض دين الزبون: لقطة الفاتورة تبقى كما سُلِّمت للزبون
+    const now = new Date().toISOString();
+    await db.payments.add({
+      customerId,
+      customerName: 'أبو محمد',
+      amount: 500,
+      date: now,
+      method: 'cash',
+      receiptNumber: 'ق-تجريبي-1',
+      createdAt: now,
+      source: 'manual'
+    });
+    await reallocateCustomerInvoices(customerId);
+
+    const edited = await saveInvoice({
+      id: second.invoiceId,
+      type: 'credit',
+      customerId,
+      customerName: 'أبو محمد',
+      dateISO: '2026-03-11T09:00:00.000Z',
+      discount: 0,
+      paidAmount: 0,
+      items: [{ materialId, materialName: 'سماد', quantity: 2, unitPrice: 1000 }]
+    });
+    if (!edited.ok) throw new Error(edited.error);
+
+    expect(edited.invoice.total).toBe(2000);
+    expect(edited.invoice.previousBalance).toBe(2000);
+    expect((await getCustomerBalance(customerId)).debt).toBe(3500);
+  });
+
+  it('يعيد حساب الرصيد السابق عند نقل الفاتورة إلى زبون آخر', async () => {
+    const materialId = await addMaterial({ name: 'سماد', quantity: 100, salePrice: 1000 });
+    const firstCustomerId = await addCustomer('الزبون الأول');
+    const secondCustomerId = await addCustomer('الزبون الثاني');
+
+    await createCreditInvoice({ customerId: firstCustomerId, customerName: 'الزبون الأول', materialId, quantity: 2 });
+    await createCreditInvoice({ customerId: secondCustomerId, customerName: 'الزبون الثاني', materialId, quantity: 3 });
+    const moved = await createCreditInvoice({ customerId: firstCustomerId, customerName: 'الزبون الأول', materialId, quantity: 1 });
+    expect(moved.invoice.previousBalance).toBe(2000);
+
+    const transferred = await saveInvoice({
+      id: moved.invoiceId,
+      type: 'credit',
+      customerId: secondCustomerId,
+      customerName: 'الزبون الثاني',
+      dateISO,
+      discount: 0,
+      paidAmount: 0,
+      items: [{ materialId, materialName: 'سماد', quantity: 1, unitPrice: 1000 }]
+    });
+    if (!transferred.ok) throw new Error(transferred.error);
+
+    // اللقطة صارت دين الزبون الجديد قبل الفاتورة، لا لقطة الزبون السابق
+    expect(transferred.invoice.previousBalance).toBe(3000);
+    expect((await getCustomerBalance(firstCustomerId)).debt).toBe(2000);
+    expect((await getCustomerBalance(secondCustomerId)).debt).toBe(4000);
+  });
+
+  it('لا يحمّل رصيداً سابقاً على الفاتورة النقدية', async () => {
+    const materialId = await addMaterial({ name: 'سماد', quantity: 100, salePrice: 1000 });
+    const customerId = await addCustomer('أبو محمد');
+    await createCreditInvoice({ customerId, customerName: 'أبو محمد', materialId, quantity: 2 });
+
+    const cash = await saveInvoice({
+      type: 'cash',
+      customerId,
+      customerName: 'أبو محمد',
+      dateISO,
+      discount: 0,
+      paidAmount: 0,
+      items: [{ materialId, materialName: 'سماد', quantity: 1, unitPrice: 1000 }]
+    });
+    if (!cash.ok) throw new Error(cash.error);
+
+    expect(cash.invoice.previousBalance).toBeUndefined();
+    expect(cash.invoice.status).toBe('paid');
+    // الدين القديم يبقى كما هو ولا يتضاعف بفاتورة نقدية
+    expect((await getCustomerBalance(customerId)).debt).toBe(2000);
   });
 });

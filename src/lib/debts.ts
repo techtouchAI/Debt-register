@@ -83,6 +83,41 @@ export async function getCustomerDebt(customerId: number): Promise<number> {
   return balance.debt;
 }
 
+/**
+ * الدين القديم المستحق على الزبون **قبل** فاتورة معيّنة (الرصيد السابق).
+ *
+ * يُحسب من السجلات الأصلية: مجموع الفواتير الآجلة ناقص مجموع التسديدات، مع
+ * استثناء الفاتورة المطلوبة (إن كانت موجودة) ودفعة المقدمة المرتبطة بها —
+ * فالسؤال هو: كم ديناً كان على الزبون قبل هذه الفاتورة؟ لا: كم صار بعدها.
+ *
+ * لا تُعاد قيمة سالبة: الرصيد الدائن (دفع زائد) يعني «لا دين سابق».
+ * الاستثناء ضروري عند التعديل حتى لا تُحتسب الفاتورة على نفسها.
+ */
+export function previousBalanceFromLedger(
+  customerId: number,
+  invoices: Invoice[],
+  payments: Payment[],
+  excludeInvoiceId?: number
+): number {
+  const relevantInvoices = invoices.filter(
+    (invoice) => invoice.type === 'credit' && invoice.customerId === customerId && invoice.id !== excludeInvoiceId
+  );
+  const relevantPayments = payments.filter(
+    (payment) => payment.customerId === customerId && (excludeInvoiceId === undefined || payment.invoiceId !== excludeInvoiceId)
+  );
+  return Math.max(0, roundMoney(computeBalance(relevantInvoices, relevantPayments).debt));
+}
+
+/** الدين القديم لزبون واحد من قاعدة البيانات (خارج أي معاملة). */
+export async function getCustomerPreviousBalance(customerId: number, excludeInvoiceId?: number): Promise<number> {
+  if (!Number.isInteger(customerId) || customerId <= 0) return 0;
+  const [invoices, payments] = await Promise.all([
+    db.invoices.where('customerId').equals(customerId).toArray(),
+    db.payments.where('customerId').equals(customerId).toArray()
+  ]);
+  return previousBalanceFromLedger(customerId, invoices, payments, excludeInvoiceId);
+}
+
 export async function getAllCustomersDebt(): Promise<{ customerId: number; debt: number }[]> {
   const balances = await getCustomerBalances();
   return Array.from(balances.entries()).map(([customerId, balance]) => ({ customerId, debt: balance.debt }));

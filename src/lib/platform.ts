@@ -35,6 +35,13 @@ export interface ElectronSaveResult {
   error?: string;
 }
 
+/** نتيجة طباعة مستند عبر نافذة Electron المخفية. */
+export interface ElectronPrintResult {
+  success?: boolean;
+  cancelled?: boolean;
+  error?: string;
+}
+
 export interface ElectronFileResult {
   success?: boolean;
   cancelled?: boolean;
@@ -47,6 +54,12 @@ export interface ElectronAPI {
   /** حفظ ملف عام (PDF/JSON/...) عبر صندوق حفظ أصلي — data بصيغة base64 */
   saveFile?: (fileName: string, base64Data: string, mimeType: string) => Promise<ElectronFileResult>;
   showNotification?: (title: string, body: string) => Promise<unknown>;
+  /**
+   * طباعة مستند HTML عبر `webContents.print` في العملية الرئيسية.
+   * Electron لا ينفّذ `window.print` إطلاقاً، فهذا هو المسار الصحيح للطباعة
+   * على ويندوز (حوار الطباعة الأصلي + احترام `@page` داخل المستند).
+   */
+  printDocument?: (html: string, title?: string) => Promise<ElectronPrintResult>;
   appInfo?: () => Promise<{ version: string; platform: string; isElectron: boolean }>;
   isElectron?: boolean;
 }

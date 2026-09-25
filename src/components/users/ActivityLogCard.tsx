@@ -10,6 +10,10 @@ import { formatDate } from '@/lib/utils';
 /**
  * سجل النشاط (للمدير): من فعل ماذا ومتى — تسجيل الدخول والخروج، الفواتير،
  * التسديدات، التعديلات والحذف. كل إدخال منسوب للمستخدم الذي كان مسجّلاً.
+ *
+ * تخطيط السطور مقاوم للضغط والخروج عن الحدود: `min-w-0` يسمح للنص بالانكماش
+ * داخل العمود، و`whitespace-nowrap` على الطابع الزمني يمنع كسره، وكل سطر
+ * يلتف (`flex-wrap`) فنبقى داخل حدود البطاقة على شاشات الهاتف الضيقة.
  */
 const PAGE_SIZE = 30;
 
@@ -37,12 +41,12 @@ export function ActivityLogCard() {
           <ul className="space-y-2 max-h-96 overflow-y-auto overscroll-contain" data-testid="activity-log">
             {logs.map((log) => (
               <li key={log.id} className="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800/50 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-gray-900 dark:text-white">{log.action}</span>
-                  <span className="text-[10px] text-gray-500 whitespace-nowrap">{formatDate(log.timestamp, true)}</span>
+                <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
+                  <span className="min-w-0 font-bold text-gray-900 dark:text-white [overflow-wrap:anywhere]">{log.action}</span>
+                  <span className="shrink-0 whitespace-nowrap text-[10px] text-gray-500">{formatDate(log.timestamp, true)}</span>
                 </div>
-                <p className="text-gray-600 dark:text-gray-300 mt-0.5 break-words">{localizeDetails(log.details)}</p>
-                <p className="text-[10px] text-gray-500 mt-0.5">{log.userName ? `بواسطة: ${log.userName}` : 'بواسطة: النظام'}</p>
+                <p className="mt-0.5 break-words text-gray-600 dark:text-gray-300 [overflow-wrap:anywhere]">{localizeDetails(log.details)}</p>
+                <p className="mt-0.5 break-words text-[10px] text-gray-500">{log.userName ? `بواسطة: ${log.userName}` : 'بواسطة: النظام'}</p>
               </li>
             ))}
           </ul>
