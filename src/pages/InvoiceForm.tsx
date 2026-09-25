@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useGoBack, useReturnTo } from '@/hooks/useGoBack';
-import { FileText, HelpCircle, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
+import { FileText, Plus, Trash2, Search, Save, Eye, Download, User, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,7 +22,6 @@ import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialD
 import { formatDocumentNumber } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
 import { openDocumentPreview } from '@/lib/documentPreview';
-import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 /**
  * سطر في السلة. الكمية والسعر `null` أثناء تفريغ الحقل للكتابة من جديد:
@@ -82,8 +81,7 @@ export function InvoiceForm() {
   const [isSaving, setIsSaving] = useState(false);
   // دين الزبون المختار (يُقرأ من الأرصدة الفعلية ويظهر في الملخص قبل الحفظ)
   // مع معرّف صاحبه: تغيير الزبون يجعل القراءة القديمة غير صالحة فتُهمل تلقائياً
-  const [customerDebt, setCustomerDebt] = useState<{ customerId: number; amount: number } | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
+  const [customerDebt, setCustomerDebt] = useState<{ customerId: number; dateISO: string; amount: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -176,13 +174,14 @@ export function InvoiceForm() {
    */
   useEffect(() => {
     const customerId = selectedCustomer?.id;
-    if (isEdit || !customerId) return;
+    const dateISO = toISOStringOrNull(date);
+    if (isEdit || !customerId || !dateISO) return;
     let cancelled = false;
     // نفس الدالة التي يُحسب بها الرصيد عند الحفظ: ما تراه في الملخص هو ما
-    // سيُثبَّت على الفاتورة حرفياً (مصدر حساب واحد للواجهة ولطبقة البيانات).
-    void getCustomerPreviousBalance(customerId)
+    // سيُثبَّت على الفاتورة حرفياً، مع احترام تاريخ الفاتورة الذي اختاره المستخدم.
+    void getCustomerPreviousBalance(customerId, dateISO)
       .then((debt) => {
-        if (!cancelled) setCustomerDebt({ customerId, amount: debt });
+        if (!cancelled) setCustomerDebt({ customerId, dateISO, amount: debt });
       })
       .catch((error) => {
         if (!cancelled) logBackgroundFailure('تعذّر حساب دين الزبون السابق:', error);
@@ -190,11 +189,14 @@ export function InvoiceForm() {
     return () => {
       cancelled = true;
     };
-  }, [isEdit, selectedCustomer?.id]);
+  }, [date, isEdit, selectedCustomer?.id]);
 
-  /** دين الزبون المختار فعلاً (يُهمَل أي قراءة تخص زبوناً آخر بعد تبديله). */
+  /** دين الزبون المختار فعلاً (يُهمَل أي قراءة تخص زبون أو تاريخ آخر). */
+  const selectedDateISO = toISOStringOrNull(date);
   const liveCustomerDebt =
-    !isEdit && customerDebt && customerDebt.customerId === selectedCustomer?.id ? customerDebt.amount : 0;
+    !isEdit && customerDebt && customerDebt.customerId === selectedCustomer?.id && customerDebt.dateISO === selectedDateISO
+      ? customerDebt.amount
+      : 0;
 
   const filteredMaterials = useMemo(() => {
     const query = searchMaterial.trim().toLowerCase();
@@ -315,7 +317,7 @@ export function InvoiceForm() {
           materialName: item.material.name,
           quantity: toFiniteNumber(item.quantity),
           unitPrice: toFiniteNumber(item.unitPrice),
-          purchasePrice: item.material.purchasePrice
+          unitCost: item.material.averageCost
         }))
       };
 
@@ -424,14 +426,10 @@ export function InvoiceForm() {
             {isEdit ? 'تعديل فاتورة' : 'فاتورة بيع جديدة'}
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            بيع للزبون: تخرج المواد من المخزن وتُسجَّل مبيعاتك نقداً أو ديناً — ولشراء المواد من مورد استخدم وصل الشراء.
+            بيع للزبون: تخرج المواد من المخزن وتُسجَّل مبيعاتك نقداً أو ديناً. أدخل الكميات الجديدة وتكلفتها من صفحة المخزن.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setShowHelp(true)}>
-            <HelpCircle className="w-4 h-4 ml-1" />
-            ما الفرق؟
-          </Button>
           <Button variant="outline" onClick={() => goBack('/invoices')}>رجوع للفواتير</Button>
         </div>
       </div>
@@ -756,7 +754,6 @@ export function InvoiceForm() {
         </div>
       </div>
 
-      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       <QuickAddMaterialDialog
         open={showQuickAdd}

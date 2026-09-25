@@ -166,7 +166,7 @@ describe('اسم المكتب في التشغيل الأول وإعادة الت
 
     const invoiceHtml = buildInvoicePrintHtml(sampleInvoice(), sampleItems, settings);
     expect(invoiceHtml).toContain(LONG_NAME);
-    // ونفس الاسم في ترويسة الوصل الحراري
+    // ونفس الاسم في ترويسة وصل القبض القياسي
     const receiptHtml = buildReceiptPrintHtml(
       {
         id: 1,

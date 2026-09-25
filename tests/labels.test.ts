@@ -53,10 +53,9 @@ describe('تسميات عربية لكل قيمة داخلية (لا system ول
 });
 
 describe('أرقام المستندات بالعربية', () => {
-  it('تعرض الأرقام القديمة (INV/REC/PUR) بالبادئة العربية مع الأرقام نفسها', () => {
+  it('تعرض الأرقام القديمة (INV/REC) بالبادئة العربية مع الأرقام نفسها', () => {
     expect(formatDocumentNumber('INV-202609-0001')).toBe('ف-202609-0001');
     expect(formatDocumentNumber('REC-2026-00012')).toBe('ق-2026-00012');
-    expect(formatDocumentNumber('PUR-202609-0003')).toBe('ش-202609-0003');
     expect(formatDocumentNumber('INV-RESTORED-4')).toBe('ف-مستعاد-4');
     expect(formatDocumentNumber('INV-OLD-1')).toBe('ف-قديم-1');
     // الأرقام الجديدة عربية أصلاً وتبقى كما هي

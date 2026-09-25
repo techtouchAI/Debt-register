@@ -39,10 +39,10 @@ describe('وثيقة SVG للتصوير', () => {
     expect(svg).toContain('الرصيد السابق');
   });
 
-  it('يتقبل عرض الوصل الحراري (302 بكسل) بلا افتراضات مقاس', () => {
-    const svg = buildSvgDocument('', '<div class="doc"></div>', 302, 600);
-    expect(svg).toContain('width="302" height="600"');
-    expect(svg).toContain('width:302px');
+  it('يبني SVG بعرض ورقة قياسية دون افتراضات محتوى', () => {
+    const svg = buildSvgDocument('', '<div class="doc"></div>', 794, 1123);
+    expect(svg).toContain('width="794" height="1123"');
+    expect(svg).toContain('width:794px');
   });
 });
 

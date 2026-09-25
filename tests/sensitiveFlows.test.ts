@@ -283,8 +283,8 @@ describe('استيراد نسخة تالفة أو ناقصة (بند 6)', () => 
         invoices: [],
         invoiceItems: [],
         payments: [],
-        purchases: [],
-        purchaseItems: []
+        customerLedger: [],
+        stockMovements: []
       }
     };
 
@@ -302,7 +302,7 @@ describe('استيراد نسخة تالفة أو ناقصة (بند 6)', () => 
 
     const partial: BackupData = {
       ...backup,
-      data: { ...backup.data, payments: [...backup.data.payments, { ...backup.data.payments[0] }] }
+      data: { ...backup.data, settings: [] }
     };
 
     const restore = await restoreBackupData(partial);

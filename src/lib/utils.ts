@@ -175,10 +175,6 @@ export function formatDateInput(value?: string | Date | null): string {
  * حالة المخزون
  * ------------------------------------------------------------------ */
 
-export function calculateProfit(salePrice: number, purchasePrice: number | undefined, quantity: number): number {
-  if (!Number.isFinite(purchasePrice as number) || (purchasePrice as number) <= 0) return 0
-  return roundMoney((salePrice - (purchasePrice as number)) * quantity)
-}
 
 export function getStockStatus(quantity: number, minQuantity: number): 'out' | 'low' | 'normal' {
   const qty = toFiniteNumber(quantity)

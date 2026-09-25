@@ -27,7 +27,7 @@ interface DocumentPreviewDialogProps {
   bodyHtml: string;
   /** اسم ملف المستند عند الحفظ (بدون لاحقة) */
   fileNameBase: string;
-  pdfFormat?: 'a4' | 'receipt80';
+  pdfFormat?: 'a4';
   shareTitle?: string;
   /** رسالة توضيحية اختيارية أعلى المستند (تعرض عند تعذّر حوار الطباعة) */
   notice?: string;
@@ -161,7 +161,7 @@ export function DocumentPreviewDialog({
             حفظ كمستند
           </Button>
           <span className="hidden text-[11px] text-gray-500 sm:inline">
-            الورقة {pdfFormat === 'receipt80' ? 'حرارية 80 مم' : 'A4'} — عرض {sheetRenderWidthPx(pdfFormat)} بكسل بالحجم الحقيقي
+            ورقة قياسية — عرض {sheetRenderWidthPx(pdfFormat)} بكسل بالحجم الحقيقي
           </span>
           <Button variant="ghost" onClick={onClose} disabled={busy} className="mr-auto">
             إغلاق

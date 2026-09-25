@@ -1,17 +1,18 @@
 import { logBackgroundFailure } from './lifecycle';
 import { assertPermission } from './session';
 import { db, logActivity, createNotification, checkLowStock, getSettingsOrDefault } from './db';
-import { previousBalanceFromLedger } from './debts';
+import { getLedgerBalanceBefore, removeLedgerEntry, removePaymentLedger, syncInvoiceLedger, syncPaymentLedger } from './ledger';
+import { replaceInvoiceSaleMovements } from './inventory';
 import { nextInvoiceNumber, nextReceiptNumber } from './sequence';
 import { formatCurrency, roundMoney, toFiniteNumber } from './utils';
-import type { Invoice, InvoiceItem } from '@/types';
+import type { Invoice, InvoiceItem, Payment } from '@/types';
 
 export interface InvoiceDraftItem {
   materialId: number;
   materialName: string;
   quantity: number;
   unitPrice: number;
-  purchasePrice?: number;
+  unitCost?: number;
 }
 
 export interface InvoiceDraft {
@@ -124,8 +125,13 @@ export async function reallocateCustomerInvoices(customerId: number): Promise<vo
     return (a.id ?? 0) - (b.id ?? 0);
   });
 
-  const payments = await db.payments.where('customerId').equals(customerId).toArray();
-  let pool = roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0));
+  // المبلغ القابل للتوزيع مستخرج من دفتر الذمم، لا من حقول الفواتير.
+  const ledger = await db.customerLedger.where('customerId').equals(customerId).toArray();
+  let pool = roundMoney(
+    ledger
+      .filter((entry) => entry.type === 'payment' || (entry.type === 'discount' && entry.amount < 0))
+      .reduce((sum, entry) => sum + Math.abs(toFiniteNumber(entry.amount)), 0)
+  );
   const now = new Date().toISOString();
 
   for (const invoice of invoices) {
@@ -187,7 +193,7 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
   // db.meta ضمن النطاق لأن مولّد الأرقام التسلسلية يحفظ علامته فيه
   const result = await db.transaction(
     'rw',
-    [db.invoices, db.invoiceItems, db.materials, db.payments, db.customers, db.meta],
+    [db.invoices, db.invoiceItems, db.materials, db.payments, db.customers, db.customerLedger, db.stockMovements, db.meta],
     async (): Promise<InvoiceSaveResult> => {
       const now = new Date().toISOString();
 
@@ -216,11 +222,12 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
         draft.type === 'credit' && typeof draft.customerId === 'number'
           ? sameCustomerAsStored
             ? Math.max(0, roundMoney(toFiniteNumber(existing?.previousBalance)))
-            : previousBalanceFromLedger(
-                draft.customerId,
-                await db.invoices.where('customerId').equals(draft.customerId).toArray(),
-                await db.payments.where('customerId').equals(draft.customerId).toArray(),
-                isEdit ? (draft.id as number) : undefined
+            : Math.max(
+                0,
+                await getLedgerBalanceBefore(draft.customerId, dateISO, {
+                  type: 'invoice',
+                  referenceId: isEdit ? (draft.id as number) : undefined
+                })
               )
           : 0;
       // المطلوب من الزبون عند إصدار الفاتورة: قيمة الفاتورة + دينه القديم
@@ -244,13 +251,14 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
       /* --- 2) التحقق من توفر المخزون قبل أي كتابة --- */
       const materialIds = Array.from(new Set([...requested.keys(), ...previous.keys()]));
       const materials = await db.materials.bulkGet(materialIds);
-      const stockById = new Map<number, { id: number; name: string; quantity: number }>();
+      const stockById = new Map<number, { id: number; name: string; quantity: number; averageCost: number }>();
       for (const material of materials) {
         if (material?.id !== undefined) {
           stockById.set(material.id, {
             id: material.id,
             name: material.name,
-            quantity: toFiniteNumber(material.quantity)
+            quantity: toFiniteNumber(material.quantity),
+            averageCost: Math.max(0, toFiniteNumber(material.averageCost))
           });
         }
       }
@@ -334,8 +342,8 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
           quantity: roundMoney(toFiniteNumber(item.quantity)),
           unitPrice: roundMoney(toFiniteNumber(item.unitPrice)),
           total: lineTotal,
-          purchasePrice: Number.isFinite(toFiniteNumber(item.purchasePrice, NaN))
-            ? toFiniteNumber(item.purchasePrice)
+          unitCost: Number.isFinite(toFiniteNumber(item.unitCost, NaN))
+            ? toFiniteNumber(item.unitCost)
             : undefined
         };
         record.id = (await db.invoiceItems.add(record)) as number;
@@ -352,7 +360,17 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
         });
       }
 
-      /* --- 5) إدارة دفعة المقدمة كسجل قبض حقيقي --- */
+      /* --- 5) دفتر المخزون والذمم داخل المعاملة نفسها --- */
+      await replaceInvoiceSaleMovements(
+        invoiceId,
+        savedItems,
+        new Map(Array.from(stockById, ([id, stock]) => [id, stock.averageCost])),
+        dateISO
+      );
+      const savedInvoiceForLedger = (await db.invoices.get(invoiceId)) as Invoice;
+      await syncInvoiceLedger(savedInvoiceForLedger);
+
+      /* --- 6) إدارة دفعة المقدمة كسجل قبض حقيقي ودفتر ذمم --- */
       await syncDownPayment({
         invoiceId,
         invoiceNumber,
@@ -364,7 +382,7 @@ export async function saveInvoice(draft: InvoiceDraft): Promise<InvoiceSaveResul
         type: draft.type
       });
 
-      /* --- 6) إعادة توزيع المسددات على كل الزبائن المتأثرين --- */
+      /* --- 7) إعادة توزيع المسددات على كل الزبائن المتأثرين --- */
       // يلزم ذلك حتى عند تحويل فاتورة آجلة إلى نقدية، أو نقلها من زبون
       // لآخر؛ وإلا يبقى رصيد الفاتورة القديمة مخزناً على الزبون السابق.
       const affectedCustomerIds = new Set<number>();
@@ -436,7 +454,10 @@ async function syncDownPayment(args: {
   if (!shouldKeep) {
     if (existingDownPaymentId !== undefined) {
       const linked = await db.payments.get(existingDownPaymentId);
-      if (linked?.source === 'downpayment') await db.payments.delete(existingDownPaymentId);
+      if (linked?.source === 'downpayment') {
+        await removePaymentLedger(linked.id);
+        await db.payments.delete(existingDownPaymentId);
+      }
     }
     // لا نترك مرجعاً ميتاً إذا كانت النسخة القديمة تشير إلى سجل قبض
     // محذوف أو تغيّر نوع الفاتورة إلى نقدية.
@@ -459,6 +480,7 @@ async function syncDownPayment(args: {
         source: 'downpayment',
         invoiceId
       });
+      await syncPaymentLedger((await db.payments.get(existingDownPaymentId)) as Payment);
       return;
     }
   }
@@ -477,6 +499,7 @@ async function syncDownPayment(args: {
     invoiceId
   })) as number;
 
+  await syncPaymentLedger((await db.payments.get(paymentId)) as Payment);
   await db.invoices.update(invoiceId, { downPaymentId: paymentId });
 }
 
@@ -491,7 +514,7 @@ export async function deleteInvoice(invoiceId: number): Promise<InvoiceDeleteRes
 
   const result = await db.transaction(
     'rw',
-    [db.invoices, db.invoiceItems, db.materials, db.payments],
+    [db.invoices, db.invoiceItems, db.materials, db.payments, db.customerLedger, db.stockMovements],
     async (): Promise<InvoiceDeleteResult> => {
       const invoice = await db.invoices.get(invoiceId);
       if (!invoice) return { ok: false, error: 'الفاتورة غير موجودة' };
@@ -520,9 +543,15 @@ export async function deleteInvoice(invoiceId: number): Promise<InvoiceDeleteRes
       /* حذف دفعة المقدمة المرتبطة إن وُجدت */
       if (invoice.downPaymentId !== undefined) {
         const linked = await db.payments.get(invoice.downPaymentId);
-        if (linked?.source === 'downpayment') await db.payments.delete(invoice.downPaymentId);
+        if (linked?.source === 'downpayment') {
+          await removePaymentLedger(linked.id);
+          await db.payments.delete(invoice.downPaymentId);
+        }
       }
 
+      await removeLedgerEntry('invoice', invoiceId);
+      const saleMovements = await db.stockMovements.where('[type+referenceId]').equals(['sale', invoiceId]).toArray();
+      if (saleMovements.length) await db.stockMovements.bulkDelete(saleMovements.map((movement) => movement.id).filter((id): id is number => typeof id === 'number'));
       await db.invoiceItems.where('invoiceId').equals(invoiceId).delete();
       await db.invoices.delete(invoiceId);
 

@@ -94,7 +94,7 @@ describe('شاشة الدخول برمز المستخدم', () => {
 });
 
 describe('موظف المبيعات: بيع فقط', () => {
-  it('لا يرى المشتريات والتقارير والنسخ والإعدادات، ولا إجراءات المدير السريعة', async () => {
+  it('لا يرى التقارير والنسخ والإعدادات، ولا إجراءات المدير السريعة', async () => {
     await seedTeam();
     window.location.hash = '#/';
     render(<App />);
@@ -104,12 +104,11 @@ describe('موظف المبيعات: بيع فقط', () => {
     for (const allowed of ['لوحة التحكم', 'المخزن والمواد', 'العملاء', 'الفواتير والمبيعات', 'التسديدات']) {
       expect(within(nav).getByText(allowed)).toBeTruthy();
     }
-    for (const hidden of ['وصول الشراء', 'التقارير', 'النسخ الاحتياطي', 'الإعدادات']) {
+    for (const hidden of ['التقارير', 'النسخ الاحتياطي', 'الإعدادات']) {
       expect(within(nav).queryByText(hidden)).toBeNull();
     }
     expect(screen.getByText('فاتورة بيع جديدة')).toBeTruthy();
     expect(screen.getByText('تسديد دين')).toBeTruthy();
-    expect(screen.queryByText('وصل شراء جديد')).toBeNull();
     expect(screen.queryByText('إضافة مادة')).toBeNull();
   });
 
@@ -147,7 +146,7 @@ describe('موظف المبيعات: بيع فقط', () => {
       () =>
         expect(
           screen.getByText(
-            'مبيعاتك: تخرج المواد من المخزن وتُسجَّل على الزبون نقداً أو ديناً — أما شراء المواد من الموردين فيُسجَّل في وصول الشراء.'
+            'مبيعاتك: تخرج المواد من المخزن وتُسجَّل على الزبون نقداً أو ديناً. أدخل الكميات الجديدة وتكلفتها من صفحة المخزن.'
           )
         ).toBeTruthy(),
       { timeout: 5000 }
@@ -165,28 +164,26 @@ describe('إدارة المستخدمين من الإعدادات لها أثر 
     window.location.hash = '#/settings';
     render(<App />);
     await waitFor(() => expect(screen.getByTestId('lock-status')).toBeTruthy(), { timeout: 5000 });
-    expect(screen.getByTestId('lock-status').textContent).toContain('قفل الدخول غير مفعّل');
+    expect(screen.getByTestId('lock-status').textContent).toContain('بوابة الدخول غير مفعّلة');
 
     fireEvent.click(screen.getByRole('button', { name: 'إضافة مستخدم' }));
     const dialog = await screen.findByRole('dialog', { name: 'إضافة مستخدم جديد' });
-    // بلا اسم ولا رمز: رسائل عربية تحت الحقول (لا يبقى الزر "لا يفعل شيئاً")
+    // الاسم يبقى إلزامياً، أما رمز الدخول فهو اختياري.
     fireEvent.click(within(dialog).getByRole('button', { name: 'إضافة المستخدم' }));
     await waitFor(() => expect(within(dialog).getByText('اسم المستخدم مطلوب')).toBeTruthy());
-    expect(within(dialog).getByText('رمز الدخول مطلوب (من 4 إلى 8 أرقام)')).toBeTruthy();
 
     fireEvent.change(within(dialog).getByLabelText('اسم المستخدم'), { target: { value: 'سارة' } });
-    fireEvent.change(within(dialog).getByLabelText('رمز الدخول'), { target: { value: '2468' } });
+    fireEvent.change(within(dialog).getByLabelText(/رمز الدخول/), { target: { value: '2468' } });
     fireEvent.change(within(dialog).getByLabelText('تأكيد الرمز'), { target: { value: '2468' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'إضافة المستخدم' }));
 
     await waitFor(() => expect(screen.getAllByTestId('user-row')).toHaveLength(2), { timeout: 5000 });
     const stored = await db.users.where('name').equals('سارة').first();
     expect(stored?.role).toBe('sales');
-    await waitFor(() => expect(screen.getByTestId('lock-status').textContent).toContain('قفل الدخول مفعّل'));
+    await waitFor(() => expect(screen.getByTestId('lock-status').textContent).toContain('بوابة الدخول مفعّلة'));
     // اقتراح رمز الاسترداد بعد تفعيل القفل
     fireEvent.click(await screen.findByRole('button', { name: 'لاحقاً' }));
-    // تحذير الرمز الافتراضي للمدير بعد تفعيل القفل
-    expect(await screen.findByText(/ما زال الرمز الافتراضي/)).toBeTruthy();
+    expect(screen.queryByText(/الرمز الافتراضي/)).toBeNull();
     // زر القفل يظهر الآن في الشريط العلوي
     expect(await screen.findByLabelText('قفل التطبيق وتبديل المستخدم')).toBeTruthy();
   });

@@ -2,11 +2,9 @@
  * الدخول برمز (PIN) — نظام محلي بالكامل بلا إنترنت.
  *
  * متى يُطلب الدخول؟ (قفل الدخول)
- *   - أكثر من مستخدم واحد، أو
- *   - مستخدم واحد غيّر رمزه عن الرمز الافتراضي (1234).
- *   أما المكتب الذي لم يضف مستخدمين ولم يغيّر الرمز الافتراضي فيدخل مباشرة
- *   كمدير (سلوك الإصدارات السابقة) — فلا يُفاجأ أي مستخدم قائم بقفل لا يعرف
- *   رمزه. بمجرد إضافة موظف أو تغيير رمز المدير يصبح الدخول إلزامياً.
+ *   - إذا فُعّل رمز دخول لأي مستخدم، أو وُجد أكثر من مستخدم لاختيار الهوية.
+ *   - مدير وحيد بلا رمز يدخل مباشرة، بلا رمز افتراضي أو حاجز إجباري.
+ *   - يمكن لكل حساب تعطيل رمزه صراحةً؛ لا نخزّن رمزاً فارغاً أو معروفاً كبديل.
  *
  * الحماية:
  *   - الرموز محفوظة كبصمات SHA-256 مملّحة (`security.ts`)، والرموز القديمة
@@ -23,8 +21,6 @@ import { logBackgroundFailure } from './lifecycle';
 import type { Role } from './permissions';
 import type { User } from '@/types';
 
-/** الرمز الافتراضي للمدير في التثبيت الجديد. */
-export const DEFAULT_ADMIN_PIN = '1234';
 export const MAX_FAILED_ATTEMPTS = 5;
 export const LOCKOUT_MS = 30_000;
 /** مفتاح بصمة رمز الاسترداد في جدول meta (ينتقل مع النسخة الاحتياطية). */
@@ -37,8 +33,8 @@ export interface LoginUserSummary {
   id: number;
   name: string;
   role: Role;
-  /** هل ما زال رمزه هو الافتراضي (1234)؟ */
-  hasDefaultPin: boolean;
+  /** هل لهذا الحساب رمز دخول مفعّل ومحفوظ كبصمة؟ */
+  hasPin: boolean;
   lastLogin?: string;
 }
 
@@ -56,14 +52,9 @@ function toSessionUser(user: User): SessionUser {
   return { id: user.id as number, name: user.name, role: user.role === 'admin' ? 'admin' : 'sales' };
 }
 
-/** هل الرمز المخزّن هو الرمز الافتراضي؟ */
-export async function isDefaultPin(storedPin: string | undefined): Promise<boolean> {
-  if (!storedPin) return false;
-  try {
-    return await verifyPin(DEFAULT_ADMIN_PIN, storedPin);
-  } catch {
-    return false;
-  }
+/** هل للحساب رمز دخول مفعّل؟ الرمز نفسه لا يخرج من طبقة الأمان. */
+export function hasConfiguredPin(storedPin: string | undefined): boolean {
+  return typeof storedPin === 'string' && storedPin.length > 0;
 }
 
 /** المستخدمون كما تعرضهم شاشة الدخول (المدراء أولاً ثم أبجدياً). */
@@ -74,7 +65,7 @@ export async function listLoginUsers(): Promise<LoginUserSummary[]> {
       id: user.id,
       name: user.name,
       role: (user.role === 'admin' ? 'admin' : 'sales') as Role,
-      hasDefaultPin: await isDefaultPin(user.pin),
+      hasPin: hasConfiguredPin(user.pin),
       lastLogin: user.lastLogin
     }))
   );
@@ -82,10 +73,8 @@ export async function listLoginUsers(): Promise<LoginUserSummary[]> {
 }
 
 /** هل يجب عرض شاشة الدخول؟ */
-export function loginRequiredFor(users: readonly Pick<LoginUserSummary, 'hasDefaultPin'>[]): boolean {
-  if (users.length === 0) return false;
-  if (users.length > 1) return true;
-  return !users[0].hasDefaultPin;
+export function loginRequiredFor(users: readonly Pick<LoginUserSummary, 'hasPin'>[]): boolean {
+  return users.length > 1 || users.some((user) => user.hasPin);
 }
 
 export async function isLoginRequired(): Promise<boolean> {
@@ -93,7 +82,7 @@ export async function isLoginRequired(): Promise<boolean> {
 }
 
 /**
- * دخول تلقائي عندما لا يكون القفل مفعّلاً (مدير واحد برمز افتراضي).
+ * دخول تلقائي عندما لا يكون القفل مفعّلاً (حساب وحيد بلا PIN).
  * @returns true إن تم الدخول (أو كانت هناك جلسة أصلاً).
  */
 export async function tryAutoSignIn(): Promise<boolean> {
@@ -101,7 +90,7 @@ export async function tryAutoSignIn(): Promise<boolean> {
   const users = await listLoginUsers();
   if (loginRequiredFor(users)) return false;
   const admin = users.find((user) => user.role === 'admin') ?? users[0];
-  if (!admin) return false;
+  if (!admin || admin.hasPin) return false;
   const record = await db.users.get(admin.id);
   if (!record || typeof record.id !== 'number') return false;
   // "آخر دخول" صحيح في قائمة المستخدمين حتى مع الدخول التلقائي (بلا سجل
@@ -190,15 +179,28 @@ export function lastSignedInUserId(): number | null {
   }
 }
 
+async function completeSignIn(user: User & { id: number }, now: number, upgradedPin?: string): Promise<SignInResult> {
+  clearFailures();
+  const lastLogin = new Date(now).toISOString();
+  await db.users.update(user.id, { lastLogin, ...(upgradedPin ? { pin: upgradedPin } : {}) });
+  const session = toSessionUser(user);
+  setSessionUser(session);
+  rememberLastUser(user.id);
+  void logActivity('تسجيل دخول', `دخل المستخدم: ${user.name}`, 'user', user.id).catch((error) =>
+    logBackgroundFailure('تعذّر تسجيل الدخول في سجل النشاط:', error)
+  );
+  return { ok: true, user: session };
+}
+
 export async function signIn(userId: number, rawPin: string, now: number = Date.now()): Promise<SignInResult> {
   const remaining = lockoutRemainingMs(now);
   if (remaining > 0) return { ok: false, reason: 'locked', retryAfterMs: remaining };
 
   const pin = normalizePin(rawPin);
   if (!isValidPin(pin)) return { ok: false, reason: 'invalid-pin-format' };
-
   const user = await db.users.get(userId);
   if (!user || typeof user.id !== 'number') return { ok: false, reason: 'not-found' };
+  if (!hasConfiguredPin(user.pin)) return { ok: false, reason: 'invalid' as const, remainingAttempts: MAX_FAILED_ATTEMPTS };
 
   const valid = await verifyPin(pin, user.pin);
   if (!valid) {
@@ -212,19 +214,19 @@ export async function signIn(userId: number, rawPin: string, now: number = Date.
     return { ok: false, reason: 'invalid', remainingAttempts: failure.remaining };
   }
 
-  clearFailures();
-  const lastLogin = new Date(now).toISOString();
-  // رمز قديم محفوظ نصاً: يُحوَّل لبصمة الآن بعد التحقق منه
+  // رمز قديم محفوظ نصاً: يُحوَّل لبصمة بعد التحقق منه.
   const upgradedPin = isHashedPin(user.pin) ? undefined : await hashPin(pin);
-  await db.users.update(user.id, { lastLogin, ...(upgradedPin ? { pin: upgradedPin } : {}) });
+  return completeSignIn({ ...user, id: user.id }, now, upgradedPin);
+}
 
-  const session = toSessionUser(user);
-  setSessionUser(session);
-  rememberLastUser(user.id);
-  void logActivity('تسجيل دخول', `دخل المستخدم: ${user.name}`, 'user', user.id).catch((error) =>
-    logBackgroundFailure('تعذّر تسجيل الدخول في سجل النشاط:', error)
-  );
-  return { ok: true, user: session };
+/** دخول اختياري بلا رمز لحساب تعطّلت حمايته صراحةً. */
+export async function signInWithoutPin(userId: number, now: number = Date.now()): Promise<SignInResult> {
+  const remaining = lockoutRemainingMs(now);
+  if (remaining > 0) return { ok: false, reason: 'locked', retryAfterMs: remaining };
+  const user = await db.users.get(userId);
+  if (!user || typeof user.id !== 'number') return { ok: false, reason: 'not-found' };
+  if (hasConfiguredPin(user.pin)) return { ok: false, reason: 'invalid', remainingAttempts: MAX_FAILED_ATTEMPTS };
+  return completeSignIn({ ...user, id: user.id }, now);
 }
 
 /** تسجيل الخروج (قفل الشاشة / تبديل المستخدم). */

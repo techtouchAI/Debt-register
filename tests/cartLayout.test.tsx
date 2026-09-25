@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import { seedOfficeProfile } from './helpers';
 
 /**
- * عقد تخطيط سلة المواد في نموذجي الفاتورة ووصل الشراء.
+ * عقد تخطيط سلة المواد في نموذج الفاتورة.
  *
  * العلّة التي يحرسها الاختبار: الأعمدة الرقمية في جدول من 12 عموداً كانت
  * تضيق على شاشات الهاتف حتى يظهر رقم واحد من السعر أو الكمية (قصّ داخل
@@ -94,26 +94,6 @@ describe('سلة المواد — تخطيط متجاوب لا يقصّ الأر
     const header = screen.getByText('السعر المفرد', { selector: 'div' });
     expect(header.parentElement?.className).toContain('hidden');
     expect(header.parentElement?.className).toContain('sm:grid');
-  });
-
-  it('في وصل الشراء: الحقول تأخذ نصف العرض على الجوال أيضاً', async () => {
-    await bootForm('#/purchases/new', 'سماد يوريا', /ابحث عن مادة مسجلة/);
-
-    const quantity = (await screen.findByLabelText('كمية سماد يوريا', undefined, { timeout: 5000 })) as HTMLInputElement;
-    const price = screen.getByLabelText('سعر شراء سماد يوريا') as HTMLInputElement;
-
-    const line = lineOf(quantity);
-    expect(line.className).toContain('grid-cols-2');
-    expect(line.className).toContain('sm:grid-cols-12');
-    expect(line.contains(price)).toBe(true);
-
-    expectFluidWidth(quantity);
-    expectFluidWidth(price);
-
-    const priceCell = price.parentElement as HTMLElement;
-    const hint = priceCell.querySelector('span') as HTMLElement;
-    expect(hint.textContent).toBe('سعر الشراء');
-    expect(hint.className).toContain('sm:hidden');
   });
 
   it('يُكتب الرقم كاملاً داخل الحقل بلا حد أقصى للطول', async () => {

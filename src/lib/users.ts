@@ -19,12 +19,14 @@ export const MAX_USER_NAME_LENGTH = 60;
 export interface UserInput {
   name: string;
   role: Role;
-  /** فارغ عند التعديل = الإبقاء على الرمز الحالي */
+  /** فارغ = عدم إنشاء رمز جديد؛ عند التعديل يبقي الرمز الحالي ما لم يعطّل صراحةً. */
   pin?: string;
   confirmPin?: string;
+  /** تعطيل PIN لحساب موجود؛ لا يقبل مع رمز جديد. */
+  disablePin?: boolean;
 }
 
-export type UserField = 'name' | 'role' | 'pin' | 'confirmPin';
+export type UserField = 'name' | 'role' | 'pin' | 'confirmPin' | 'disablePin';
 export type UserErrors = Partial<Record<UserField, string>>;
 
 /** خطأ تحقق يحمل رسالة لكل حقل (يُعرض تحت الحقل في النموذج). */
@@ -75,10 +77,9 @@ export async function validateUserInput(input: UserInput, editingId?: number): P
 
   const pin = normalizePin(input.pin ?? '');
   const confirmPin = normalizePin(input.confirmPin ?? '');
-  const isEditing = editingId !== undefined;
-  if (!pin) {
-    if (!isEditing) errors.pin = 'رمز الدخول مطلوب (من 4 إلى 8 أرقام)';
-  } else if (!isValidPin(pin)) {
+  if (input.disablePin && pin) {
+    errors.pin = 'امسح الرمز الجديد قبل تعطيل الحماية';
+  } else if (pin && !isValidPin(pin)) {
     errors.pin = 'رمز الدخول يجب أن يكون من 4 إلى 8 أرقام فقط';
   } else if (pin !== confirmPin) {
     errors.confirmPin = 'تأكيد الرمز غير مطابق';
@@ -98,7 +99,7 @@ export async function createUser(input: UserInput): Promise<number> {
   const validation = await validateUserInput(input);
   if (!validation.ok) throw new UserValidationError(validation.errors);
   const { name, role, pin } = validation.value;
-  const pinHash = await hashPin(pin as string);
+  const pinHash = pin ? await hashPin(pin) : '';
   const id = (await db.users.add({ name, role, pin: pinHash, createdAt: new Date().toISOString() })) as number;
   void logActivity('إضافة مستخدم', `تمت إضافة المستخدم ${name} (${roleLabel(role)})`, 'user', id).catch((error) =>
     logBackgroundFailure('تعذّر تسجيل إضافة المستخدم:', error)
@@ -121,7 +122,7 @@ export async function updateUser(id: number, input: UserInput): Promise<void> {
   }
 
   const pinHash = pin ? await hashPin(pin) : undefined;
-  await db.users.update(id, { name, role, ...(pinHash ? { pin: pinHash } : {}) });
+  await db.users.update(id, { name, role, ...(pinHash ? { pin: pinHash } : input.disablePin ? { pin: '' } : {}) });
 
   // الجلسة الحالية تتحدّث فوراً (الاسم في الشريط العلوي، والصلاحيات)
   const session = getSessionUser();
@@ -130,7 +131,7 @@ export async function updateUser(id: number, input: UserInput): Promise<void> {
   const changes = [
     existing.name !== name ? `الاسم إلى ${name}` : '',
     existing.role !== role ? `الصلاحية إلى ${roleLabel(role)}` : '',
-    pinHash ? 'رمز الدخول' : ''
+    pinHash ? 'رمز الدخول' : input.disablePin ? 'تعطيل رمز الدخول' : ''
   ].filter(Boolean);
   void logActivity('تعديل مستخدم', `تعديل المستخدم ${existing.name}${changes.length ? `: ${changes.join('، ')}` : ''}`, 'user', id).catch(
     (error) => logBackgroundFailure('تعذّر تسجيل تعديل المستخدم:', error)

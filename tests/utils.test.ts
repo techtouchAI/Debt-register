@@ -13,7 +13,6 @@ import {
   sanitizeFileName,
   getStockStatus,
   toISOStringOrNull,
-  calculateProfit,
   formatDate,
   isValidDate
 } from '@/lib/utils';
@@ -36,12 +35,6 @@ describe('الأرقام والمبالغ', () => {
     expect(toFiniteNumber('abc', 5)).toBe(5);
     expect(toFiniteNumber(undefined, 7)).toBe(7);
     expect(toFiniteNumber(null, NaN)).toBeNaN();
-  });
-
-  it('يحسب الربح ويتجاهل سعر الشراء المفقود', () => {
-    expect(calculateProfit(2000, 1500, 4)).toBe(2000);
-    expect(calculateProfit(2000, undefined, 4)).toBe(0);
-    expect(calculateProfit(2000, 0, 4)).toBe(0);
   });
 });
 
