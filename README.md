@@ -138,8 +138,9 @@ npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app @ca
 # 3. إضافة منصة Android
 npx cap add android
 
-# 4. نسخ البناء ومزامنة
+# 4. نسخ البناء ومزامنة ثم التجهيز (الصلاحيات + أيقونة التطبيق وشاشة البدء + مزوّد الملفات)
 npx cap sync android
+npm run cap:prepare
 
 # 5. فتح في Android Studio وبناء APK
 npx cap open android
@@ -150,7 +151,7 @@ npx cap open android
 - حفظ النسخ والمستندات في `المستندات/إدارة المكتب/` مع التاريخ والاسم
 - إشعارات منبثقة خارج التطبيق
 - يعمل بدون انترنت تماماً
-- أيقونة واسم عربي
+- أيقونة احترافية (وصل بختم «تم التسديد») تتكيّف مع شكل أيقونات الجهاز وسمة ألوانه، واسم عربي
 
 ### 🪟 Windows 10/11 (برنامج مخصص)
 **المتطلبات**: Node.js + Electron + electron-builder
@@ -220,6 +221,8 @@ src/
 
 tests/                       # اختبارات وحدة وتكامل (Vitest + fake-indexeddb)
 electron/                    # غلاف ويندوز (main.cjs + preload.cjs)
+resources/icon/              # مصدر أيقونة التطبيق (SVG) — npm run icons يولّد كل المقاسات
+resources/android/           # موارد أندرويد (الأيقونات، شاشة البدء، مسارات المزوّد) ينسخها cap:prepare
 desktop/                     # غلاف Tauri (اختياري)
 capacitor.config.json        # إعدادات أندرويد
 electron-builder.json        # إعدادات بناء ويندوز
@@ -234,6 +237,7 @@ npm run lint        # ESLint 9 (flat config)
 npm run typecheck   # tsc --noEmit (strict)
 npm test            # اختبارات الوحدة والتكامل: الفواتير، التسديدات، النسخ، المستخدمون والصلاحيات، الواجهة العربية، الإقلاع
 npm run audit:shells # تدقيق أغلفة أندرويد/ويندوز/Tauri
+npm run icons       # توليد أيقونة التطبيق لكل الأنظمة من resources/icon (انظر BUILD_GUIDE.md)
 npm run build       # typecheck + vite build (PWA)
 npm run verify      # audit:shells + lint + typecheck + test + build معاً
 ```

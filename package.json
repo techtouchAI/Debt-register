@@ -20,7 +20,7 @@
     "build:android": "npm run build && (npx cap add android || true) && npm run cap:sync && cd android && ./gradlew assembleDebug",
     "build:windows": "npm run build && electron-builder --win --x64 --publish=never",
     "build:all": "npm run build",
-    "workflow:android": "npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app @capacitor/filesystem @capacitor/local-notifications @capacitor/share --save && npm run build && npx cap add android || true && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "workflow:android": "npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app @capacitor/filesystem @capacitor/local-notifications @capacitor/share --save && npm run build && npx cap add android || true && npx cap sync android && npm run cap:prepare && cd android && ./gradlew assembleDebug",
     "workflow:windows": "npm install electron electron-builder --save-dev && npm run build && npx electron-builder --win --x64 --publish=never",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
@@ -29,7 +29,8 @@
     "test:watch": "vitest",
     "verify": "npm run audit:shells && npm run lint && npm run typecheck && npm run test && npm run build",
     "cap:prepare": "node scripts/prepare-android.mjs",
-    "audit:shells": "node scripts/audit-shells.mjs"
+    "audit:shells": "node scripts/audit-shells.mjs",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
@@ -54,6 +55,7 @@
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",
     "@eslint/js": "^10.0.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^22.20.4",

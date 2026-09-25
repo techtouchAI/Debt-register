@@ -7,6 +7,7 @@
  *   - APK يمنع النص الصريح لكنه يشير لأيقونة غير موجودة ⇒ شريط حالة أبيض.
  *   - NSIS/portable بإعداد ناقص ⇒ بيانات تُمسح عند كل تشغيل (نسخة محمولة).
  *   - Tauri ناقص المعرّف/الأيقونات/الصلاحيات ⇒ فشل بناء أو تطبيق بلا إشعارات.
+ *   - أيقونة تطبيق ناقصة ⇒ أيقونة Capacitor الافتراضية على أندرويد أو شاشة بدء ممطوطة.
  *   - واجهة مبنية بمسارات مطلقة ⇒ شاشة بيضاء تحت file:// داخل الأغلفة.
  *
  * هذا فحص ثابت (لا يحتاج JDK/SDK/Wine) لذلك يعمل في أي بيئة، بينما الفحوص
@@ -157,6 +158,7 @@ async function main() {
   check('اسم ملف النسخة المحمولة واضح', /Portable/.test(JSON.stringify(builder.portable?.artifactName ?? '')));
   check('لا يُحذف مجلد بيانات المستخدم عند إلغاء التثبيت', builder.nsis?.deleteAppDataOnUninstall === false);
   check('أيقونة ويندوز موجودة', existsSync(join(repoRoot, builder.win?.icon ?? '')));
+  check('أيقونة ويندوز ملف ICO متعدد المقاسات (المثبّت والاختصارات وشريط المهام)', /\.ico$/.test(builder.win?.icon ?? ''));
   check('صفحة الخطأ العربية لتعذّر التحميل موجودة', /تعذّر تحميل واجهة التطبيق/.test(mainCjs));
   check('صفحة الخطأ لا تعرض الوصف الإنجليزي التقني من Chromium', !/\$\{errorDescription\}/.test(mainCjs));
   check(
@@ -307,6 +309,45 @@ async function main() {
       /prepareAndroid\(\{ root \}\)/.test(prepareAndroidTests)
   );
   check('سكربت التجهيز متاح من package.json', /prepare-android\.mjs/.test(pkg.scripts?.['cap:prepare'] ?? ''));
+  const launcherRes = 'resources/android/res';
+  const densities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'];
+  const launcherFiles = densities.flatMap((density) => [
+    `mipmap-${density}/ic_launcher.png`,
+    `mipmap-${density}/ic_launcher_round.png`,
+    `mipmap-${density}/ic_launcher_foreground.png`,
+    `drawable-${density}/splash_logo.png`
+  ]);
+  const missingLauncher = [];
+  for (const file of launcherFiles) {
+    if (!(await fileExists(join(repoRoot, launcherRes, file)))) missingLauncher.push(file);
+  }
+  check(
+    `أيقونة التطبيق لكل كثافات أندرويد (قديمة + دائرية + طبقة أمامية + شعار البدء)${missingLauncher.length ? ` — ناقص: ${missingLauncher.join('، ')}` : ''}`,
+    missingLauncher.length === 0
+  );
+  const adaptiveIcon = (await fileText(join(repoRoot, launcherRes, 'mipmap-anydpi-v26/ic_launcher.xml'))) ?? '';
+  check(
+    'الأيقونة التكيفية بخلفية وطبقة أمامية وطبقة أحادية اللون (أندرويد 13+)',
+    /@drawable\/ic_launcher_background/.test(adaptiveIcon) &&
+      /@mipmap\/ic_launcher_foreground/.test(adaptiveIcon) &&
+      /<monochrome android:drawable="@drawable\/ic_launcher_monochrome"/.test(adaptiveIcon) &&
+      (await fileExists(join(repoRoot, launcherRes, 'mipmap-anydpi-v26/ic_launcher_round.xml'))) &&
+      (await fileExists(join(repoRoot, launcherRes, 'drawable/ic_launcher_monochrome.xml')))
+  );
+  const splashXml = (await fileText(join(repoRoot, launcherRes, 'drawable/splash.xml'))) ?? '';
+  check(
+    'شاشة البدء: لون ثابت + شعار في المنتصف (نهاري وليلي) بدل صورة ممطوطة',
+    /android:gravity="center"/.test(splashXml) &&
+      /@drawable\/splash_logo/.test(splashXml) &&
+      (await fileExists(join(repoRoot, launcherRes, 'drawable-night/splash.xml')))
+  );
+  check(
+    'سكربت التجهيز ينسخ أيقونة التطبيق وشاشة البدء ويحذف splash.png القالب (مورد مكرر يُفشل البناء)',
+    /LAUNCHER_RES_SOURCE = 'resources\/android\/res'/.test(prepareAndroid) &&
+      /TEMPLATE_SPLASH_IMAGE/.test(prepareAndroid) &&
+      /installLauncherResources\(/.test(prepareAndroid)
+  );
+  check('مولّد الأيقونات متاح من package.json (npm run icons)', /generate-icons\.mjs/.test(pkg.scripts?.icons ?? ''));
   check(
     'CI يتحقق من مزوّد الملفات وapp_name داخل الناتج الفعلي',
     /fileprovider|FileProvider/.test(workflow) &&
@@ -368,6 +409,15 @@ async function main() {
   section('الواجهة المشتركة (كل الأنظمة)');
   check('الخط مدمج داخل التطبيق — لا تحميل خطوط من الإنترنت', !/fonts\.googleapis\.com/.test(indexHtml) && /@fontsource-variable\/cairo/.test(mainTsx));
   check('منع إفلات الملفات من استبدال الواجهة (ويندوز/المتصفح)', /installDropGuard\(\)/.test(mainTsx));
+  const viteConfig = await readText('vite.config.ts');
+  check(
+    'أيقونة الويب: favicon.svg/ico وأيقونة iOS في index.html',
+    /href="\/favicon\.svg"/.test(indexHtml) && /href="\/favicon\.ico"/.test(indexHtml) && /rel="apple-touch-icon"/.test(indexHtml)
+  );
+  check(
+    'manifest الـ PWA فيه أيقونة any وأيقونة maskable (أندرويد يقصّها بشكل أيقونات الجهاز)',
+    /purpose: 'any'/.test(viteConfig) && /purpose: 'maskable'/.test(viteConfig)
+  );
   check('لا حوارات confirm/prompt الأصلية (أزرار إنجليزية وprompt غير مدعوم في ويندوز)', !(await sourceUsesNativeDialogs()));
 
   /* ------------------------------ CI ------------------------------ */
@@ -378,6 +428,10 @@ async function main() {
   check('مهمة أندرويد تتحقق من موارد الأيقونة داخل APK', /dump resources/.test(workflow));
   check('مهمة أندرويد تتحقق من مزوّد مشاركة الملفات', /fileprovider/.test(workflow));
   check('مهمة أندرويد تتحقق من أيقونة الإشعارات داخل APK', /ic_stat_agri/.test(workflow));
+  check(
+    'مهمة أندرويد تتحقق من أيقونة التطبيق وشاشة البدء (مصدراً وداخل APK)',
+    /resources\/android\/res/.test(workflow) && /ic_launcher_monochrome/.test(workflow) && /splash_logo/.test(workflow)
+  );
   check('مهمة ويندوز تبنى مثبّت + نسخة محمولة', /--win nsis portable/.test(workflow));
   check('مهمة ويندوز تتحقق من محتوى asar', /@electron\/asar list/.test(workflow));
   check('اختبار دخان إلكترون يعمل فعلياً', /electron \. --smoke-test/.test(workflow));

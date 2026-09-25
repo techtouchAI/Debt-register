@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- أيقونة تكيفية (أندرويد 8+) مع طبقة أحادية اللون للأيقونات ذات السمة (أندرويد 13+). مُولَّد بـ npm run icons من resources/icon — لا تعدّله يدوياً -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

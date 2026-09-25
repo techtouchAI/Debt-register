@@ -67,9 +67,10 @@ Electron، أيقونات Tauri، أو مسارات مطلقة في `dist/`.
 (`POST_NOTIFICATIONS`، `READ/WRITE_EXTERNAL_STORAGE` بحدود `maxSdk`،
 `SCHEDULE_EXACT_ALARM`) وأيقونة `ic_stat_agri` أحادية اللون، ويعلن **مزوّد الملفات**
 (`androidx.core.content.FileProvider` بسلطة `${applicationId}.fileprovider` مع
-`res/xml/file_paths.xml`)، ويزامن `app_name`، ويتحقق من `capacitor.config.json` —
-وإن تشغيله مرتين لا يُنتج أي فرق (يفحصه CI بـ `diff`، وتغطيه 17 حالة اختبار تشغّل
-السكربت فعلياً على مشروع مؤقت).
+`res/xml/file_paths.xml`)، ويزامن `app_name`، وينسخ **أيقونة التطبيق وشاشة البدء**
+من `resources/android/res` (ويحذف صور `splash.png` القديمة من القالب)، ويتحقق من
+`capacitor.config.json` — وإن تشغيله مرتين لا يُنتج أي فرق (يفحصه CI بـ `diff` على
+المانيفست وكل الموارد، وتغطيه 19 حالة اختبار تشغّل السكربت فعلياً على مشروع مؤقت).
 
 > **لماذا مزوّد الملفات إلزامي؟** `@capacitor/share` يحوّل رابط `file://` إلى
 > `content://` عبر `FileProvider.getUriForFile(context, packageName + ".fileprovider", file)`؛
@@ -80,7 +81,8 @@ Electron، أيقونات Tauri، أو مسارات مطلقة في `dist/`.
 وبعد البناء يتحقق CI من النواتج الفعلية لا من نجاح الأوامر فقط:
 
 - **APK**: `aapt2 dump permissions/resources/xmltree` للتأكد من الصلاحيات وأيقونة
-  الإشعارات ومورد مسارات المزوّد ووجود `androidx.core.content.FileProvider`
+  الإشعارات وأيقونة التطبيق (الطبقة أحادية اللون والدائرية) وشاشة البدء المتجهة
+  ومورد مسارات المزوّد ووجود `androidx.core.content.FileProvider`
   و`usesCleartextTraffic` داخل المانيفست المدمج، و`unzip -l` للتأكد من واجهة
   التطبيق داخل الـ APK، مع فحص `targetSdk ≥ 33` و`compileSdk ≥ 34`. كل تحقق
   يطبع سطراً يوضح ما فحصه، وعند الفشل يطبع مقتطفاً من الملف الذي فحصه.
@@ -95,6 +97,41 @@ Electron، أيقونات Tauri، أو مسارات مطلقة في `dist/`.
 في البيئات المقيّدة (بلا JDK/SDK/Wine/Rust أو مع شبكة تحجب مواقع التنزيل) لا يمكن
 بناء APK/مثبّت محلياً؛ استخدم مهام CI أعلاه — وهي التي تُنتج القطع القابلة للاختبار
 اليدوي على جهاز حقيقي.
+
+## 4.2) أيقونة التطبيق
+
+التصميم: **وصل بيع عاجي** بحافة مسننة وأسطر عربية وختم برونزي **«تم التسديد»** على
+أخضر مريمي — الفواتير والقبض والديون بألوان هوية التطبيق. مصدره الوحيد ثلاثة ملفات
+SVG في `resources/icon/`، وكل المقاسات والصيغ تُولَّد منها:
+
+```bash
+npm run icons              # يولّد كل النواتج (يكتب ما تغيّر فقط)
+npm run icons -- --check   # يتحقق أن النواتج الملتزمة مطابقة للمصادر دون كتابة
+```
+
+| الملف المصدر | الاستخدام |
+|---|---|
+| `icon-background.svg` | الخلفية: تدرّج أخضر يمتد حتى الحواف (خلفية الأيقونة التكيفية) |
+| `icon-foreground.svg` | الرمز بخلفية شفافة داخل منطقة الأمان (الطبقة الأمامية) |
+| `icon-small.svg` | نسخة مبسّطة بأسطر أسمك للأحجام ≤ 40 بكسل (favicon وشريط المهام) |
+
+| النظام | النواتج (مُولَّدة — لا تُعدَّل يدوياً) |
+|---|---|
+| الويب/PWA | `public/favicon.svg` و`favicon.ico` و`apple-touch-icon.png` و`pwa-192x192.png` و`pwa-512x512.png` (any) و`pwa-maskable-512x512.png` (maskable) |
+| Windows — Electron | `resources/icon/app.ico` (16 → 256 بكسل) — `win.icon` في `electron-builder.json` |
+| Tauri | `desktop/src-tauri/icons/*` (ico وicns وPNG وأيقونات iOS/Android) |
+| Android — Capacitor | `resources/android/res/**`: أيقونة تكيفية (خلفية متجهة + رمز + طبقة أحادية اللون للأيقونات ذات السمة في أندرويد 13+)، أيقونة قديمة ودائرية لكل الكثافات، وشاشة بدء (لون ثابت + الشعار في المنتصف، نهاري وليلي)؛ و`resources/android/ic_stat_agri.xml` لأيقونة الإشعارات |
+
+موارد أندرويد لا توضع في مجلد `android/` (مُولَّد ومتجاهَل في git) بل ينسخها
+`npm run cap:prepare` بعد `npx cap add android`. وهو يحذف صور `splash.png` التي يأتي
+بها قالب Capacitor، لأن بقاء `drawable/splash.png` بجانب `drawable/splash.xml` مورد
+مكرر يُفشل البناء (`resource 'drawable/splash' has a conflicting value`)، ولأن تلك
+الصور تُمطّ على الشاشات بنِسب مختلفة.
+
+لتعديل الأيقونة: عدّل ملفات `resources/icon/*.svg` (وإن غيّرت أبعاد الوصل أو الختم
+فحدّث `GLYPH_SPEC` في `scripts/generate-icons.mjs`، فمنه تُرسم الطبقة أحادية اللون
+وأيقونة الإشعارات)، ثم نفّذ `npm run icons` والتزم بالنواتج. `tests/appIcons.test.ts`
+يفشل إن نُسي التوليد أو نقص مقاس أو انقطع ربط الأيقونة في أي غلاف.
 
 ## 5) CI + التوقيع + النشر
 

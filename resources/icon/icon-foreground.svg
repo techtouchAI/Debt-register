@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- رمز أيقونة «إدارة المكتب»: وصل بيع عاجي بحافة مسننة وأسطر عربية (محاذاة يمين)
+       وختم برونزي «تم التسديد». خلفية شفافة — يُركَّب فوق icon-background.svg. -->
+  <defs>
+    <linearGradient id="fg-paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfbf7"/>
+      <stop offset="1" stop-color="#efe8da"/>
+    </linearGradient>
+    <linearGradient id="fg-seal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e0c592"/>
+      <stop offset="0.5" stop-color="#bb9860"/>
+      <stop offset="1" stop-color="#86663f"/>
+    </linearGradient>
+    <filter id="fg-paper-shadow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="26" flood-color="#12190e" flood-opacity="0.32"/>
+    </filter>
+    <filter id="fg-seal-shadow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#12190e" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <!-- الوصل -->
+  <path d="M376,164 H716 Q746,164 746,194 V786 L721,814 L696,786 L671,814 L646,786 L621,814 L596,786 L571,814 L546,786 L521,814 L496,786 L471,814 L446,786 L421,814 L396,786 L371,814 L346,786 V194 Q346,164 376,164 Z"
+        fill="url(#fg-paper)" stroke="#fbf8f2" stroke-width="6" stroke-linejoin="round" filter="url(#fg-paper-shadow)"/>
+  <!-- العنوان والأسطر (البند يميناً والمبلغ يساراً) -->
+  <rect x="492" y="223" width="196" height="38" rx="19" fill="#b8965f"/>
+  <rect x="568" y="283" width="120" height="18" rx="9" fill="#a9a49b" opacity="0.8"/>
+  <rect x="512" y="355" width="176" height="26" rx="13" fill="#57534c" opacity="0.6"/>
+  <rect x="402" y="355" width="70" height="26" rx="13" fill="#57534c" opacity="0.85"/>
+  <rect x="552" y="417" width="136" height="26" rx="13" fill="#57534c" opacity="0.6"/>
+  <rect x="402" y="417" width="70" height="26" rx="13" fill="#57534c" opacity="0.85"/>
+  <rect x="528" y="479" width="160" height="26" rx="13" fill="#57534c" opacity="0.6"/>
+  <rect x="402" y="479" width="70" height="26" rx="13" fill="#57534c" opacity="0.85"/>
+  <line x1="402" y1="556" x2="688" y2="556" stroke="#cfcbc3" stroke-width="7" stroke-linecap="round" stroke-dasharray="16 16"/>
+  <!-- الإجمالي -->
+  <rect x="592" y="601" width="96" height="30" rx="15" fill="#3a3833" opacity="0.9"/>
+  <!-- ختم «تم التسديد» -->
+  <g filter="url(#fg-seal-shadow)">
+    <circle cx="390" cy="738" r="124" fill="#fbf9f4"/>
+    <circle cx="390" cy="738" r="106" fill="url(#fg-seal)"/>
+  </g>
+  <circle cx="390" cy="738" r="88" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="4"/>
+  <path d="M344,740 L378,774 L440,706" fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

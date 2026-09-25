@@ -11,6 +11,7 @@
     "dist/**/*",
     "electron/**/*",
     "public/**/*",
+    "resources/icon/app.ico",
     "package.json",
     "!node_modules/**/*"
   ],
@@ -28,7 +29,7 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "public/pwa-512x512.png",
+    "icon": "resources/icon/app.ico",
     "artifactName": "OfficeManager-${version}-${arch}.${ext}"
   },
   "nsis": {

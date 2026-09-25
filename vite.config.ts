@@ -21,7 +21,8 @@ export default defineConfig({
       // التسجيل يدوي من main.tsx: لا يُسجَّل عامل الخدمة داخل أغلفة
       // Capacitor/Electron (لا حاجة له هناك وقد يفشل فيُقلق المستخدم)
       injectRegister: false,
-      includeAssets: ['vite.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
+      // أيقونات الـ manifest تُضاف تلقائياً؛ هذه أيقونات المتصفح وiOS
+      includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png'],
       manifest: {
         name: 'إدارة المكتب',
         short_name: 'إدارة المكتب',
@@ -34,16 +35,26 @@ export default defineConfig({
         orientation: 'any',
         lang: 'ar',
         dir: 'rtl',
+        // any: لوحة بزوايا مستديرة وحواف شفافة (سطح المكتب وقوائم التطبيقات).
+        // maskable: مربع كامل بهامش أمان يقصّه أندرويد بشكل الأيقونات في الجهاز.
         icons: [
           {
             src: 'pwa-192x192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any'
           },
           {
             src: 'pwa-512x512.png',
             sizes: '512x512',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: 'pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
           }
         ]
       },
