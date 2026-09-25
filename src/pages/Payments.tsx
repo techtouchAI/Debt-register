@@ -9,9 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { getCustomerBalance } from '@/lib/debts';
 import { savePayment, deletePayment } from '@/lib/payments';
-import { buildReceiptPrintHtml, printReceipt } from '@/lib/print';
-import { generateReceiptPDF } from '@/lib/pdf';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { printDocument, receiptDocument } from '@/lib/print';
+import { saveDocumentPdf } from '@/lib/pdf';
+import { openDocumentPreview } from '@/lib/documentPreview';
 import { dismissOverlayThroughHistory } from '@/lib/historyTrap';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -43,8 +43,6 @@ export function Payments() {
   const [notes, setNotes] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [previewPayment, setPreviewPayment] = useState<Payment | null>(null);
-  const [previewDebt, setPreviewDebt] = useState(0);
 
   const settings = useLiveQuery(() => getSettings(), []);
   // العملة مشتقّة من الإعدادات مباشرة بدل نسخها في حالة محلية داخل تأثير
@@ -175,8 +173,8 @@ export function Payments() {
       // المستخدم الطباعة أو الحفظ/المشاركة — نفس السلوك على أندرويد وويندوز
       // (كان يفتح صندوق حفظ ملف تلقائياً بعد كل تسديد على ويندوز).
       closeForm();
-      setPreviewDebt(Math.max(0, roundMoney(result.debtAfter)));
-      setPreviewPayment(result.payment);
+      const receiptSettings = settings ?? (await getSettingsOrDefault());
+      openDocumentPreview(receiptDocument(result.payment, receiptSettings, Math.max(0, roundMoney(result.debtAfter))));
     } catch (error) {
       reportError('Payments.save', error, 'حدث خطأ أثناء حفظ التسديد');
     } finally {
@@ -215,12 +213,8 @@ export function Payments() {
     try {
       const s = await getSettingsOrDefault();
       const balance = await getCustomerBalance(payment.customerId);
-      const opened = await printReceipt(payment, s, Math.max(0, balance.debt));
-      if (!opened) {
-        // لا حوار طباعة (أندرويد أصلي): نفتح المعاينة مع زر حفظ المستند بدل لا شيء
-        setPreviewDebt(Math.max(0, roundMoney(balance.debt)));
-        setPreviewPayment(payment);
-      }
+      // طباعة النظام، أو معاينة الوصل مع بديل الحفظ إن لم يتوفر حوار طباعة
+      await printDocument(receiptDocument(payment, s, Math.max(0, roundMoney(balance.debt))));
     } catch (error) {
       reportError('Payments.print', error, 'تعذّر طباعة الوصل');
     } finally {
@@ -234,7 +228,7 @@ export function Payments() {
     try {
       const s = await getSettingsOrDefault();
       const balance = await getCustomerBalance(payment.customerId);
-      const saved = await generateReceiptPDF(payment, s, Math.max(0, roundMoney(balance.debt)));
+      const saved = await saveDocumentPdf(receiptDocument(payment, s, Math.max(0, roundMoney(balance.debt))));
       if (saved) toast.success('تم حفظ الوصل كمستند', saved.message);
     } catch (error) {
       reportError('Payments.pdf', error, 'تعذّر حفظ الوصل كمستند');
@@ -245,9 +239,9 @@ export function Payments() {
 
   const handlePreview = async (payment: Payment) => {
     try {
+      const s = settings ?? (await getSettingsOrDefault());
       const balance = await getCustomerBalance(payment.customerId);
-      setPreviewDebt(Math.max(0, roundMoney(balance.debt)));
-      setPreviewPayment(payment);
+      openDocumentPreview(receiptDocument(payment, s, Math.max(0, roundMoney(balance.debt))));
     } catch (error) {
       reportError('Payments.preview', error, 'تعذّر فتح المعاينة');
     }
@@ -485,17 +479,6 @@ export function Payments() {
         </div>
       )}
 
-      {previewPayment && (
-        <DocumentPreviewDialog
-          open={previewPayment !== null}
-          title={`وصل قبض ${formatDocumentNumber(previewPayment.receiptNumber)}`}
-          bodyHtml={buildReceiptPrintHtml(previewPayment, settings ?? { officeName: '', phone: '', address: '', currency, lowStockThreshold: 5, theme: 'light', autoBackupEnabled: true, autoBackupInterval: 60, language: 'ar' }, previewDebt)}
-          fileNameBase={`وصل_قبض_${formatDocumentNumber(previewPayment.receiptNumber)}_${previewPayment.customerName}`}
-          pdfFormat="receipt80"
-          shareTitle={`وصل قبض ${formatDocumentNumber(previewPayment.receiptNumber)}`}
-          onClose={() => setPreviewPayment(null)}
-        />
-      )}
     </div>
   );
 }

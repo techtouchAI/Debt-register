@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
 import { CartCell } from '@/components/ui/cart-cell';
 import { QuickAddPurchaseMaterialDialog } from '@/components/materials/QuickAddPurchaseMaterialDialog';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { openDocumentPreview } from '@/lib/documentPreview';
 import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { getPurchaseWithItems, savePurchase, computePurchaseTotals, type PurchaseDraft } from '@/lib/purchases';
@@ -59,7 +59,6 @@ export function PurchaseForm() {
   const [showMaterialList, setShowMaterialList] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickAddName, setQuickAddName] = useState('');
-  const [previewBody, setPreviewBody] = useState<string | null>(null);
   const [loadedPurchase, setLoadedPurchase] = useState<Purchase | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -250,7 +249,7 @@ export function PurchaseForm() {
         remaining,
         notes: notes.trim() || undefined
       };
-      setPreviewBody(buildPurchasePrintHtml(
+      const bodyHtml = buildPurchasePrintHtml(
         previewPurchase,
         cart.map((entry) => ({
           purchaseId: 0,
@@ -261,7 +260,15 @@ export function PurchaseForm() {
           total: lineTotal(entry)
         })),
         s
-      ));
+      );
+      openDocumentPreview({
+        title: loadedPurchase?.purchaseNumber ? `وصل شراء ${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : 'معاينة وصل الشراء',
+        bodyHtml,
+        fileNameBase: loadedPurchase?.purchaseNumber
+          ? `وصل_شراء_${formatDocumentNumber(loadedPurchase.purchaseNumber)}`
+          : `مسودة_شراء_${supplierName || 'وصل'}`,
+        shareTitle: 'معاينة وصل الشراء'
+      });
     } catch (error) {
       reportError('PurchaseForm.preview', error, 'تعذّر إنشاء المعاينة');
     }
@@ -415,8 +422,6 @@ export function PurchaseForm() {
 
       <QuickAddPurchaseMaterialDialog open={showQuickAdd} initialName={quickAddName} currency={settings?.currency} defaultMinQuantity={settings?.lowStockThreshold} onClose={() => setShowQuickAdd(false)} onCreated={handleCreatedMaterial} />
       <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
-
-      {previewBody && <DocumentPreviewDialog open={previewBody !== null} title={loadedPurchase?.purchaseNumber ? `وصل شراء ${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : 'معاينة وصل الشراء'} bodyHtml={previewBody} fileNameBase={loadedPurchase?.purchaseNumber ? `وصل_شراء_${formatDocumentNumber(loadedPurchase.purchaseNumber)}` : `مسودة_شراء_${supplierName || 'وصل'}`} shareTitle="معاينة وصل الشراء" onClose={() => setPreviewBody(null)} />}
     </div>
   );
 }

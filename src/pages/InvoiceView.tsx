@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { deleteInvoice, getInvoiceWithItems } from '@/lib/invoices';
-import { buildInvoicePrintHtml, printInvoice } from '@/lib/print';
-import { generateInvoicePDF } from '@/lib/pdf';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { invoiceDocument, printDocument } from '@/lib/print';
+import { saveDocumentPdf } from '@/lib/pdf';
+import { openDocumentPreview } from '@/lib/documentPreview';
 import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
@@ -38,7 +38,6 @@ export function InvoiceView() {
   const [settings, setSettings] = useState<OfficeSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,8 +81,8 @@ export function InvoiceView() {
     if (!invoice || !settings || isBusy) return;
     setIsBusy(true);
     try {
-      const printed = await printInvoice(invoice, items, settings);
-      if (!printed) setShowPreview(true); // البديل: معاينة مع زر حفظ المستند
+      // طباعة النظام، أو معاينة الفاتورة مع بديل الحفظ إن لم يتوفر حوار طباعة
+      await printDocument(invoiceDocument(invoice, items, settings));
     } catch (error) {
       reportError('InvoiceView.print', error, 'تعذّر الطباعة');
     } finally {
@@ -95,14 +94,14 @@ export function InvoiceView() {
     if (!invoice || !settings || isBusy) return;
     setIsBusy(true);
     try {
-      const saved = await generateInvoicePDF(invoice, items, settings, customer);
+      const saved = await saveDocumentPdf(invoiceDocument(invoice, items, settings));
       if (saved) toast.success('تم حفظ الفاتورة كمستند', saved.message);
     } catch (error) {
       reportError('InvoiceView.pdf', error, 'تعذّر حفظ المستند');
     } finally {
       setIsBusy(false);
     }
-  }, [invoice, items, settings, customer, isBusy]);
+  }, [invoice, items, settings, isBusy]);
 
   const handleDelete = useCallback(async () => {
     if (!invoice?.id || isBusy) return;
@@ -171,7 +170,7 @@ export function InvoiceView() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => setShowPreview(true)} className="bg-primary-600 hover:bg-primary-700 flex-1 sm:flex-none">
+        <Button onClick={() => openDocumentPreview(invoiceDocument(invoice, items, settings))} className="bg-primary-600 hover:bg-primary-700 flex-1 sm:flex-none">
           <Eye className="w-4 h-4 ml-2" />
           معاينة
         </Button>
@@ -290,14 +289,6 @@ export function InvoiceView() {
         </div>
       </div>
 
-      <DocumentPreviewDialog
-        open={showPreview}
-        title={`فاتورة ${formatDocumentNumber(invoice.invoiceNumber)}`}
-        bodyHtml={buildInvoicePrintHtml(invoice, items, settings)}
-        fileNameBase={`فاتورة_${formatDocumentNumber(invoice.invoiceNumber)}_${invoice.customerName}`}
-        shareTitle={`فاتورة ${formatDocumentNumber(invoice.invoiceNumber)}`}
-        onClose={() => setShowPreview(false)}
-      />
     </div>
   );
 }

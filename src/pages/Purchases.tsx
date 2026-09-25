@@ -7,8 +7,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { db, getSettingsOrDefault } from '@/lib/db';
 import { deletePurchase, getPurchaseWithItems } from '@/lib/purchases';
-import { generatePurchasePDF } from '@/lib/pdf';
-import { printPurchase } from '@/lib/print';
+import { saveDocumentPdf } from '@/lib/pdf';
+import { printDocument, purchaseDocument } from '@/lib/print';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
@@ -40,8 +40,8 @@ export function Purchases() {
         toast.error('وصل الشراء غير موجود');
         return;
       }
-      const printed = await printPurchase(found.purchase, found.items, s);
-      if (!printed) toast.info('لا يوجد حوار طباعة هنا', 'افتح الوصل ثم استخدم زر "حفظ كمستند"');
+      // طباعة النظام، أو معاينة المستند مع بديل الحفظ إن لم يتوفر حوار طباعة
+      await printDocument(purchaseDocument(found.purchase, found.items, s));
     } catch (error) {
       reportError('Purchases.print', error, 'تعذّرت طباعة وصل الشراء');
     } finally {
@@ -59,7 +59,7 @@ export function Purchases() {
         toast.error('وصل الشراء غير موجود');
         return;
       }
-      const saved = await generatePurchasePDF(found.purchase, found.items, s);
+      const saved = await saveDocumentPdf(purchaseDocument(found.purchase, found.items, s));
       if (saved) toast.success('تم حفظ وصل الشراء كمستند', saved.message);
     } catch (error) {
       reportError('Purchases.pdf', error, 'تعذّر حفظ المستند');

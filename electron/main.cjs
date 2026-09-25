@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Menu } = require('electron');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const { pathToFileURL } = require('url');
@@ -510,6 +511,55 @@ ipcMain.handle('save-file', async (_event, payload) => {
     return { success: true, path: filePath };
   } catch (error) {
     return { success: false, error: error.message };
+  }
+});
+
+/**
+ * طباعة مستند (فاتورة/وصل/كشف) من الواجهة.
+ *
+ * لماذا مسار خاص بدل `window.print()`؟ لأن Electron لا ينفّذ `window.print`
+ * إطلاقاً (رسالة دقيقة من توثيق المكتبات المعتمدة: «Electron does not
+ * natively support the window.print method»)، فكان زر الطباعة على ويندوز
+ * لا يفعل شيئاً. الطريقة الصحيحة هنا: نافذة مخفية تُحمَّل بمستند HTML في ملف
+ * مؤقت، ثم `webContents.print` الذي يفتح حوار الطباعة الأصلي — ويحترم
+ * `@page { size: A4; margin: 10mm }` داخل المستند نفسه، فيخرج الورق مطابقاً
+ * للمعاينة وملف المستند.
+ */
+ipcMain.handle('print-document', async (_event, payload) => {
+  const html = typeof payload?.html === 'string' ? payload.html : '';
+  if (!html) return { success: false, error: 'لا يوجد مستند للطباعة' };
+
+  let tempDir = null;
+  let printWindow = null;
+  try {
+    tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'office-print-'));
+    const filePath = path.join(tempDir, 'مستند.html');
+    await fsp.writeFile(filePath, html, 'utf8');
+
+    printWindow = new BrowserWindow({
+      show: false,
+      // حجم الورقة قريب من A4 بالبكسل: نفس مقاس مستند المعاينة
+      width: 794,
+      height: 1123,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+    });
+    await printWindow.loadFile(filePath);
+
+    const result = await new Promise((resolve) => {
+      printWindow.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
+        resolve({ success, failureReason });
+      });
+    });
+    if (!result.success && result.failureReason && !/cancel/i.test(result.failureReason)) {
+      return { success: false, error: result.failureReason };
+    }
+    // الإلغاء ليس فشلاً: نُبلغ الواجهة بتخطي العرض البديل
+    return { success: true, cancelled: !result.success };
+  } catch (error) {
+    return { success: false, error: error.message };
+  } finally {
+    if (printWindow && !printWindow.isDestroyed()) printWindow.destroy();
+    if (tempDir) await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

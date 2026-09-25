@@ -8,10 +8,17 @@ import { resetHistoryTrapForTests } from '@/lib/historyTrap';
 import { setNativeBackSubscriber } from '@/lib/nativeBridge';
 import { resetSessionForTests } from '@/lib/session';
 import { cancelAllConfirms } from '@/lib/confirm';
+import { closeDocumentPreview } from '@/lib/documentPreview';
 import { resetToastsForTests } from '@/lib/toast';
 
 // jsdom لا يطبّق التمرير (يطبع "Not implemented: window.scrollTo" في كل تنقّل)
 window.scrollTo = (() => undefined) as typeof window.scrollTo;
+
+// jsdom لا يملك حوار طباعة ولا تركيز إطار. مسار الطباعة في التطبيق يُطلق
+// هذين الاستدعاءين عمداً (طباعة عبر إطار بمقاس الورقة)، فلا نريد ضجيج
+// "Not implemented" في مخرجات الاختبارات — والاختبارات تتحقق من النتيجة
+// السلوكية (هل ظهرت المعاينة البديلة؟) لا من استدعاء المتصفح نفسه.
+window.print = (() => undefined) as typeof window.print;
 
 /**
  * بيئة اختبار موحّدة:
@@ -26,6 +33,7 @@ beforeEach(async () => {
   // جلسة الدخول وحوارات التأكيد حالة وحدة: تُصفَّر بين الاختبارات
   resetSessionForTests();
   cancelAllConfirms();
+  closeDocumentPreview();
   resetToastsForTests();
   resetModalStackForTests();
   resetHistoryTrapForTests();
@@ -45,6 +53,7 @@ afterEach(async () => {
   cleanup();
   resetSessionForTests();
   cancelAllConfirms();
+  closeDocumentPreview();
   resetModalStackForTests();
   resetHistoryTrapForTests();
   resetSettingsStore();

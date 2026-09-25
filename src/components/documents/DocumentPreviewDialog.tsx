@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from 'react';
-import { Printer, Download, X, Loader2, FileText } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Printer, Download, X, Loader2, FileText, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { buildPrintDocument, printHtmlDocument } from '@/lib/print';
+import { buildPrintDocument, printHtmlDocument, systemPrintAvailable, PRINT_FALLBACK_NOTICE } from '@/lib/print';
 import { generatePdfFromBodyHtml } from '@/lib/pdf';
+import { sheetRenderWidthPx } from '@/lib/pageLayout';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
@@ -10,10 +11,13 @@ import { reportError } from '@/lib/errors';
 /**
  * نافذة معاينة المستندات الموحّدة (فاتورة / وصل / كشف حساب).
  *
- * المشكلة السابقة: زر "معاينة" كان يُنزّل ملفاً (أو لا يفعل شيئاً على
- * أندرويد)، والطباعة كانت تفتح نافذة منبثقة محظورة — فلا معاينة حقيقية
- * في أي صفحة. هذه النافذة تعرض المستند نفسه المستخدم في الطباعة وPDF
- * داخل إطار معزول، مع أزرار طباعة وتنزيل تعمل على كل المنصات.
+ * تعرض **الورقة نفسها** التي تُطبع وتُحفظ: نفس المقاسات بالملّيمتر ونفس
+ * الهوامش (انظر `pageLayout.ts`)، وتُحجَّم لتناسب عرض النافذة على الشاشات
+ * الضيقة بلا تغيير في تخطيط المستند نفسه.
+ *
+ * ولا يعتمد زر «طباعة» على نجاح صامت: إن لم يُفتح حوار الطباعة (جهاز لا
+ * يدعمه أو نافذة مُقيَّدة) تظهر رسالة توضّح البديل داخل النافذة نفسها بدل
+ * ضغطة بلا أثر.
  */
 
 interface DocumentPreviewDialogProps {
@@ -25,6 +29,8 @@ interface DocumentPreviewDialogProps {
   fileNameBase: string;
   pdfFormat?: 'a4' | 'receipt80';
   shareTitle?: string;
+  /** رسالة توضيحية اختيارية أعلى المستند (تعرض عند تعذّر حوار الطباعة) */
+  notice?: string;
   onClose: () => void;
 }
 
@@ -35,12 +41,41 @@ export function DocumentPreviewDialog({
   fileNameBase,
   pdfFormat = 'a4',
   shareTitle,
+  notice,
   onClose
 }: DocumentPreviewDialogProps) {
   const [isPrinting, setIsPrinting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
 
-  const documentHtml = useMemo(() => (open ? buildPrintDocument(title, bodyHtml) : ''), [open, title, bodyHtml]);
+  // عرض حاوية العرض: تُحجَّم الورقة إليه فلا يلزم تمرير أفقي على الهاتف
+  const [paneWidth, setPaneWidth] = useState(0);
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!open || !pane) return;
+    const measure = () => setPaneWidth(pane.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [open]);
+
+  // أوسع ورقة (A4) هي مرجع التصغير حتى لا يتغيّر مقاس العرض بين المستندات
+  const documentHtml = useMemo(
+    () =>
+      open
+        ? buildPrintDocument(title, bodyHtml, {
+            view: 'preview',
+            ...(paneWidth > 0 ? { fitWidthPx: paneWidth - 24 } : {})
+          })
+        : '',
+    [open, title, bodyHtml, paneWidth]
+  );
+
+  const canPrint = systemPrintAvailable();
+  const activeNotice = localNotice ?? notice ?? (canPrint ? null : PRINT_FALLBACK_NOTICE.unsupported);
 
   // زر الرجوع (أندرويد/سطح المكتب) و Escape يُغلقان المعاينة وحدها، وقفل
   // تمرير الخلفية يتم مركزياً في `useModalCloser` (عدّاد مراجع مشترك بين
@@ -52,18 +87,19 @@ export function DocumentPreviewDialog({
     if (isPrinting) return;
     setIsPrinting(true);
     try {
-      const printed = await printHtmlDocument(title, bodyHtml);
-      if (!printed) {
-        // أندرويد أصلي بلا حوار طباعة: نولّد مستنداً قابلاً للحفظ/المشاركة بدل لا شيء
-        const saved = await generatePdfFromBodyHtml(bodyHtml, fileNameBase, shareTitle || title, pdfFormat);
-        if (saved) toast.success('تم تجهيز المستند للطباعة', 'احفظه أو شاركه من نافذة المشاركة ثم اطبعه');
+      const outcome = await printHtmlDocument(title, bodyHtml);
+      if (outcome !== 'printed') {
+        // لا حوار طباعة هنا: نوضّح البديل داخل النافذة بدل إظهار لا شيء
+        setLocalNotice(PRINT_FALLBACK_NOTICE[outcome]);
+      } else {
+        setLocalNotice(null);
       }
     } catch (error) {
       reportError('Preview.print', error, 'تعذّر الطباعة');
     } finally {
       setIsPrinting(false);
     }
-  }, [isPrinting, title, bodyHtml, fileNameBase, shareTitle, pdfFormat]);
+  }, [isPrinting, title, bodyHtml]);
 
   const handleExportPdf = useCallback(async () => {
     if (isExporting) return;
@@ -95,7 +131,18 @@ export function DocumentPreviewDialog({
           </Button>
         </div>
 
-        <div className="flex-1 bg-gray-100 dark:bg-gray-950 p-3 sm:p-4 overflow-hidden">
+        {activeNotice && (
+          <div
+            role="status"
+            data-testid="document-preview-notice"
+            className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs leading-relaxed text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200"
+          >
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <p className="min-w-0">{activeNotice}</p>
+          </div>
+        )}
+
+        <div ref={paneRef} className="flex-1 bg-gray-100 dark:bg-gray-950 p-3 sm:p-4 overflow-hidden">
           <iframe
             title={title}
             srcDoc={documentHtml}
@@ -109,10 +156,13 @@ export function DocumentPreviewDialog({
             {isPrinting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Printer className="w-4 h-4 ml-2" />}
             طباعة
           </Button>
-          <Button variant="outline" onClick={handleExportPdf} disabled={busy} className="flex-1 sm:flex-none">
+          <Button variant="outline" onClick={handleExportPdf} disabled={busy} className="flex-1 sm:flex-none" data-testid="document-preview-save">
             {isExporting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Download className="w-4 h-4 ml-2" />}
             حفظ كمستند
           </Button>
+          <span className="hidden text-[11px] text-gray-500 sm:inline">
+            الورقة {pdfFormat === 'receipt80' ? 'حرارية 80 مم' : 'A4'} — عرض {sheetRenderWidthPx(pdfFormat)} بكسل بالحجم الحقيقي
+          </span>
           <Button variant="ghost" onClick={onClose} disabled={busy} className="mr-auto">
             إغلاق
           </Button>

@@ -1,141 +1,205 @@
-import { OfficeSettings, Invoice, InvoiceItem, Payment, Customer, Purchase, PurchaseItem } from '@/types';
+import { type DocumentDescriptor } from './print';
 import {
-  buildEmbeddableDocument,
-  buildInvoicePrintHtml,
-  buildReceiptPrintHtml,
-  buildCustomerStatementPrintHtml,
-  buildPurchasePrintHtml
-} from './print';
+  planA4Pages,
+  planReceiptPage,
+  sheetRenderWidthPx,
+  A4_SHEET,
+  RECEIPT_SHEET,
+  type BlankRowProbe,
+  type InkBounds,
+  type PdfFormat,
+  type PdfPagePlan
+} from './pageLayout';
 import { describeSavedLocation, saveFile } from './files';
-import { formatLocalDateInput, sanitizeFileName } from './utils';
-import { formatDocumentNumber } from './labels';
+import { sanitizeFileName } from './utils';
+import { RASTER_SCALE, rasterizeDocument } from './documentRaster';
 
 /**
  * توليد ملفات PDF من قوالب HTML نفسها المستخدمة في المعاينة والطباعة.
  *
- * لماذا الرسم (html2canvas) بدل نص jsPDF المباشر؟
+ * لماذا الرسم من HTML بدل نص jsPDF المباشر؟
  * خط jsPDF الافتراضي (helvetica) لا يدعم العربية إطلاقاً — كان النص العربي
  * يظهر مفككاً ومقلوباً في الملفات السابقة. الرسم من HTML يعطي عربية سليمة
- * تماماً ويضمن تطابق المعاينة والطباعة وملف PDF حرفياً (مصدر واحد للحقيقة).
+ * تماماً.
+ *
+ * والتصوير نفسه يتم بمحرّك العرض (وثيقة SVG بـ foreignObject، انظر
+ * `documentRaster.ts`) لا بمحرّك حسابي، فخط الأساس والتخطيط مطابقان
+ * لوثيقة الطباعة والمعاينة.
+ *
+ * وكيف يتطابق الملف مع المعاينة والطباعة؟ تُصوَّر **الورقة نفسها** بعرضها
+ * الحقيقي (210مم = 794 بكسل) بلا تكبير ولا حشوة إضافية، ثم تُرسم بالملّيمتر
+ * داخل ورقة A4 (أو 80مم للوصل) فالهوامش هي حشوة الورقة نفسها. وكانت العلّة
+ * السابقة أن حاوية بعرض 794 بكسل وحشوة 24 بكسل تُمدَّد على ورقة A4 كاملةً،
+ * فيكبر المحتوى بنحو 11% وتضيق الأعمدة الرقمية وتختفي الهوامش، وتبدو
+ * الفاتورة المطبوعة مختلفة عن الملف.
  *
  * الحفظ يتم عبر خدمة الملفات الموحّدة: مشاركة/مستندات على أندرويد، صندوق
  * حفظ على ويندوز، تنزيل في المتصفح — بدل `doc.save` الذي لا يفعل شيئاً
  * داخل WebView.
  */
 
-type PdfFormat = 'a4' | 'receipt80';
+/**
+ * مكتبة إنشاء المستند (jspdf) تُحمَّل عند أول حفظ مستند فقط، لا عند إقلاع
+ * التطبيق — إقلاع أسرع بوضوح على هواتف أندرويد الضعيفة. الملفات محلية داخل
+ * التطبيق فلا حاجة لإنترنت، ومحرّك التصوير في `documentRaster.ts`.
+ */
+async function loadJsPdf() {
+  const { default: jsPDF } = await import('jspdf');
+  return jsPDF;
+}
 
 /**
- * مكتبتا الرسم وإنشاء المستند (≈ 780 ك.ب) تُحمَّلان عند أول حفظ مستند فقط،
- * لا عند إقلاع التطبيق — إقلاع أسرع بوضوح على هواتف أندرويد الضعيفة. الملفات
- * محلية داخل التطبيق فلا حاجة لإنترنت.
+ * فاحص صفّ فارغ داخل الصورة: يُستخدم لئلا يُشطر سطر جدول بين صفحتين.
+ * يُقرأ من بيانات الصورة مباشرة (صف واحد = شريط بسماكة بكسل واحد).
  */
-async function loadPdfLibraries() {
-  const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([import('jspdf'), import('html2canvas')]);
-  return { jsPDF, html2canvas };
-}
-
-const RENDER_WIDTH: Record<PdfFormat, number> = {
-  a4: 794, // عرض A4 بالبكسل (96dpi)
-  receipt80: 302 // عرض 80مم بالبكسل
-};
-
-async function waitForImages(root: HTMLElement, timeoutMs = 3000): Promise<void> {
-  const images = Array.from(root.querySelectorAll('img'));
-  if (images.length === 0) return;
-  await Promise.race([
-    Promise.all(
-      images.map(
-        (img) =>
-          new Promise<void>((resolve) => {
-            if (img.complete) return resolve();
-            const done = () => resolve();
-            img.addEventListener('load', done, { once: true });
-            img.addEventListener('error', done, { once: true });
-          })
-      )
-    ),
-    new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs))
-  ]);
-}
-
-async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise<Blob> {
-  const { jsPDF, html2canvas } = await loadPdfLibraries();
-  const container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.left = '-12000px';
-  container.style.top = '0';
-  container.style.width = `${RENDER_WIDTH[format]}px`;
-  container.style.background = '#ffffff';
-  container.style.padding = format === 'a4' ? '24px' : '8px';
-  container.setAttribute('aria-hidden', 'true');
-  container.innerHTML = buildEmbeddableDocument(bodyHtml);
-  document.body.appendChild(container);
-
-  try {
+function createBlankRowProbe(canvas: HTMLCanvasElement): BlankRowProbe {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return () => false;
+  return (yPx: number): boolean => {
+    const y = Math.round(yPx);
+    if (y < 0 || y >= canvas.height) return false;
     try {
-      await Promise.race([
-        document.fonts.ready,
-        new Promise<void>((resolve) => window.setTimeout(resolve, 1500))
-      ]);
+      const { data } = context.getImageData(0, y, canvas.width, 1);
+      for (let i = 0; i < data.length; i += 4) {
+        // أي بكسل غير أبيض (خلفية المستند بيضاء) = السطر مكتظ
+        if (data[i] < 250 || data[i + 1] < 250 || data[i + 2] < 250) return false;
+      }
+      return true;
     } catch {
-      /* الخطوط غير حرجة — نتابع بالبدائل */
+      return false;
     }
-    await waitForImages(container);
+  };
+}
 
-    const canvas = await html2canvas(container, {
-      scale: 2,
-      backgroundColor: '#ffffff',
-      useCORS: true,
-      logging: false
-    });
+/**
+ * أقل ارتفاع لإطار الوصل الحراري قبل التصوير: يكبر تلقائياً مع طول المحتوى،
+ * وخطة الصفحة تقصّ الفراغ بعده (60–500 مم).
+ */
+const RECEIPT_FRAME_MIN_HEIGHT_PX = 600;
 
-    if (format === 'receipt80') {
-      // صفحة حرارية واحدة بارتفاع ديناميكي حسب المحتوى
-      const widthMm = 80;
-      const heightMm = Math.min(500, Math.max(60, (canvas.height * widthMm) / canvas.width));
-      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [widthMm, heightMm] });
-      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthMm, heightMm);
-      const blob = doc.output('blob');
-      return blob as Blob;
+/**
+ * ترميز صورة الصفحة: JPEG بجودة عالية.
+ * PNG بلا فقدان يجعل ملف فاتورة واحدة ≈ 10 م.ب (ثقيل جداً للمشاركة على
+ * أندرويد)، وJPEG بجودة 95 يعطي المظهر نفسه بجزء صغير من الحجم.
+ */
+const IMAGE_QUALITY = 0.95;
+
+/**
+ * حدود المحتوى المرسوم فعلاً (الفراغ الأبيض حوله لا يُصوَّر ولا يُرمَّز).
+ * تُقرأ من بيانات الصورة بمسح الصفوف ثم الأعمدة داخل نطاق الصفوف المكتظة.
+ */
+function measureInkBounds(canvas: HTMLCanvasElement): InkBounds {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const empty: InkBounds = { leftPx: 0, topPx: 0, rightPx: canvas.width, bottomPx: canvas.height };
+  if (!context) return empty;
+  const isInk = (data: Uint8ClampedArray, index: number) =>
+    data[index] < 250 || data[index + 1] < 250 || data[index + 2] < 250;
+
+  let top = -1;
+  let bottom = -1;
+  for (let y = 0; y < canvas.height; y += 1) {
+    const { data } = context.getImageData(0, y, canvas.width, 1);
+    let has = false;
+    for (let i = 0; i < data.length; i += 4) {
+      if (isInk(data, i)) {
+        has = true;
+        break;
+      }
     }
-
-    // A4 مع تقسيم ذكي لصفحات متعددة عند الحاجة
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageWidthMm = 210;
-    const pageHeightMm = 297;
-    const pxPerPage = Math.floor(canvas.width * (pageHeightMm / pageWidthMm));
-
-    let renderedPx = 0;
-    let firstPage = true;
-    while (renderedPx < canvas.height) {
-      const sliceHeight = Math.min(pxPerPage, canvas.height - renderedPx);
-      const slice = document.createElement('canvas');
-      slice.width = canvas.width;
-      slice.height = sliceHeight;
-      const ctx = slice.getContext('2d');
-      if (!ctx) throw new Error('تعذّر تجهيز صفحة المستند');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, slice.width, slice.height);
-      ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
-
-      if (!firstPage) doc.addPage();
-      doc.addImage(
-        slice.toDataURL('image/png'),
-        'PNG',
-        0,
-        0,
-        pageWidthMm,
-        (sliceHeight * pageWidthMm) / canvas.width
-      );
-      firstPage = false;
-      renderedPx += sliceHeight;
+    if (has) {
+      if (top === -1) top = y;
+      bottom = y;
     }
-
-    return doc.output('blob') as Blob;
-  } finally {
-    container.remove();
   }
+  if (top === -1) return empty;
+
+  let left = canvas.width;
+  let right = 0;
+  for (let y = top; y <= bottom; y += 1) {
+    const { data } = context.getImageData(0, y, canvas.width, 1);
+    for (let x = 0; x < canvas.width; x += 1) {
+      if (!isInk(data, x * 4)) continue;
+      if (x < left) left = x;
+      if (x > right) right = x;
+    }
+  }
+  return { leftPx: left, topPx: top, rightPx: right + 1, bottomPx: bottom + 1 };
+}
+
+interface PdfWriter {
+  addImage: (...args: unknown[]) => void;
+  addPage: () => void;
+}
+
+/**
+ * يرسم جزءاً من صورة المستند على ورقة واحدة بمقاسات الملّيمتر المحسوبة.
+ *
+ * يُقصّ الرسم إلى حدود المحتوى (`ink`) مع الحفاظ على موضعه الأصلي على
+ * الورقة: الفراغ الأبيض حول المحتوى لا يُصوَّر ولا يُرمَّز، فينخفض حجم
+ * الملف بلا أي فرق مرئي أو تغيّر في المواضع.
+ */
+function drawPage(doc: PdfWriter, source: HTMLCanvasElement, plan: PdfPagePlan, ink: InkBounds, mmPerPx: number): boolean {
+  const left = Math.max(Math.round(plan.sourceLeftPx), ink.leftPx);
+  const top = Math.max(Math.round(plan.sourceTopPx), ink.topPx);
+  const right = Math.min(Math.round(plan.sourceLeftPx + plan.sourceWidthPx), ink.rightPx);
+  const bottom = Math.min(Math.round(plan.sourceTopPx + plan.sourceHeightPx), ink.bottomPx);
+  if (right - left <= 0 || bottom - top <= 0) return false;
+
+  const slice = document.createElement('canvas');
+  slice.width = right - left;
+  slice.height = bottom - top;
+  const context = slice.getContext('2d');
+  if (!context) throw new Error('تعذّر تجهيز صفحة المستند');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, slice.width, slice.height);
+  context.drawImage(source, left, top, slice.width, slice.height, 0, 0, slice.width, slice.height);
+  // الموضع على الورقة يُزاح بمقدار ما قُصّ من الأعلى/اليمين حتى لا يتحرك المحتوى
+  doc.addImage(
+    slice.toDataURL('image/jpeg', IMAGE_QUALITY),
+    'JPEG',
+    plan.xMm + (left - plan.sourceLeftPx) * mmPerPx,
+    plan.yMm + (top - plan.sourceTopPx) * mmPerPx,
+    slice.width * mmPerPx,
+    slice.height * mmPerPx
+  );
+  return true;
+}
+
+/**
+ * تصوير مستند إلى ملف PDF بنفس هندسة ورقته.
+ * @param format مقاس الورقة: A4 للمستندات، 80مم للوصل الحراري.
+ */
+async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise<Blob> {
+  const renderWidthPx = sheetRenderWidthPx(format);
+  const minHeightPx =
+    format === 'a4' ? Math.round((A4_SHEET.heightMm as number) * (renderWidthPx / A4_SHEET.widthMm)) : RECEIPT_FRAME_MIN_HEIGHT_PX;
+  const { canvas } = await rasterizeDocument(bodyHtml, { widthPx: renderWidthPx, minHeightPx, scale: RASTER_SCALE });
+  const jsPDF = await loadJsPdf();
+  const ink = measureInkBounds(canvas);
+
+  if (format === 'receipt80') {
+    const plan = planReceiptPage(canvas.width, canvas.height)[0];
+    if (!plan) throw new Error('لا يوجد محتوى في الوصل');
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [RECEIPT_SHEET.widthMm, plan.heightMm] }) as unknown as PdfWriter;
+    drawPage(doc, canvas, plan, ink, RECEIPT_SHEET.widthMm / canvas.width);
+    return (doc as unknown as { output: (kind: string) => Blob }).output('blob');
+  }
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' }) as unknown as PdfWriter;
+  const pages = planA4Pages(canvas.width, canvas.height, {
+    scale: RASTER_SCALE,
+    isBlankRow: createBlankRowProbe(canvas)
+  });
+  if (pages.length === 0) throw new Error('لا يوجد محتوى في المستند');
+  const mmPerPx = A4_SHEET.widthMm / canvas.width;
+  let drawn = 0;
+  pages.forEach((plan) => {
+    // صفحة بلا محتوى (كلها فراغ) لا تُضاف أصلاً
+    if (drawn > 0) doc.addPage();
+    if (drawPage(doc, canvas, plan, ink, mmPerPx)) drawn += 1;
+  });
+  if (drawn === 0) throw new Error('لا يوجد محتوى في المستند');
+  return (doc as unknown as { output: (kind: string) => Blob }).output('blob');
 }
 
 /** نتيجة حفظ مستند: اسم الملف ووصف عربي لمكانه (لرسالة النجاح). */
@@ -163,54 +227,16 @@ async function savePdfBlob(blob: Blob, fileName: string, shareTitle: string): Pr
   return { fileName: safeName, message: describeSavedLocation(result, safeName) };
 }
 
-export async function generateInvoicePDF(
-  invoice: Invoice,
-  items: InvoiceItem[],
-  settings: OfficeSettings,
-  _customer?: Customer
-): Promise<SavedDocument | null> {
-  void _customer;
-  const blob = await renderHtmlToPdfBlob(buildInvoicePrintHtml(invoice, items, settings), 'a4');
-  const number = formatDocumentNumber(invoice.invoiceNumber);
-  return savePdfBlob(blob, `فاتورة_${number}_${invoice.customerName}`, `فاتورة ${number}`);
+/** حفظ أي وثيقة موصوفة (فاتورة/وصل/كشف) كمستند PDF. */
+export async function saveDocumentPdf(document: DocumentDescriptor): Promise<SavedDocument | null> {
+  const blob = await renderHtmlToPdfBlob(document.bodyHtml, document.pdfFormat);
+  return savePdfBlob(blob, document.fileNameBase, document.shareTitle || document.title);
 }
 
-export async function generateReceiptPDF(
-  payment: Payment,
-  settings: OfficeSettings,
-  customerDebtAfter?: number
-): Promise<SavedDocument | null> {
-  const blob = await renderHtmlToPdfBlob(buildReceiptPrintHtml(payment, settings, customerDebtAfter), 'receipt80');
-  const number = formatDocumentNumber(payment.receiptNumber);
-  return savePdfBlob(blob, `وصل_قبض_${number}_${payment.customerName}`, `وصل قبض ${number}`);
-}
-
-export async function generateCustomerStatementPDF(
-  customer: Customer,
-  invoices: Invoice[],
-  payments: Payment[],
-  settings: OfficeSettings,
-  totalDebt: number
-): Promise<SavedDocument | null> {
-  const blob = await renderHtmlToPdfBlob(
-    buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt),
-    'a4'
-  );
-  const fileName = `كشف_حساب_${customer.fullName}_${formatLocalDateInput()}`;
-  return savePdfBlob(blob, fileName, `كشف حساب ${customer.fullName}`);
-}
-
-export async function generatePurchasePDF(
-  purchase: Purchase,
-  items: PurchaseItem[],
-  settings: OfficeSettings
-): Promise<SavedDocument | null> {
-  const blob = await renderHtmlToPdfBlob(buildPurchasePrintHtml(purchase, items, settings), 'a4');
-  const number = formatDocumentNumber(purchase.purchaseNumber);
-  return savePdfBlob(blob, `وصل_شراء_${number}_${purchase.supplierName}`, `وصل شراء ${number}`);
-}
-
-/** توليد PDF من أي مستند مبني مسبقاً (للمسودات والمعاينات). */
+/**
+ * توليد PDF من جسم مستند مبني مسبقاً.
+ * يُستخدم في نافذة المعاينة (التي تعمل على جسم جاهز) وفي مسودات النماذج.
+ */
 export async function generatePdfFromBodyHtml(
   bodyHtml: string,
   fileName: string,

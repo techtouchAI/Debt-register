@@ -7,12 +7,12 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
 import { deleteInvoice, getInvoiceWithItems } from '@/lib/invoices';
-import { printInvoice } from '@/lib/print';
+import { invoiceDocument, printDocument } from '@/lib/print';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatCurrency, formatDate, isSameLocalDay } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
-import { generateInvoicePDF } from '@/lib/pdf';
+import { saveDocumentPdf } from '@/lib/pdf';
 import { confirmDialog } from '@/lib/confirm';
 import { documentNumberMatches, formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
@@ -85,10 +85,8 @@ export function Invoices() {
         toast.error('تعذّر الطباعة', 'الفاتورة أو الإعدادات غير متوفرة');
         return;
       }
-      const opened = await printInvoice(found.invoice, found.items, s);
-      if (!opened) {
-        toast.info('لا يوجد حوار طباعة هنا', 'افتح الفاتورة ثم استخدم زر "حفظ كمستند" للحفظ أو المشاركة');
-      }
+      // طباعة النظام، أو معاينة المستند مع بديل الحفظ إن لم يتوفر حوار طباعة
+      await printDocument(invoiceDocument(found.invoice, found.items, s));
     } catch (error) {
       reportError('Invoices.print', error, 'تعذّر طباعة الفاتورة');
     } finally {
@@ -104,8 +102,7 @@ export function Invoices() {
         toast.error('تعذّر التصدير', 'الفاتورة أو الإعدادات غير متوفرة');
         return;
       }
-      const customer = found.invoice.customerId ? await db.customers.get(found.invoice.customerId) : undefined;
-      const saved = await generateInvoicePDF(found.invoice, found.items, s, customer);
+      const saved = await saveDocumentPdf(invoiceDocument(found.invoice, found.items, s));
       if (saved) toast.success('تم حفظ الفاتورة كمستند', saved.message);
     } catch (error) {
       reportError('Invoices.export', error, 'تعذّر حفظ الفاتورة كمستند');

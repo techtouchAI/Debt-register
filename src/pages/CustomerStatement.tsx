@@ -9,10 +9,10 @@ import { db, getSettings } from '@/lib/db';
 import { getCustomerBalance } from '@/lib/debts';
 import { formatCurrency, formatDate, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { reportError } from '@/lib/errors';
-import { buildCustomerStatementPrintHtml, printCustomerStatement } from '@/lib/print';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { printDocument, statementDocument } from '@/lib/print';
+import { openDocumentPreview } from '@/lib/documentPreview';
 import { Invoice, Payment } from '@/types';
-import { generateCustomerStatementPDF } from '@/lib/pdf';
+import { saveDocumentPdf } from '@/lib/pdf';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { toast } from '@/lib/toast';
 import { formatDocumentNumber, paymentMethodLabel, saleTypeLabel } from '@/lib/labels';
@@ -23,7 +23,6 @@ export function CustomerStatement() {
   const goBack = useGoBack();
   const can = usePermission();
   const [filter, setFilter] = useState<'all' | 'invoices' | 'payments'>('all');
-  const [showPreview, setShowPreview] = useState(false);
 
   const statement = useLiveQuery(async () => {
     const customerId = Number(id);
@@ -45,16 +44,23 @@ export function CustomerStatement() {
   const payments = statement?.payments ?? [];
   const debt = statement?.debt ?? 0;
 
+  /** وصف الكشف: يُبنى مرة ويُستخدم في المعاينة والطباعة والحفظ */
+  const currentStatementDocument = () =>
+    customer && settings ? statementDocument(customer, invoices, payments, settings, debt) : null;
+
   const handlePrint = async () => {
-    if (!customer || !settings) return;
-    const opened = await printCustomerStatement(customer, invoices, payments, settings, debt);
-    if (!opened) setShowPreview(true); // البديل: معاينة مع زر حفظ المستند
+    const document = currentStatementDocument();
+    if (!document) return;
+    // طباعة النظام، أو معاينة الكشف مع بديل الحفظ إن لم يتوفر حوار طباعة
+    await printDocument(document);
   };
 
   const handleExportPDF = async () => {
     if (!customer || !settings) return;
     try {
-      const saved = await generateCustomerStatementPDF(customer, invoices, payments, settings, debt);
+      const document = currentStatementDocument();
+      if (!document) return;
+      const saved = await saveDocumentPdf(document);
       if (saved) toast.success('تم حفظ كشف الحساب كمستند', saved.message);
     } catch (error) {
       reportError('CustomerStatement.pdf', error, 'تعذّر حفظ كشف الحساب كمستند');
@@ -116,7 +122,7 @@ export function CustomerStatement() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button className="bg-primary-600 hover:bg-primary-700" onClick={() => setShowPreview(true)}><Eye className="w-4 h-4 ml-2" />معاينة</Button>
+              <Button className="bg-primary-600 hover:bg-primary-700" onClick={() => { const document = currentStatementDocument(); if (document) openDocumentPreview(document); }}><Eye className="w-4 h-4 ml-2" />معاينة</Button>
               <Button variant="outline" onClick={handlePrint}><Printer className="w-4 h-4 ml-2" />طباعة</Button>
               <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 ml-2" />حفظ كمستند</Button>
               {can('sales.create') && <Link to={`/invoices/new?customerId=${customer.id}`}><Button className="bg-primary-600 hover:bg-primary-700">فاتورة جديدة</Button></Link>}
@@ -297,16 +303,6 @@ export function CustomerStatement() {
         </Card>
       </div>
 
-      {showPreview && customer && settings && (
-        <DocumentPreviewDialog
-          open={showPreview}
-          title={`كشف حساب ${customer.fullName}`}
-          bodyHtml={buildCustomerStatementPrintHtml(customer, invoices, payments, settings, debt)}
-          fileNameBase={`كشف_حساب_${customer.fullName}`}
-          shareTitle={`كشف حساب ${customer.fullName}`}
-          onClose={() => setShowPreview(false)}
-        />
-      )}
     </div>
   );
 }

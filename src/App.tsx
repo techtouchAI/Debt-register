@@ -5,6 +5,7 @@ import { Database, RefreshCw } from 'lucide-react';
 import { Layout } from '@/components/layout/Layout';
 import { Toaster } from '@/components/ui/Toaster';
 import { ConfirmDialogHost } from '@/components/ui/ConfirmDialogHost';
+import { DocumentPreviewHost } from '@/components/documents/DocumentPreviewHost';
 import { AuthGate, RouteGuard, SessionSync } from '@/components/auth/AuthGate';
 import { ScrollManager } from '@/components/ScrollManager';
 import { Button } from '@/components/ui/button';
@@ -226,6 +227,7 @@ function App() {
           </RouteGuard>
         </Layout>
         <ConfirmDialogHost />
+        <DocumentPreviewHost />
         <Toaster />
       </Router>
     </AuthGate>

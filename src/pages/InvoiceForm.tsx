@@ -12,16 +12,16 @@ import { db, getSettings, getSettingsOrDefault } from '@/lib/db';
 import { saveInvoice, getInvoiceWithItems, type InvoiceDraft } from '@/lib/invoices';
 import { getCustomerPreviousBalance } from '@/lib/debts';
 import { logBackgroundFailure } from '@/lib/lifecycle';
-import { buildInvoicePrintHtml } from '@/lib/print';
+import { buildInvoicePrintHtml, invoiceDocument } from '@/lib/print';
 import { formatCurrency, formatLocalDateTimeInput, roundMoney, toFiniteNumber, toISOStringOrNull } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { Material, Customer, OfficeSettings, Invoice } from '@/types';
-import { generateInvoicePDF } from '@/lib/pdf';
+import { saveDocumentPdf } from '@/lib/pdf';
 import { QuickAddMaterialDialog } from '@/components/materials/QuickAddMaterialDialog';
 import { formatDocumentNumber } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
-import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
+import { openDocumentPreview } from '@/lib/documentPreview';
 import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 /**
@@ -69,7 +69,6 @@ export function InvoiceForm() {
   const can = usePermission();
   const canAddMaterial = can('materials.manage');
   const [quickAddName, setQuickAddName] = useState('');
-  const [previewBody, setPreviewBody] = useState<string | null>(null);
   const [loadedInvoice, setLoadedInvoice] = useState<Invoice | null>(null);
 
   const [invoiceType, setInvoiceType] = useState<'cash' | 'credit'>('cash');
@@ -328,8 +327,8 @@ export function InvoiceForm() {
 
       if (shouldPDF) {
         const s = await getSettingsOrDefault();
-        const customer = draft.customerId ? await db.customers.get(draft.customerId) : undefined;
-        await generateInvoicePDF(result.invoice, result.items, s, customer);
+        // «حفظ مع مستند» = نفس ملف الحفظ اليدوي تماماً (وصف واحد للمستند)
+        await saveDocumentPdf(invoiceDocument(result.invoice, result.items, s));
       }
 
       toast.success(isEdit ? 'تم تحديث الفاتورة' : 'تم حفظ الفاتورة', `رقم الفاتورة: ${formatDocumentNumber(result.invoiceNumber)}`);
@@ -386,7 +385,14 @@ export function InvoiceForm() {
         })),
         s
       );
-      setPreviewBody(bodyHtml);
+      openDocumentPreview({
+        title: loadedInvoice?.invoiceNumber ? `فاتورة ${formatDocumentNumber(loadedInvoice.invoiceNumber)}` : 'معاينة الفاتورة',
+        bodyHtml,
+        fileNameBase: loadedInvoice
+          ? `فاتورة_${formatDocumentNumber(loadedInvoice.invoiceNumber)}_${customerName.trim() || 'زبون'}`
+          : `مسودة_${customerName.trim() || 'فاتورة'}`,
+        shareTitle: 'معاينة الفاتورة'
+      });
     } catch (error) {
       reportError('InvoiceForm.preview', error, 'تعذّر إنشاء المعاينة');
     }
@@ -761,16 +767,6 @@ export function InvoiceForm() {
         onCreated={handleQuickAddCreated}
       />
 
-      {previewBody && (
-        <DocumentPreviewDialog
-          open={previewBody !== null}
-          title={loadedInvoice?.invoiceNumber ? `فاتورة ${formatDocumentNumber(loadedInvoice.invoiceNumber)}` : 'معاينة الفاتورة'}
-          bodyHtml={previewBody}
-          fileNameBase={loadedInvoice ? `فاتورة_${formatDocumentNumber(loadedInvoice.invoiceNumber)}_${customerName.trim() || 'زبون'}` : `مسودة_${customerName.trim() || 'فاتورة'}`}
-          shareTitle="معاينة الفاتورة"
-          onClose={() => setPreviewBody(null)}
-        />
-      )}
     </div>
   );
 }

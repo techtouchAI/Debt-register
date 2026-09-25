@@ -127,4 +127,29 @@ describe('قوالب المستندات', () => {
     expect(doc).toContain('dir="rtl"');
     expect(doc).toContain('<style>');
   });
+
+  it('ورقة المستند مقاساتها بالملّيمتر: المعاينة والطباعة وملف PDF على هندسة واحدة', () => {
+    const doc = buildPrintDocument('فاتورة ف-1', buildInvoicePrintHtml(invoice, items, settings));
+    // الورقة الواحدة: 210×297 مم بهامش 10 مم — لا عرض بالبكسل يتباين بين المسارات
+    expect(doc).toContain('width: 210mm');
+    expect(doc).toContain('min-height: 297mm');
+    expect(doc).toContain('padding: 10mm');
+    expect(doc).toContain('@page { size: A4; margin: 10mm; }');
+    // عند الطباعة تُلغى حشوة الورقة (هوامش @page تتولاها) بدل مضاعفتها
+    expect(doc).toContain('.doc .page { width: auto; min-height: 0; padding: 0;');
+    // هيكل المعاينة لا يُطبع بخلفيته الرمادية
+    expect(doc).toContain('.doc-view { background: #fff !important; padding: 0 !important; }');
+    expect(doc).not.toContain('class="doc-view"');
+    // الوصل الحراري ورقته 80 مم
+    const receipt: Payment = {
+      customerId: 1,
+      customerName: 'زبون الاختبار',
+      amount: 5000,
+      date: '2026-09-20T09:00:00.000Z',
+      method: 'cash',
+      receiptNumber: 'ق-1',
+      createdAt: '2026-09-20T09:00:00.000Z'
+    };
+    expect(buildPrintDocument('وصل ق-1', buildReceiptPrintHtml(receipt, settings))).toContain('width: 80mm');
+  });
 });
