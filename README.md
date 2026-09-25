@@ -348,10 +348,10 @@ npm run android:init && npm run android:build   # Android
 
 | Secret | الوصف |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | ملف keystore مشفر بـ Base64 كسطر واحد (`base64 -w 0 release.jks`) |
-| `ANDROID_KEYSTORE_PASSWORD` | كلمة مرور keystore |
-| `ANDROID_KEY_ALIAS` | اسم المفتاح |
-| `ANDROID_KEY_PASSWORD` | كلمة مرور المفتاح (اختياري إن كانت نفسها) |
+| `KEYSTORE_BASE64` | ملف مخزن التوقيع بصيغة PKCS12 ومشفّر بـ Base64 كسطر واحد |
+| `KEYSTORE_STORE_PASSWORD` | كلمة مرور مخزن التوقيع |
+| `KEYSTORE_KEY_ALIAS` | اسم المفتاح داخل المخزن |
+| `KEYSTORE_KEY_PASSWORD` | كلمة مرور المفتاح |
 
 ## 🛠 استكشاف الأعطال
 

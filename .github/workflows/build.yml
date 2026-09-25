@@ -108,10 +108,10 @@ jobs:
     needs: web
     runs-on: ubuntu-24.04
     env:
-      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_STORE_PASSWORD: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
+      KEYSTORE_KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+      KEYSTORE_KEY_PASSWORD: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -142,6 +142,7 @@ jobs:
           grep -q 'com.capacitorjs.plugins.filesystem.FilesystemPlugin' "$PLUGINS"
           grep -q 'com.capacitorjs.plugins.localnotifications.LocalNotificationsPlugin' "$PLUGINS"
           grep -q 'com.capacitorjs.plugins.share.SharePlugin' "$PLUGINS"
+          grep -q 'com.capacitorjs.plugins.browser.BrowserPlugin' "$PLUGINS"
           # مشروع الرجوع يجب أن يُبنى فعلاً داخل الحزمة (وإلا لا OnBackPressedCallback)
           grep -q "project(':capacitor-app')" android/capacitor.settings.gradle
           grep -q "implementation project(':capacitor-app')" android/app/capacitor.build.gradle
@@ -214,23 +215,27 @@ jobs:
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)"
           ZIPALIGN="$(ls -d "$ANDROID_HOME"/build-tools/*/zipalign | tail -1)"
           if [ -n "${KEYSTORE_BASE64:-}" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > release.jks
-            ALIAS="${KEY_ALIAS:?ANDROID_KEY_ALIAS is required}"
-            STOREPASS="${KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD is required}"
-            KEYPASS="${KEY_PASSWORD:-$STOREPASS}"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > release.p12
+            ALIAS="${KEYSTORE_KEY_ALIAS:?KEYSTORE_KEY_ALIAS is required}"
+            STOREPASS="${KEYSTORE_STORE_PASSWORD:?KEYSTORE_STORE_PASSWORD is required}"
+            KEYPASS="${KEYSTORE_KEY_PASSWORD:-$STOREPASS}"
+            KEYSTORE_TYPE=PKCS12
+            KEYSTORE_FILE=release.p12
             KEYMODE="production"
           else
             ALIAS=ci-release
             STOREPASS=ci-password
             KEYPASS=ci-password
-            keytool -genkeypair -keystore release.jks -storepass "$STOREPASS" -keypass "$KEYPASS" \
+            KEYSTORE_TYPE=JKS
+            KEYSTORE_FILE=release.jks
+            keytool -genkeypair -keystore "$KEYSTORE_FILE" -storepass "$STOREPASS" -keypass "$KEYPASS" \
               -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 3650 \
               -dname "CN=GitHub Actions, OU=CI, O=TechTouch AI, C=IQ"
             KEYMODE="ci-temporary"
           fi
           mkdir -p artifacts/android
           "$ZIPALIGN" -f 4 "$UNSIGNED" artifacts/android/aligned.apk
-          "$APKSIGNER" sign --ks release.jks --ks-key-alias "$ALIAS" \
+          "$APKSIGNER" sign --ks "$KEYSTORE_FILE" --ks-type "$KEYSTORE_TYPE" --ks-key-alias "$ALIAS" \
             --ks-pass "pass:$STOREPASS" --key-pass "pass:$KEYPASS" \
             --out artifacts/android/OfficeManager-Android.apk artifacts/android/aligned.apk
           "$APKSIGNER" verify --verbose artifacts/android/OfficeManager-Android.apk
@@ -280,6 +285,7 @@ jobs:
           unzip -p "$APK" assets/capacitor.plugins.json > apk-plugins.json
           cat apk-plugins.json
           require apk-plugins.json 'com\.capacitorjs\.plugins\.app\.AppPlugin' 'تسجيل إضافة الرجوع (AppPlugin) داخل الحزمة'
+          require apk-plugins.json 'com\.capacitorjs\.plugins\.browser\.BrowserPlugin' 'تسجيل فتح الروابط الخارجية عبر المتصفح الآمن'
           mkdir -p apk-dex
           unzip -o -q "$APK" 'classes*.dex' -d apk-dex
           if grep -rqa 'capacitorjs/plugins/app/AppPlugin' apk-dex; then

@@ -27,6 +27,12 @@ ios
 .env.test.local
 .env.production.local
 
+# Android release signing material — never commit keystores or signing credentials
+android-signing.env
+*.p12
+*.jks
+*.keystore
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

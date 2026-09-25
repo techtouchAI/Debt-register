@@ -115,6 +115,7 @@ describe('تسجيل إضافات Capacitor الأصلية (السبب الجذ�
     // فوجودها هناك = APK بلا AppPlugin = خروج فوري بزر الرجوع.
     for (const name of [
       '@capacitor/app',
+      '@capacitor/browser',
       '@capacitor/core',
       '@capacitor/android',
       '@capacitor/filesystem',
