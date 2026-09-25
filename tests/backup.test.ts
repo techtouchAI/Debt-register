@@ -143,48 +143,38 @@ describe('النسخ الاحتياطي', () => {
 });
 
 describe('التحقق من بنية النسخة', () => {
-  it('يحوّل القيم النصية إلى أرقام ويتجاهل السجلات غير الصالحة', () => {
+  it('يرفض السجلات غير الصالحة بدل إسقاطها بصمت', () => {
     const result = normalizeBackup({
-      version: '1.0.0',
+      version: '2.0.0',
       date: '2026-01-01T00:00:00.000Z',
       data: {
         settings: [{ officeName: 'مكتب', currency: 'د.ع', lowStockThreshold: '7' }],
-        materials: [
-          { id: 1, name: 'مادة', quantity: '12', salePrice: '1500', minQuantity: '3' },
-          { id: 2, name: '', quantity: 1 },
-          'not-an-object'
-        ],
+        materials: [{ id: 1, name: 'مادة', quantity: -1, salePrice: '1500', averageCost: '900', minQuantity: '3' }],
         customers: [{ id: 1, fullName: 'زبون' }],
-        invoices: [
-          {
-            id: 1,
-            invoiceNumber: 'INV-1',
-            type: 'credit',
-            customerId: 1,
-            customerName: 'زبون',
-            total: '1000',
-            paidAmount: '0',
-            date: 'ليس تاريخاً',
-            createdAt: '2026-01-01T00:00:00.000Z'
-          }
-        ],
-        invoiceItems: [{ invoiceId: 1, materialId: 1, quantity: '2', unitPrice: '500' }, { invoiceId: 'bad' }],
-        payments: [{ customerId: 1, amount: '250', date: '2026-01-02T00:00:00.000Z' }, { amount: 5 }]
+        invoices: [{ id: 1, invoiceNumber: 'ف-1', type: 'credit', customerId: 1, customerName: 'زبون', total: '1000', paidAmount: '0', date: 'ليس تاريخاً' }],
+        invoiceItems: [{ invoiceId: 1, materialId: 1, quantity: '2', unitPrice: '500' }],
+        payments: []
       }
     });
+    expect(result.ok).toBe(false);
+  });
 
+  it('يحوّل قيماً سليمة مكتوبة كنصوص مع الحفاظ على المراجع', () => {
+    const result = normalizeBackup({
+      version: '2.0.0', date: '2026-01-01T00:00:00.000Z',
+      data: {
+        settings: [{ officeName: 'مكتب', currency: 'د.ع', lowStockThreshold: '7' }],
+        materials: [{ id: 1, name: 'مادة', quantity: '12', salePrice: '1500', averageCost: '900', minQuantity: '3' }],
+        customers: [{ id: 1, fullName: 'زبون' }],
+        invoices: [{ id: 1, invoiceNumber: 'ف-1', type: 'credit', customerId: 1, customerName: 'زبون', itemsCount: 1, subtotal: '1000', discount: 0, total: '1000', paidAmount: 0, remaining: 1000, date: '2026-01-01T00:00:00.000Z', createdAt: '2026-01-01T00:00:00.000Z', status: 'unpaid' }],
+        invoiceItems: [{ invoiceId: 1, materialId: 1, quantity: '2', unitPrice: '500', total: '1000' }],
+        payments: []
+      }
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-
-    expect(result.value.data.settings[0].lowStockThreshold).toBe(7);
-    expect(result.value.data.materials).toHaveLength(1);
-    expect(result.value.data.materials[0].quantity).toBe(12);
-    expect(result.value.data.invoices[0].total).toBe(1000);
-    expect(result.value.data.invoices[0].status).toBe('unpaid');
-    expect(result.value.data.invoiceItems).toHaveLength(1);
+    expect(result.value.data.materials[0]).toMatchObject({ quantity: 12, averageCost: 900 });
     expect(result.value.data.invoiceItems[0].total).toBe(1000);
-    expect(result.value.data.payments).toHaveLength(1);
-    expect(result.warnings.length).toBeGreaterThan(0);
   });
 
   it('يرفض ما لا يحتوي على بيانات', () => {

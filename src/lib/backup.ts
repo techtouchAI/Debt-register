@@ -20,8 +20,8 @@ type TableKey =
   | 'invoices'
   | 'invoiceItems'
   | 'payments'
-  | 'purchases'
-  | 'purchaseItems'
+  | 'customerLedger'
+  | 'stockMovements'
   | 'notifications'
   | 'activityLogs'
   | 'meta';
@@ -35,8 +35,8 @@ const BACKUP_TABLES: readonly TableKey[] = [
   'invoices',
   'invoiceItems',
   'payments',
-  'purchases',
-  'purchaseItems',
+  'customerLedger',
+  'stockMovements',
   'notifications',
   'activityLogs',
   'meta'
@@ -51,8 +51,8 @@ const TABLE_LABELS: Record<TableKey, string> = {
   invoices: 'الفواتير',
   invoiceItems: 'بنود الفواتير',
   payments: 'التسديدات',
-  purchases: 'وصول الشراء',
-  purchaseItems: 'بنود وصول الشراء',
+  customerLedger: 'دفتر ذمم العملاء',
+  stockMovements: 'حركات المخزون',
   notifications: 'الإشعارات',
   activityLogs: 'سجل النشاط',
   meta: 'بيانات التسلسل والدخول'
@@ -62,7 +62,7 @@ const TABLE_LABELS: Record<TableKey, string> = {
 const MAX_SNAPSHOTS = 5;
 
 /** إصدار بنية ملف النسخة (يُرفع عند إضافة أقسام جديدة). */
-export const BACKUP_FORMAT_VERSION = '1.3.0';
+export const BACKUP_FORMAT_VERSION = '2.0.0';
 
 /**
  * بادئة اسم ملف النسخة الاحتياطية حين لا يكون اسم المكتب معروفاً بعد
@@ -138,7 +138,7 @@ async function contentSignature(data: BackupData['data']): Promise<string> {
  * القراءة داخل معاملة قراءة واحدة: لا يمكن أن تُحفظ فاتورة بين قراءة جدول
  * الفواتير وقراءة بنودها فتخرج النسخة ناقصة البنود. تشمل النسخة:
  * الإعدادات (اسم المكتب والشعار والعملة والتذييل والسمة...)، المستخدمين،
- * المواد، الزبائن، الفواتير وبنودها، التسديدات، وصول الشراء وبنودها،
+ * المواد، الزبائن، الفواتير وبنودها، التسديدات، دفتر ذمم العملاء، حركات المخزون،
  * الإشعارات، سجل النشاط، وبيانات التسلسل والدخول المحمولة.
  */
 export async function createBackup(): Promise<BackupData> {
@@ -152,14 +152,14 @@ export async function createBackup(): Promise<BackupData> {
       db.invoices,
       db.invoiceItems,
       db.payments,
-      db.purchases,
-      db.purchaseItems,
+      db.customerLedger,
+      db.stockMovements,
       db.notifications,
       db.activityLogs,
       db.meta
     ],
     async () => {
-      const [settings, users, materials, customers, invoices, invoiceItems, payments, purchases, purchaseItems, notifications, activityLogs, meta] =
+      const [settings, users, materials, customers, invoices, invoiceItems, payments, customerLedger, stockMovements, notifications, activityLogs, meta] =
         await Promise.all([
           db.settings.toArray(),
           db.users.toArray(),
@@ -168,8 +168,8 @@ export async function createBackup(): Promise<BackupData> {
           db.invoices.toArray(),
           db.invoiceItems.toArray(),
           db.payments.toArray(),
-          db.purchases.toArray(),
-          db.purchaseItems.toArray(),
+          db.customerLedger.toArray(),
+          db.stockMovements.toArray(),
           db.notifications.toArray(),
           db.activityLogs.toArray(),
           db.meta.toArray()
@@ -182,8 +182,8 @@ export async function createBackup(): Promise<BackupData> {
         invoices,
         invoiceItems,
         payments,
-        purchases,
-        purchaseItems,
+        customerLedger,
+        stockMovements,
         notifications,
         activityLogs,
         meta: meta.filter((entry): entry is AppMeta => isPortableMetaKey(entry.key))
@@ -426,8 +426,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       db.invoices,
       db.invoiceItems,
       db.payments,
-      db.purchases,
-      db.purchaseItems,
+      db.customerLedger,
+      db.stockMovements,
       db.notifications,
       db.activityLogs,
       db.meta
@@ -441,8 +441,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
         data.invoices.length +
         data.invoiceItems.length +
         data.payments.length +
-        (data.purchases?.length ?? 0) +
-        (data.purchaseItems?.length ?? 0);
+        (data.customerLedger?.length ?? 0) +
+        (data.stockMovements?.length ?? 0);
       if (incomingRecords === 0) {
         const existingRecords =
           (await db.materials.count()) +
@@ -450,8 +450,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
           (await db.invoices.count()) +
           (await db.invoiceItems.count()) +
           (await db.payments.count()) +
-          (await db.purchases.count()) +
-          (await db.purchaseItems.count());
+          (await db.customerLedger.count()) +
+          (await db.stockMovements.count());
         if (existingRecords > 0) {
           throw new Error(
             'النسخة الاحتياطية لا تحتوي على أي سجلات بيانات؛ تم إلغاء الاستيراد لحماية بيانات المكتب الحالية'
@@ -466,8 +466,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       await db.invoices.clear();
       await db.invoiceItems.clear();
       await db.payments.clear();
-      await db.purchases.clear();
-      await db.purchaseItems.clear();
+      await db.customerLedger.clear();
+      await db.stockMovements.clear();
       await db.notifications.clear();
       await db.activityLogs.clear();
 
@@ -478,8 +478,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       if (data.invoices.length) await db.invoices.bulkAdd(data.invoices);
       if (data.invoiceItems.length) await db.invoiceItems.bulkAdd(data.invoiceItems);
       if (data.payments.length) await db.payments.bulkAdd(data.payments);
-      if (data.purchases?.length) await db.purchases.bulkAdd(data.purchases);
-      if (data.purchaseItems?.length) await db.purchaseItems.bulkAdd(data.purchaseItems);
+      if (data.customerLedger?.length) await db.customerLedger.bulkAdd(data.customerLedger);
+      if (data.stockMovements?.length) await db.stockMovements.bulkAdd(data.stockMovements);
       if (data.notifications.length) await db.notifications.bulkAdd(data.notifications);
       if (data.activityLogs.length) await db.activityLogs.bulkAdd(data.activityLogs);
       await mergePortableMeta(meta);
@@ -514,8 +514,8 @@ export async function restoreBackupData(backupData: BackupData, warnings: string
       invoices: data.invoices.length,
       invoiceItems: data.invoiceItems.length,
       payments: data.payments.length,
-      purchases: data.purchases?.length ?? 0,
-      purchaseItems: data.purchaseItems?.length ?? 0,
+      customerLedger: data.customerLedger?.length ?? 0,
+      stockMovements: data.stockMovements?.length ?? 0,
       notifications: data.notifications.length,
       activityLogs: data.activityLogs.length,
       meta: meta.length

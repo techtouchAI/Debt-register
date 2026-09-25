@@ -29,7 +29,10 @@ export interface Material {
   name: string;
   quantity: number;
   salePrice: number;
-  purchasePrice?: number;
+  /** متوسط التكلفة المرجح للوحدات الموجودة حالياً. */
+  averageCost: number;
+  /** آخر تكلفة إدخال معتمدة لتسهيل الإدخال اليدوي التالي. */
+  lastCost?: number;
   category?: string;
   barcode?: string;
   minQuantity: number;
@@ -88,7 +91,7 @@ export interface InvoiceItem {
   quantity: number;
   unitPrice: number;
   total: number;
-  purchasePrice?: number;
+  unitCost?: number;
 }
 
 export interface Payment {
@@ -108,33 +111,32 @@ export interface Payment {
   invoiceId?: number;
 }
 
-export interface Purchase {
+/** حركة غير قابلة للاعتماد على رصيد الفاتورة المحفوظ.
+ * المبلغ الموجب يزيد ذمة العميل، والسالب يخفضها. */
+export interface CustomerLedger {
   id?: number;
-  purchaseNumber: string;
-  supplierName: string;
-  itemsCount: number;
-  subtotal: number;
-  discount: number;
-  total: number;
+  customerId: number;
   date: string;
-  createdAt: string;
+  type: 'invoice' | 'payment' | 'discount';
+  amount: number;
+  referenceId?: number;
   notes?: string;
-  /** طريقة الدفع عند الشراء */
-  paymentMethod: 'cash' | 'credit';
-  /** المبلغ المدفوع عند الشراء نقداً */
-  paidAmount: number;
-  /** المتبقي على المكتب للمورد */
-  remaining: number;
+  createdAt: string;
+  updatedAt?: string;
 }
 
-export interface PurchaseItem {
+/** حركة مخزون؛ الكمية الموجبة إدخال/تسوية زيادة والسالبة بيع أو تسوية نقص. */
+export interface StockMovement {
   id?: number;
-  purchaseId: number;
   materialId: number;
-  materialName: string;
+  date: string;
   quantity: number;
-  purchasePrice: number;
-  total: number;
+  /** تكلفة الوحدة المثبّتة عند تسجيل الحركة. */
+  cost: number;
+  type: 'manual_entry' | 'sale' | 'adjustment';
+  referenceId?: number;
+  notes?: string;
+  createdAt: string;
 }
 
 export interface Notification {
@@ -218,8 +220,8 @@ export interface BackupData {
     invoices: Invoice[];
     invoiceItems: InvoiceItem[];
     payments: Payment[];
-    purchases?: Purchase[];
-    purchaseItems?: PurchaseItem[];
+    customerLedger?: CustomerLedger[];
+    stockMovements?: StockMovement[];
     notifications: Notification[];
     activityLogs: ActivityLog[];
     /**

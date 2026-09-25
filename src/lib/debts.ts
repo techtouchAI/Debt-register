@@ -1,18 +1,12 @@
 import { db } from './db';
-import type { Invoice, Payment } from '@/types';
 import { roundMoney, toFiniteNumber } from './utils';
+import { getLedgerBalance, getCustomerLedger, getLedgerBalanceBefore } from './ledger';
+import type { Invoice, Payment } from '@/types';
 
-/**
- * رصيد الزبون:
- *   دين = مجموع الفواتير الآجلة − مجموع التسديدات
- * يُحسب دائماً من السجلات الأصلية (لا قيم مخزنة قابلة للتلف).
- */
+/** ملخص متوافق مع واجهات العرض القائمة؛ مصدره الآن دفتر الذمم فقط. */
 export interface CustomerBalance {
-  /** مجموع الفواتير الآجلة */
   credit: number;
-  /** مجموع المسدد */
   paid: number;
-  /** المتبقي (قد يكون سالباً عند الدفع الزائد) */
   debt: number;
 }
 
@@ -20,102 +14,54 @@ export function emptyBalance(): CustomerBalance {
   return { credit: 0, paid: 0, debt: 0 };
 }
 
+/**
+ * دالة توافق للبيانات المؤقتة والاختبارات فقط. الحسابات التشغيلية لا تستدعيها؛
+ * بل تقرأ من customer_ledger حتى لا تتأثر برصيد فاتورة mutable.
+ */
 export function computeBalance(invoices: Invoice[], payments: Payment[]): CustomerBalance {
-  const credit = roundMoney(
-    invoices
-      .filter((invoice) => invoice.type === 'credit')
-      .reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0)
-  );
+  const credit = roundMoney(invoices.filter((invoice) => invoice.type === 'credit').reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
   const paid = roundMoney(payments.reduce((sum, payment) => sum + toFiniteNumber(payment.amount), 0));
   return { credit, paid, debt: roundMoney(credit - paid) };
 }
 
-/**
- * أرصدة كل الزبائن بمرور واحد على الجدولين.
- * بديل عن حلقة تستعلم مرتين لكل زبون (كانت تُبطئ لوحة التحكم والتقارير
- * بشكل ملحوظ مع تراكم فواتير سنة كاملة).
- */
+function applyEntry(balance: CustomerBalance, entry: { type: string; amount: number }): CustomerBalance {
+  const amount = roundMoney(toFiniteNumber(entry.amount));
+  if (entry.type === 'invoice') balance.credit = roundMoney(balance.credit + Math.max(0, amount));
+  else if (amount < 0) balance.paid = roundMoney(balance.paid + Math.abs(amount));
+  else balance.credit = roundMoney(balance.credit + amount);
+  balance.debt = roundMoney(balance.debt + amount);
+  return balance;
+}
+
+/** أرصدة العملاء من دفتر الحركات بمرور واحد. */
 export async function getCustomerBalances(): Promise<Map<number, CustomerBalance>> {
   const balances = new Map<number, CustomerBalance>();
-
-  const ensure = (customerId: number): CustomerBalance => {
-    let balance = balances.get(customerId);
-    if (!balance) {
-      balance = emptyBalance();
-      balances.set(customerId, balance);
-    }
-    return balance;
-  };
-
-  await db.invoices
-    .where('type')
-    .equals('credit')
-    .each((invoice) => {
-      if (typeof invoice.customerId !== 'number') return;
-      const balance = ensure(invoice.customerId);
-      balance.credit = roundMoney(balance.credit + toFiniteNumber(invoice.total));
-    });
-
-  await db.payments.each((payment) => {
-    if (typeof payment.customerId !== 'number') return;
-    const balance = ensure(payment.customerId);
-    balance.paid = roundMoney(balance.paid + toFiniteNumber(payment.amount));
+  await db.customerLedger.each((entry) => {
+    const current = balances.get(entry.customerId) ?? emptyBalance();
+    balances.set(entry.customerId, applyEntry(current, entry));
   });
-
-  for (const balance of balances.values()) {
-    balance.debt = roundMoney(balance.credit - balance.paid);
-  }
-
   return balances;
 }
 
-/** رصيد زبون واحد. */
-export async function getCustomerBalance(customerId: number): Promise<CustomerBalance> {
-  const [invoices, payments] = await Promise.all([
-    db.invoices.where('customerId').equals(customerId).toArray(),
-    db.payments.where('customerId').equals(customerId).toArray()
-  ]);
-  return computeBalance(invoices, payments);
+/** رصيد العميل الحالي أو حتى تاريخ محدد. */
+export async function getCustomerBalance(customerId: number, throughDate?: string): Promise<CustomerBalance> {
+  const entries = await getCustomerLedger(customerId, throughDate);
+  return entries.reduce((balance, entry) => applyEntry(balance, entry), emptyBalance());
 }
 
 export async function getCustomerDebt(customerId: number): Promise<number> {
-  const balance = await getCustomerBalance(customerId);
-  return balance.debt;
+  return getLedgerBalance(customerId);
 }
 
 /**
- * الدين القديم المستحق على الزبون **قبل** فاتورة معيّنة (الرصيد السابق).
- *
- * يُحسب من السجلات الأصلية: مجموع الفواتير الآجلة ناقص مجموع التسديدات، مع
- * استثناء الفاتورة المطلوبة (إن كانت موجودة) ودفعة المقدمة المرتبطة بها —
- * فالسؤال هو: كم ديناً كان على الزبون قبل هذه الفاتورة؟ لا: كم صار بعدها.
- *
- * لا تُعاد قيمة سالبة: الرصيد الدائن (دفع زائد) يعني «لا دين سابق».
- * الاستثناء ضروري عند التعديل حتى لا تُحتسب الفاتورة على نفسها.
+ * الرصيد المستحق قبل تاريخ العملية. من دون تاريخ يعيد الرصيد الحالي للتوافق
+ * مع شاشات الملخص؛ أما مع التاريخ فيستثني كل حركة تقع في لحظة العملية نفسها
+ * أو بعدها، وهو ما تحتاجه لقطة الرصيد السابق في الفاتورة المؤرخة.
  */
-export function previousBalanceFromLedger(
-  customerId: number,
-  invoices: Invoice[],
-  payments: Payment[],
-  excludeInvoiceId?: number
-): number {
-  const relevantInvoices = invoices.filter(
-    (invoice) => invoice.type === 'credit' && invoice.customerId === customerId && invoice.id !== excludeInvoiceId
-  );
-  const relevantPayments = payments.filter(
-    (payment) => payment.customerId === customerId && (excludeInvoiceId === undefined || payment.invoiceId !== excludeInvoiceId)
-  );
-  return Math.max(0, roundMoney(computeBalance(relevantInvoices, relevantPayments).debt));
-}
-
-/** الدين القديم لزبون واحد من قاعدة البيانات (خارج أي معاملة). */
-export async function getCustomerPreviousBalance(customerId: number, excludeInvoiceId?: number): Promise<number> {
-  if (!Number.isInteger(customerId) || customerId <= 0) return 0;
-  const [invoices, payments] = await Promise.all([
-    db.invoices.where('customerId').equals(customerId).toArray(),
-    db.payments.where('customerId').equals(customerId).toArray()
-  ]);
-  return previousBalanceFromLedger(customerId, invoices, payments, excludeInvoiceId);
+export async function getCustomerPreviousBalance(customerId: number, beforeDate?: string): Promise<number> {
+  if (beforeDate) return Math.max(0, await getLedgerBalanceBefore(customerId, beforeDate));
+  const balance = await getCustomerBalance(customerId);
+  return Math.max(0, balance.debt);
 }
 
 export async function getAllCustomersDebt(): Promise<{ customerId: number; debt: number }[]> {

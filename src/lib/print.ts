@@ -2,9 +2,9 @@ import { escapeHtml, formatDate, formatLocalDateInput, roundMoney, toFiniteNumbe
 import { officeNameFontSize } from './officeName';
 import { formatDocumentNumber, paymentMethodLabel, saleTypeLabel } from './labels';
 import { getElectronAPI, isNativePlatform } from './platform';
-import { A4_SHEET, sheetFor, sheetRenderWidthPx, type PdfFormat } from './pageLayout';
+import { A4_SHEET, sheetRenderWidthPx, type PdfFormat } from './pageLayout';
 import { openDocumentPreview } from './documentPreview';
-import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase, PurchaseItem } from '@/types';
+import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment } from '@/types';
 
 /**
  * مستندات الطباعة والمعاينة وملفات PDF.
@@ -33,7 +33,7 @@ import type { Customer, Invoice, InvoiceItem, OfficeSettings, Payment, Purchase,
 /* ------------------------------------------------------------------ *
  * ورقة الأنماط المشتركة للمستندات
  *
- * قواعد منع خروج المحتوى (تُطبَّق على الفاتورة والوصل والكشف):
+ * قواعد منع خروج المحتوى (تُطبَّق على الفاتورة ووصل القبض وكشف الحساب):
  *  - الجداول بعرض ثابت (table-layout: fixed) مع أعمدة بنِسَب محسوبة.
  *  - الأرقام والتواريخ والمبالغ: سطر واحد لا ينكسر أبداً (nowrap + ltr).
  *  - النصوص العربية: التفاف عند حدود الكلمات فقط (word-break: normal)،
@@ -59,7 +59,7 @@ html, body { margin: 0; padding: 0; background: #fff; }
 
 .doc-header { text-align: center; border-bottom: 2px solid #8f7048; padding-bottom: 12px; margin-bottom: 14px; }
 .doc-header h1 { color: #8f7048; font-size: 22px; line-height: 1.6; overflow-wrap: anywhere; word-break: normal; white-space: normal; }
-.doc-header h1.office-name, .doc.receipt h2.office-name { display: block; overflow: visible; -webkit-line-clamp: unset; line-clamp: unset; }
+.doc-header h1.office-name { display: block; overflow: visible; -webkit-line-clamp: unset; line-clamp: unset; }
 .doc-header .sub { color: #6b7280; font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .doc-header img { max-height: 60px; max-width: 180px; margin-top: 8px; object-fit: contain; }
 .doc-meta { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: space-between; margin-bottom: 14px; font-size: 13px; }
@@ -84,15 +84,6 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .doc .section-title { font-size: 14px; font-weight: 800; margin: 0 0 6px; }
 .doc .balance { font-size: 15px; font-weight: 800; white-space: nowrap; }
 
-/* ---- وصل حراري 80مم: ورقته 80مم أيضاً حتى يتطابق ما يُرى مع ما يُطبع ---- */
-.doc.receipt .page { width: ${sheetFor('receipt80').widthMm}mm; min-height: 0; padding: ${sheetFor('receipt80').marginMm}mm 2.5mm; font-size: 13px; }
-.doc.receipt h2 { font-size: 17px; }
-.doc.receipt hr { border: 0; border-top: 1px dashed #9ca3af; margin: 10px 0; }
-.doc.receipt .lines { text-align: right; line-height: 2; }
-.doc.receipt .lines p { word-break: normal; overflow-wrap: anywhere; }
-.doc.receipt .amount { font-size: 18px; font-weight: 800; color: #8f7048; white-space: nowrap; }
-.doc.receipt .muted { color: #6b7280; font-size: 12px; }
-
 /* ---- هيكل المعاينة (لا يُستخدم في الطباعة ولا في PDF) ----
    خلفية رمادية وورقة كاملة في الوسط: المستخدم يرى الورقة كما ستُطبع.
    و--doc-zoom تحدّده نافذة المعاينة ليظهر عرض الورقة كاملاً على الشاشات
@@ -107,8 +98,6 @@ html, body { margin: 0; padding: 0; background: #fff; }
   .doc { width: auto; }
   /* الطباعة تُبرز المحتوى بلا ورق إضافي: هوامش الورقة الأربعة تتولاها @page */
   .doc .page { width: auto; min-height: 0; padding: 0; zoom: 1; box-shadow: none; margin: 0; }
-  /* الوصل الحراري يحتفظ بعرض ورقته (80مم) وحشوتها عند الطباعة */
-  .doc.receipt .page { width: ${sheetFor('receipt80').widthMm}mm; padding: ${sheetFor('receipt80').marginMm}mm 2.5mm; margin: 0 auto; }
 }
 @page { size: A4; margin: ${A4_SHEET.marginMm}mm; }
 `;
@@ -192,8 +181,8 @@ const PREVIEW_HORIZONTAL_PADDING_PX = 24;
 export function buildPrintDocument(title: string, bodyHtml: string, options: PrintDocumentOptions = {}): string {
   const isPreview = options.view === 'preview';
   const available = options.fitWidthPx;
-  // عروض الورق بالبكسل: A4 (794) أو الوصل الحراري (302) — التصغير بأيّهما أوسع
-  const widestSheetPx = Math.max(sheetRenderWidthPx('a4'), sheetRenderWidthPx('receipt80'));
+  // عرض ورقة A4 بالبكسل، وهو المرجع الوحيد لتصغير المعاينة
+  const widestSheetPx = sheetRenderWidthPx('a4');
   const zoom =
     isPreview && typeof available === 'number' && available > 0
       ? Math.min(1, available / (widestSheetPx + PREVIEW_HORIZONTAL_PADDING_PX))
@@ -506,27 +495,36 @@ export function buildReceiptPrintHtml(payment: Payment, settings: OfficeSettings
   const currency = escapeHtml(settings.currency || '');
   const methodText = paymentMethodLabel(payment.method);
   return `
-    <div class="doc receipt"><div class="page" style="text-align:center;">
-      ${officeNameHeading(settings, 'h2')}
-      ${settings.phone ? `<p class="muted num">${escapeHtml(settings.phone)}</p>` : ''}
-      <hr />
-      <h3 style="font-size:15px;">وصل قبض</h3>
-      <div class="lines">
-        <p><strong>رقم الوصل:</strong> <span class="num">${escapeHtml(formatDocumentNumber(payment.receiptNumber))}</span></p>
-        <p><strong>التاريخ:</strong> ${escapeHtml(formatDate(payment.date, true))}</p>
-        <p><strong>الزبون:</strong> ${escapeHtml(payment.customerName)}</p>
-        <p><strong>طريقة الدفع:</strong> ${methodText}</p>
+    <div class="doc"><div class="page">
+      <div class="doc-header">
+        ${officeNameHeading(settings)}
+        ${settings.logo ? `<img src="${escapeHtml(settings.logo)}" alt="" />` : ''}
+        <p class="sub">${escapeHtml(settings.address || '')}${settings.address && settings.phone ? ' | ' : ''}<span class="num">${escapeHtml(settings.phone || '')}</span></p>
+        <h2 style="font-size:16px; margin-top:8px; color:#8f7048;">وصل قبض</h2>
       </div>
-      <hr />
-      <p class="amount">المبلغ: <span class="num">${escapeHtml(payment.amount.toLocaleString('ar-IQ'))}</span> ${currency}</p>
-      ${remainingDebt !== undefined ? `<p>الدين المتبقي: <span class="num">${escapeHtml(remainingDebt.toLocaleString('ar-IQ'))}</span> ${currency}</p>` : ''}
-      ${payment.notes ? `<p class="muted">ملاحظات: ${escapeHtml(payment.notes)}</p>` : ''}
-      <hr />
-      <p class="muted">${escapeHtml(settings.invoiceFooter || 'شكراً لتعاملكم معنا')}</p>
+      <div class="doc-meta">
+        <div class="col">
+          <p class="pair">رقم الوصل: <span class="v num">${escapeHtml(formatDocumentNumber(payment.receiptNumber))}</span></p>
+          <p class="wrap">الزبون: <strong>${escapeHtml(payment.customerName)}</strong></p>
+        </div>
+        <div class="col">
+          <p class="pair">التاريخ: <span class="v">${escapeHtml(formatDate(payment.date, true))}</span></p>
+          <p class="pair">طريقة الدفع: <span class="v">${escapeHtml(methodText)}</span></p>
+        </div>
+      </div>
+      <table class="grid">
+        <thead><tr><th>البيان</th><th class="l">القيمة</th></tr></thead>
+        <tbody>
+          <tr><td>المبلغ المقبوض</td><td class="l num">${escapeHtml(payment.amount.toLocaleString('ar-IQ'))} ${currency}</td></tr>
+          ${remainingDebt !== undefined ? `<tr><td>الدين المتبقي</td><td class="l num">${escapeHtml(remainingDebt.toLocaleString('ar-IQ'))} ${currency}</td></tr>` : ''}
+        </tbody>
+      </table>
+      ${payment.notes ? `<p class="notes">ملاحظات: ${escapeHtml(payment.notes)}</p>` : ''}
+      <div class="doc-footer">${escapeHtml(settings.invoiceFooter || 'شكراً لتعاملكم معنا')}</div>
     </div></div>`;
 }
 
-/** وصف وصل قبض: ورقته حرارية 80مم (معاينةً وطباعةً وملفاً). */
+/** وصف وصل قبض على ورقة A4 موحدة. */
 export function receiptDocument(payment: Payment, settings: OfficeSettings, remainingDebt?: number): DocumentDescriptor {
   const number = formatDocumentNumber(payment.receiptNumber);
   return {
@@ -534,7 +532,7 @@ export function receiptDocument(payment: Payment, settings: OfficeSettings, rema
     bodyHtml: buildReceiptPrintHtml(payment, settings, remainingDebt),
     fileNameBase: `وصل_قبض_${number}_${payment.customerName}`,
     shareTitle: `وصل قبض ${number}`,
-    pdfFormat: 'receipt80'
+    pdfFormat: 'a4'
   };
 }
 
@@ -618,82 +616,6 @@ export function statementDocument(
     bodyHtml: buildCustomerStatementPrintHtml(customer, invoices, payments, settings, totalDebt),
     fileNameBase: `كشف_حساب_${customer.fullName}_${formatLocalDateInput()}`,
     shareTitle: `كشف حساب ${customer.fullName}`,
-    pdfFormat: 'a4'
-  };
-}
-
-export function buildPurchasePrintHtml(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): string {
-  const currency = escapeHtml(settings.currency || '');
-  const rows = items
-    .map(
-      (item, index) => `
-        <tr>
-          <td class="c num">${index + 1}</td>
-          <td class="name">${escapeHtml(item.materialName)}</td>
-          <td class="c num">${escapeHtml(item.quantity)}</td>
-          <td class="c num">${escapeHtml(item.purchasePrice.toLocaleString('ar-IQ'))}</td>
-          <td class="l num">${escapeHtml(item.total.toLocaleString('ar-IQ'))}</td>
-        </tr>`
-    )
-    .join('');
-
-  const methodText = saleTypeLabel(purchase.paymentMethod);
-
-  return `
-    <div class="doc"><div class="page">
-      <div class="doc-header">
-        ${officeNameHeading(settings)}
-        ${settings.logo ? `<img src="${escapeHtml(settings.logo)}" alt="" />` : ''}
-        <p class="sub">${escapeHtml(settings.address || '')}${settings.address && settings.phone ? ' | ' : ''}<span class="num">${escapeHtml(settings.phone || '')}</span></p>
-        <h2 style="font-size:16px; margin-top:8px; color:#8f7048;">وصل شراء / إدخال مخزن</h2>
-      </div>
-
-      <div class="doc-meta">
-        <div class="col">
-          <p class="pair">رقم الوصل: <span class="v num">${escapeHtml(formatDocumentNumber(purchase.purchaseNumber))}</span></p>
-          <p class="wrap">المورد: <strong>${escapeHtml(purchase.supplierName)}</strong></p>
-          <p class="pair">طريقة الدفع: <span class="v">${methodText}</span></p>
-        </div>
-        <div class="col">
-          <p class="pair">التاريخ: <span class="v">${escapeHtml(formatDate(purchase.date, true))}</span></p>
-          <p class="pair">عدد المواد: <span class="v">${purchase.itemsCount}</span></p>
-        </div>
-      </div>
-
-      <table class="grid">
-        <colgroup>
-          <col style="width:8%" />
-          <col style="width:42%" />
-          <col style="width:13%" />
-          <col style="width:17%" />
-          <col style="width:20%" />
-        </colgroup>
-        <thead>
-          <tr><th class="c">#</th><th>المادة</th><th class="c">الكمية</th><th class="c">سعر الشراء</th><th class="l">الإجمالي</th></tr>
-        </thead>
-        <tbody>${rows || '<tr><td colspan="5" class="c" style="color:#6b7280;">لا توجد مواد</td></tr>'}</tbody>
-      </table>
-
-      <div class="totals">
-        <p>المجموع: <span class="num">${escapeHtml(purchase.subtotal.toLocaleString('ar-IQ'))}</span> ${currency}</p>
-        ${purchase.discount > 0 ? `<p>الخصم: <span class="num">${escapeHtml(purchase.discount.toLocaleString('ar-IQ'))}</span> ${currency}</p>` : ''}
-        <p class="grand">الإجمالي: <span class="num">${escapeHtml(purchase.total.toLocaleString('ar-IQ'))}</span> ${currency}</p>
-        ${purchase.paymentMethod === 'credit' ? `<p>المدفوع: <span class="num">${escapeHtml(purchase.paidAmount.toLocaleString('ar-IQ'))}</span> | المتبقي على المكتب: <span class="num">${escapeHtml(purchase.remaining.toLocaleString('ar-IQ'))}</span></p>` : ''}
-      </div>
-
-      ${purchase.notes ? `<p class="notes">ملاحظات: ${escapeHtml(purchase.notes)}</p>` : ''}
-      ${settings.invoiceFooter ? `<div class="doc-footer">${escapeHtml(settings.invoiceFooter)}</div>` : ''}
-    </div></div>`;
-}
-
-/** وصف وصل شراء. */
-export function purchaseDocument(purchase: Purchase, items: PurchaseItem[], settings: OfficeSettings): DocumentDescriptor {
-  const number = formatDocumentNumber(purchase.purchaseNumber);
-  return {
-    title: `وصل شراء ${number}`,
-    bodyHtml: buildPurchasePrintHtml(purchase, items, settings),
-    fileNameBase: `وصل_شراء_${number}_${purchase.supplierName}`,
-    shareTitle: `وصل شراء ${number}`,
     pdfFormat: 'a4'
   };
 }

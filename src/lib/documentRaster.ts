@@ -36,7 +36,7 @@ export interface RasterizedDocument {
 }
 
 export interface RasterizeOptions {
-  /** عرض الورقة بالبكسل (794 لورقة A4، 302 للوصل الحراري). */
+  /** عرض ورقة A4 بالبكسل (794 بكسل تقريباً). */
   widthPx: number;
   /** أقل ارتفاع لإطار القياس؛ يكبر تلقائياً إذا طال المحتوى. */
   minHeightPx: number;
@@ -68,11 +68,8 @@ export async function rasterizeDocument(bodyHtml: string, options: RasterizeOpti
     await waitForFrameFonts(frameDocument);
     await waitForImages(frameDocument.body);
 
-    // ارتفاع التصوير = ارتفاع الورقة نفسها (لا ارتفاع الإطار، ولا حدّه الأدنى).
-    // القياس من `scrollHeight` وحده خطأ في الوصل الحراري: الإطار أقصر من
-    // الورقة فيكون الارتفاع المقيس هو ارتفاع الإطار، فتُصوَّر مساحة بيضاء
-    // فارغة ويمتد المستند إلى 159مم بدل 95مم. الورقة (`.doc .page`) هي
-    // المرجع: A4 لها ارتفاع أدنى 297مم، والوصل ارتفاعه ارتفاع محتواه.
+    // ارتفاع التصوير = ارتفاع الورقة نفسها لا ارتفاع إطار القياس. ورقة
+    // المستند (`.doc .page`) هي المرجع ولها ارتفاع A4 أدنى 297 مم.
     const measuredHeight = measureSheetHeight(frameDocument);
     const heightPx = measuredHeight > 0 ? Math.ceil(measuredHeight) : options.minHeightPx;
     if (heightPx > frame.clientHeight) frame.style.height = `${heightPx}px`;
@@ -93,8 +90,7 @@ export async function rasterizeDocument(bodyHtml: string, options: RasterizeOpti
 
 /**
  * ارتفاع الورقة بالبكسل من صندوق الورقة (`.doc .page`)، وصفر إن تعذّر قياسه
- * فيُستعمل ارتفاع الإطار. (`minHeightPx` يخصّ الإطار لا الورقة: هو مساحة
- * تخطيط لا حدّ أدنى للمستند، فاستعماله حشوةً يُطيل الوصل الحراري بفراغ.)
+ * فيُستعمل ارتفاع الإطار. (`minHeightPx` يخصّ الإطار لا الورقة.)
  */
 function measureSheetHeight(frameDocument: Document): number {
   // لا `instanceof HTMLElement`: عناصر الإطار تنتمي إلى عالم (realm) آخر

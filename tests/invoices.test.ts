@@ -5,11 +5,11 @@ import {
   deleteInvoice,
   getInvoiceWithItems,
   computeInvoiceTotals,
-  validateInvoiceDraft,
-  reallocateCustomerInvoices
+  validateInvoiceDraft
 } from '@/lib/invoices';
 import { nextInvoiceNumber } from '@/lib/sequence';
 import { getCustomerBalance } from '@/lib/debts';
+import { savePayment } from '@/lib/payments';
 import type { Material } from '@/types';
 
 async function addMaterial(partial: Partial<Material> & { name: string }): Promise<number> {
@@ -341,7 +341,7 @@ describe('الفواتير الآجلة ودفعة المقدمة', () => {
       type: 'credit',
       customerId: secondCustomerId,
       customerName: 'الزبون الثاني',
-      dateISO,
+      dateISO: '2026-03-11T09:00:00.000Z',
       discount: 0,
       paidAmount: 3000,
       items: [{ materialId, materialName: 'مادة النقل', quantity: 5, unitPrice: 2000 }]
@@ -488,19 +488,14 @@ describe('الرصيد السابق (الدين القديم) على الفات�
     });
     expect(second.invoice.previousBalance).toBe(2000);
 
-    // تسديد لاحق يخفض دين الزبون: لقطة الفاتورة تبقى كما سُلِّمت للزبون
-    const now = new Date().toISOString();
-    await db.payments.add({
+    // تسديد لاحق يخفض دين الزبون عبر خدمة التسديد، فتُحدّث حركة الدفتر.
+    const payment = await savePayment({
       customerId,
-      customerName: 'أبو محمد',
       amount: 500,
-      date: now,
-      method: 'cash',
-      receiptNumber: 'ق-تجريبي-1',
-      createdAt: now,
-      source: 'manual'
+      dateISO: '2026-03-12T09:00:00.000Z',
+      method: 'cash'
     });
-    await reallocateCustomerInvoices(customerId);
+    expect(payment.ok).toBe(true);
 
     const edited = await saveInvoice({
       id: second.invoiceId,
@@ -526,7 +521,7 @@ describe('الرصيد السابق (الدين القديم) على الفات�
 
     await createCreditInvoice({ customerId: firstCustomerId, customerName: 'الزبون الأول', materialId, quantity: 2 });
     await createCreditInvoice({ customerId: secondCustomerId, customerName: 'الزبون الثاني', materialId, quantity: 3 });
-    const moved = await createCreditInvoice({ customerId: firstCustomerId, customerName: 'الزبون الأول', materialId, quantity: 1 });
+    const moved = await createCreditInvoice({ customerId: firstCustomerId, customerName: 'الزبون الأول', materialId, quantity: 1, dateISO: '2026-03-11T09:00:00.000Z' });
     expect(moved.invoice.previousBalance).toBe(2000);
 
     const transferred = await saveInvoice({
@@ -534,7 +529,7 @@ describe('الرصيد السابق (الدين القديم) على الفات�
       type: 'credit',
       customerId: secondCustomerId,
       customerName: 'الزبون الثاني',
-      dateISO,
+      dateISO: '2026-03-11T09:00:00.000Z',
       discount: 0,
       paidAmount: 0,
       items: [{ materialId, materialName: 'سماد', quantity: 1, unitPrice: 1000 }]

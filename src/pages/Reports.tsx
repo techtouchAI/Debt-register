@@ -24,7 +24,7 @@ const REPORT_LABELS: Record<ReportKey, string> = {
   debts: 'الديون الشامل',
   materials: 'حركة مادة',
   profit: 'الأرباح',
-  inventory: 'قيمة المخزون'
+  inventory: 'قيمة المخزون بالتكلفة'
 };
 
 interface MaterialSaleRow {
@@ -161,15 +161,10 @@ export function Reports() {
 
       const totalSold = validRows.reduce((sum, item) => sum + toFiniteNumber(item.quantity), 0);
       const totalRevenue = validRows.reduce((sum, item) => sum + toFiniteNumber(item.total), 0);
-      const totalProfit = selectedMaterial.purchasePrice
-        ? validRows.reduce(
-            (sum, item) =>
-              sum +
-              (toFiniteNumber(item.unitPrice) - toFiniteNumber(selectedMaterial.purchasePrice)) *
-                toFiniteNumber(item.quantity),
-            0
-          )
-        : 0;
+      const totalProfit = validRows.reduce(
+        (sum, item) => sum + (toFiniteNumber(item.unitPrice) - toFiniteNumber(item.unitCost)) * toFiniteNumber(item.quantity),
+        0
+      );
 
       if (isStale()) return;
       setMaterialMovement({
@@ -194,7 +189,7 @@ export function Reports() {
       // الخام؛ وإلا يظهر الربح أكبر من الواقع عند وجود خصومات.
       const totalSales = roundMoney(invoices.reduce((sum, invoice) => sum + toFiniteNumber(invoice.total), 0));
       const totalCost = roundMoney(
-        items.reduce((sum, item) => sum + roundMoney(toFiniteNumber(item.purchasePrice) * toFiniteNumber(item.quantity)), 0)
+        items.reduce((sum, item) => sum + roundMoney(toFiniteNumber(item.unitCost) * toFiniteNumber(item.quantity)), 0)
       );
       const profit = roundMoney(totalSales - totalCost);
 
@@ -210,7 +205,7 @@ export function Reports() {
       const mats = await db.materials.toArray();
       if (isStale()) return;
       const totalValue = roundMoney(
-        mats.reduce((sum, m) => sum + roundMoney(toFiniteNumber(m.quantity) * toFiniteNumber(m.salePrice)), 0)
+        mats.reduce((sum, m) => sum + roundMoney(toFiniteNumber(m.quantity) * toFiniteNumber(m.averageCost)), 0)
       );
       const lowStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'low').length;
       const outOfStock = mats.filter((m) => getStockStatus(m.quantity, m.minQuantity) === 'out').length;
@@ -335,7 +330,7 @@ export function Reports() {
             ['مواد منخفضة', inventoryReport.lowStock],
             ['مواد نافدة', inventoryReport.outOfStock],
             [],
-            ['#', 'المادة', 'الفئة', 'الوحدة', 'الكمية', `سعر البيع (${currency})`, `سعر الشراء (${currency})`, `القيمة (${currency})`, 'الحالة'],
+            ['#', 'المادة', 'الفئة', 'الوحدة', 'الكمية', `سعر البيع (${currency})`, `متوسط التكلفة (${currency})`, `القيمة بالتكلفة (${currency})`, 'الحالة'],
             ...(materials ?? []).map((material, index): CsvCell[] => [
               index + 1,
               material.name,
@@ -343,8 +338,8 @@ export function Reports() {
               material.unit || 'قطعة',
               toFiniteNumber(material.quantity),
               toFiniteNumber(material.salePrice),
-              material.purchasePrice ?? '',
-              roundMoney(toFiniteNumber(material.quantity) * toFiniteNumber(material.salePrice)),
+              toFiniteNumber(material.averageCost),
+              roundMoney(toFiniteNumber(material.quantity) * toFiniteNumber(material.averageCost)),
               getStockStatusText(getStockStatus(material.quantity, material.minQuantity))
             ])
           ],

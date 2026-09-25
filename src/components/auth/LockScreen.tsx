@@ -8,11 +8,11 @@ import { RecoveryDialog } from '@/components/auth/RecoveryDialog';
 import { useModalCloser } from '@/hooks/useModalCloser';
 import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import {
-  DEFAULT_ADMIN_PIN,
   lastSignedInUserId,
   listLoginUsers,
   lockoutRemainingMs,
   signIn,
+  signInWithoutPin,
   type LoginUserSummary
 } from '@/lib/auth';
 import { roleLabel } from '@/lib/labels';
@@ -87,13 +87,13 @@ export function LockScreen() {
 
   const submit = useCallback(async () => {
     if (!selected || busy || locked) return;
-    if (pin.length < MIN_PIN_LENGTH) {
+    if (selected.hasPin && pin.length < MIN_PIN_LENGTH) {
       setError(`رمز الدخول من ${MIN_PIN_LENGTH} إلى ${MAX_PIN_LENGTH} أرقام`);
       return;
     }
     setBusy(true);
     try {
-      const result = await signIn(selected.id, pin);
+      const result = selected.hasPin ? await signIn(selected.id, pin) : await signInWithoutPin(selected.id);
       if (result.ok) return; // الجلسة تتغيّر ⇒ يُعرض التطبيق مكان هذه الشاشة
       setPin('');
       setShake(true);
@@ -131,7 +131,7 @@ export function LockScreen() {
 
   // لوحة المفاتيح (ويندوز): أرقام عربية أو إنجليزية، Enter، Backspace
   useEffect(() => {
-    if (!selected || recoveryOpen) return;
+    if (!selected || !selected.hasPin || recoveryOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
       const key = toLatinDigits(event.key);
@@ -160,7 +160,7 @@ export function LockScreen() {
             {logo ? <img src={logo} alt="شعار المكتب" className="w-full h-full object-cover" /> : <LockKeyhole className="w-7 h-7" />}
           </div>
           <OverflowMarquee as="h1" text={officeName} className="text-lg font-bold" data-testid="lock-office-name" />
-          <p className="text-xs text-white/70 mt-1">تسجيل الدخول برمز المستخدم</p>
+          <p className="text-xs text-white/70 mt-1">تسجيل الدخول إلى المكتب</p>
         </div>
 
         <CardContent className="p-5 sm:p-6">
@@ -223,55 +223,58 @@ export function LockScreen() {
                 </div>
               </div>
 
-              <div
-                className={`flex items-center justify-center gap-2.5 h-12 mb-2 ${shake ? 'motion-safe:animate-pin-shake' : ''}`}
-                role="status"
-                aria-live="polite"
-                aria-label={pin.length ? `تم إدخال ${pin.length} أرقام` : 'أدخل رمز الدخول'}
-              >
-                {Array.from({ length: Math.max(MIN_PIN_LENGTH, pin.length) }).map((_, index) => (
-                  <span
-                    key={index}
-                    className={`w-3.5 h-3.5 rounded-full border-2 transition-colors ${index < pin.length ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-600'}`}
-                  />
-                ))}
-              </div>
-
-              <p className={`text-center text-xs min-h-[1.25rem] ${error ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-gray-400'}`} role={error ? 'alert' : undefined}>
-                {locked ? `أعد المحاولة بعد ${lockSeconds} ثانية` : error ?? 'أدخل رمز الدخول ثم اضغط دخول'}
-              </p>
-
-              {selected.hasDefaultPin && (
-                <p className="text-center text-[11px] text-amber-700 dark:text-amber-400 mt-1">
-                  الرمز الافتراضي: <span dir="ltr">{DEFAULT_ADMIN_PIN}</span> — غيّره من الإعدادات بعد الدخول
-                </p>
+              {selected.hasPin ? (
+                <>
+                  <div
+                    className={`flex items-center justify-center gap-2.5 h-12 mb-2 ${shake ? 'motion-safe:animate-pin-shake' : ''}`}
+                    role="status"
+                    aria-live="polite"
+                    aria-label={pin.length ? `تم إدخال ${pin.length} أرقام` : 'أدخل رمز الدخول'}
+                  >
+                    {Array.from({ length: Math.max(MIN_PIN_LENGTH, pin.length) }).map((_, index) => (
+                      <span
+                        key={index}
+                        className={`w-3.5 h-3.5 rounded-full border-2 transition-colors ${index < pin.length ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-600'}`}
+                      />
+                    ))}
+                  </div>
+                  <p className={`text-center text-xs min-h-[1.25rem] ${error ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-gray-400'}`} role={error ? 'alert' : undefined}>
+                    {locked ? `أعد المحاولة بعد ${lockSeconds} ثانية` : error ?? 'أدخل رمز الدخول ثم اضغط دخول'}
+                  </p>
+                  <div className="grid grid-cols-3 gap-2 mt-4" dir="ltr">
+                    {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+                      <PadButton key={digit} label={digit} onPress={() => pressDigit(digit)} disabled={locked || busy} />
+                    ))}
+                    <PadButton label={<Delete className="w-5 h-5" />} ariaLabel="مسح آخر رقم" onPress={pressBackspace} disabled={busy || pin.length === 0} subtle />
+                    <PadButton label="0" onPress={() => pressDigit('0')} disabled={locked || busy} />
+                    <PadButton
+                      label={busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5 -scale-x-100" />}
+                      ariaLabel="دخول"
+                      onPress={() => void submit()}
+                      disabled={locked || busy || pin.length < MIN_PIN_LENGTH}
+                      primary
+                    />
+                  </div>
+                  <div className="text-center mt-4">
+                    <button
+                      type="button"
+                      onClick={() => setRecoveryOpen(true)}
+                      className="text-xs text-primary-700 dark:text-primary-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      نسيت رمز الدخول؟
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-center text-xs text-gray-500 dark:text-gray-400">هذا الحساب لا يستخدم رمز دخول. يمكن للمدير تفعيل الحماية أو تعطيلها من الإعدادات.</p>
+                  <Button className="w-full" onClick={() => void submit()} disabled={busy || locked}>
+                    {busy ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <LogIn className="w-4 h-4 ml-2 -scale-x-100" />}
+                    دخول
+                  </Button>
+                </div>
               )}
-
-              <div className="grid grid-cols-3 gap-2 mt-4" dir="ltr">
-                {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-                  <PadButton key={digit} label={digit} onPress={() => pressDigit(digit)} disabled={locked || busy} />
-                ))}
-                <PadButton label={<Delete className="w-5 h-5" />} ariaLabel="مسح آخر رقم" onPress={pressBackspace} disabled={busy || pin.length === 0} subtle />
-                <PadButton label="0" onPress={() => pressDigit('0')} disabled={locked || busy} />
-                <PadButton
-                  label={busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5 -scale-x-100" />}
-                  ariaLabel="دخول"
-                  onPress={() => void submit()}
-                  disabled={locked || busy || pin.length < MIN_PIN_LENGTH}
-                  primary
-                />
-              </div>
-
-              <div className="text-center mt-4">
-                <button
-                  type="button"
-                  onClick={() => setRecoveryOpen(true)}
-                  className="text-xs text-primary-700 dark:text-primary-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  نسيت رمز الدخول؟
-                </button>
-              </div>
             </div>
           )}
         </CardContent>

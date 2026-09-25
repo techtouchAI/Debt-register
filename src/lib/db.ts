@@ -8,8 +8,8 @@ import {
   Invoice,
   InvoiceItem,
   Payment,
-  Purchase,
-  PurchaseItem,
+  CustomerLedger,
+  StockMovement,
   Notification as AppNotification,
   ActivityLog,
   BackupMeta,
@@ -31,8 +31,10 @@ export class AgriOfficeDB extends Dexie {
   invoices!: Table<Invoice>;
   invoiceItems!: Table<InvoiceItem>;
   payments!: Table<Payment>;
-  purchases!: Table<Purchase>;
-  purchaseItems!: Table<PurchaseItem>;
+  /** مخزن IndexedDB اسمه customer_ledger (الخاصية بصيغة TypeScript). */
+  customerLedger!: Table<CustomerLedger>;
+  /** مخزن IndexedDB اسمه stock_movements (الخاصية بصيغة TypeScript). */
+  stockMovements!: Table<StockMovement>;
   notifications!: Table<AppNotification>;
   activityLogs!: Table<ActivityLog>;
   backups!: Table<BackupMeta>;
@@ -165,7 +167,7 @@ export class AgriOfficeDB extends Dexie {
           });
       });
 
-    // الإصدار 4: إضافة جداول المشتريات (وصل شراء) لإدخال المواد للمخزن.
+    // الإصدار 4: مخازن تاريخية تُبقى في مسار الترقية فقط لقواعد البيانات القائمة.
     this.version(4).stores({
       settings: '++id',
       users: '++id, name, role',
@@ -182,6 +184,117 @@ export class AgriOfficeDB extends Dexie {
       snapshots: '++id, date',
       meta: '&key'
     });
+
+    /*
+     * الإصدار 5: دفتر الذمم وحركات المخزون هما مصدر الحقيقة الجديد.
+     *
+     * لا نعيد تشغيل تاريخ السجلات والفواتير عند الترقية، لأن المخزون القديم
+     * قد تضمن إدخالات يدوية لا يمكن تمييزها بأمان. لذلك ننشئ حركة افتتاحية
+     * واحدة لكل مادة تطابق رصيدها الحالي، ثم تصبح كل حركة لاحقة موثقة.
+     */
+    this.version(5)
+      .stores({
+        settings: '++id',
+        users: '++id, name, role',
+        materials: '++id, name, category, quantity',
+        customers: '++id, fullName, phone',
+        invoices: '++id, invoiceNumber, customerId, type, date, customerName, createdAt, status',
+        invoiceItems: '++id, invoiceId, materialId',
+        payments: '++id, customerId, date, receiptNumber, createdAt',
+        purchases: '++id, purchaseNumber, supplierName, date, createdAt',
+        purchaseItems: '++id, purchaseId, materialId',
+        customer_ledger: '++id, customerId, date, type, referenceId, &[type+referenceId]',
+        stock_movements: '++id, materialId, date, type, referenceId, [type+referenceId]',
+        notifications: '++id, createdAt, relatedType, relatedId, code',
+        activityLogs: '++id, timestamp, entityType',
+        backups: '++id, date',
+        snapshots: '++id, date',
+        meta: '&key'
+      })
+      .upgrade(async (tx) => {
+        const now = new Date().toISOString();
+        const materials = tx.table('materials');
+        const ledger = tx.table('customer_ledger');
+        const movements = tx.table('stock_movements');
+
+        await materials.toCollection().modify((material: Material) => {
+          const legacy = material as Material & { purchasePrice?: unknown };
+          const legacyCost = Math.max(0, toFiniteNumber(legacy.purchasePrice));
+          material.averageCost = Math.max(0, toFiniteNumber(material.averageCost, legacyCost));
+          material.lastCost = Math.max(0, toFiniteNumber(material.lastCost, legacyCost));
+          // سعر الشراء القديم قيمة mutable ولم يعد جزءاً من نموذج المادة.
+          delete legacy.purchasePrice;
+        });
+
+        const ledgerCount = await ledger.count();
+        if (ledgerCount === 0) {
+          await tx.table('invoices').toCollection().each(async (invoice: Invoice) => {
+            if (invoice.type !== 'credit' || typeof invoice.customerId !== 'number' || typeof invoice.id !== 'number') return;
+            await ledger.add({
+              customerId: invoice.customerId,
+              date: invoice.date || invoice.createdAt || now,
+              type: 'invoice',
+              amount: Math.max(0, toFiniteNumber(invoice.total)),
+              referenceId: invoice.id,
+              notes: `ترحيل فاتورة ${invoice.invoiceNumber}`,
+              createdAt: now
+            } satisfies CustomerLedger);
+          });
+          await tx.table('payments').toCollection().each(async (payment: Payment) => {
+            if (typeof payment.customerId !== 'number' || typeof payment.id !== 'number') return;
+            await ledger.add({
+              customerId: payment.customerId,
+              date: payment.date || payment.createdAt || now,
+              type: 'payment',
+              amount: -Math.max(0, toFiniteNumber(payment.amount)),
+              referenceId: payment.id,
+              notes: `ترحيل تسديد ${payment.receiptNumber}`,
+              createdAt: now
+            } satisfies CustomerLedger);
+          });
+        }
+
+        if ((await movements.count()) === 0) {
+          await materials.toCollection().each(async (material: Material) => {
+            if (typeof material.id !== 'number') return;
+            const quantity = toFiniteNumber(material.quantity);
+            if (quantity === 0) return;
+            await movements.add({
+              materialId: material.id,
+              date: material.updatedAt || material.createdAt || now,
+              quantity,
+              cost: Math.max(0, toFiniteNumber(material.averageCost)),
+              type: 'manual_entry',
+              notes: 'رصيد افتتاحي تم ترحيله إلى دفتر المخزون',
+              createdAt: now
+            } satisfies StockMovement);
+          });
+        }
+      });
+
+    // الإصدار 6: إلغاء وصول الشراء نهائياً؛ إدخال المخزون يدوي موثق فقط.
+    this.version(6).stores({
+      settings: '++id',
+      users: '++id, name, role',
+      materials: '++id, name, category, quantity',
+      customers: '++id, fullName, phone',
+      invoices: '++id, invoiceNumber, customerId, type, date, customerName, createdAt, status',
+      invoiceItems: '++id, invoiceId, materialId',
+      payments: '++id, customerId, date, receiptNumber, createdAt',
+      customer_ledger: '++id, customerId, date, type, referenceId, &[type+referenceId]',
+      stock_movements: '++id, materialId, date, type, referenceId, [type+referenceId]',
+      notifications: '++id, createdAt, relatedType, relatedId, code',
+      activityLogs: '++id, timestamp, entityType',
+      backups: '++id, date',
+      snapshots: '++id, date',
+      meta: '&key',
+      purchases: null,
+      purchaseItems: null
+    });
+
+    // أسماء المخازن في IndexedDB مطلوبة بصيغة snake_case المتوافقة مع النسخ.
+    this.customerLedger = this.table('customer_ledger');
+    this.stockMovements = this.table('stock_movements');
   }
 }
 
@@ -322,13 +435,13 @@ export async function initializeDB() {
 
     // لا بد من مدير واحد على الأقل: في التثبيت الجديد، أو بعد استعادة نسخة
     // تالفة لم يبقَ فيها مدير — وإلا تعذّر الوصول إلى الإعدادات والمستخدمين.
-    // الرمز الافتراضي (1234) يُحوَّل لبصمة في صيانة الإقلاع، ويُطلب تغييره.
     const users = await db.users.toArray();
     if (!users.some((user) => user.role === 'admin')) {
       await db.users.add({
         name: users.some((user) => user.name === 'المدير') ? 'مدير النظام' : 'المدير',
         role: 'admin',
-        pin: '1234',
+        // PIN اختياري؛ التثبيت الجديد لا يضع رمزاً معروفاً أو حاجزاً إلزامياً.
+        pin: '',
         createdAt: new Date().toISOString()
       });
     }

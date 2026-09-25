@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, HelpCircle, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar } from 'lucide-react';
+import { FileText, Plus, Search, Edit, Trash2, Printer, Download, Eye, Calendar } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,7 +16,6 @@ import { saveDocumentPdf } from '@/lib/pdf';
 import { confirmDialog } from '@/lib/confirm';
 import { documentNumberMatches, formatDocumentNumber, saleTypeLabel } from '@/lib/labels';
 import { usePermission } from '@/hooks/useSession';
-import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 
 export function Invoices() {
   const settings = useLiveQuery(() => getSettings(), []);
@@ -24,7 +23,6 @@ export function Invoices() {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'cash' | 'credit'>('all');
   const [dateFilter, setDateFilter] = useState('');
-  const [showHelp, setShowHelp] = useState(false);
 
   const invoices = useLiveQuery(async () => {
     let all = await db.invoices.orderBy('date').reverse().toArray();
@@ -122,14 +120,10 @@ export function Invoices() {
             الفواتير والمبيعات
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            مبيعاتك: تخرج المواد من المخزن وتُسجَّل على الزبون نقداً أو ديناً — أما شراء المواد من الموردين فيُسجَّل في وصول الشراء.
+            مبيعاتك: تخرج المواد من المخزن وتُسجَّل على الزبون نقداً أو ديناً. أدخل الكميات الجديدة وتكلفتها من صفحة المخزن.
           </p>
         </div>
         <div className="flex w-full flex-wrap gap-2 lg:w-auto">
-          <Button variant="outline" className="flex-1 lg:flex-none" onClick={() => setShowHelp(true)}>
-            <HelpCircle className="w-4 h-4 ml-1" />
-            ما الفرق بينها وبين وصل الشراء؟
-          </Button>
           <Link to="/invoices/new" className="flex-1 lg:flex-none">
             <Button className="bg-primary-600 hover:bg-primary-700 w-full">
               <Plus className="w-4 h-4 ml-2" />
@@ -243,7 +237,6 @@ export function Invoices() {
         ))}
       </div>
 
-      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       {invoices?.length === 0 && (
         <Card className="border-0 shadow-md">

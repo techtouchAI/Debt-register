@@ -5,8 +5,8 @@
  *   - مدير: كل شيء (إضافة وتعديل وحذف، الإعدادات، المستخدمون، النسخ، التقارير).
  *   - موظف مبيعات: البيع فقط — إنشاء فواتير البيع وطباعتها، استلام تسديدات
  *     الديون، إضافة زبون جديد أثناء البيع، والاطلاع (قراءة فقط) على المخزن
- *     والزبائن وكشوفهم. لا تعديل ولا حذف لأي سجل، ولا وصول لوصول الشراء أو
- *     التقارير أو النسخ الاحتياطي أو الإعدادات، ولا يرى أسعار الشراء والأرباح.
+ *     والزبائن وكشوفهم. لا تعديل ولا حذف لأي سجل أو
+ *     التقارير أو النسخ الاحتياطي أو الإعدادات، ولا يرى تكاليف المخزون والأرباح.
  *
  * مصفوفة واحدة هي مصدر الحقيقة: تستخدمها القائمة الجانبية وحراسة المسارات
  * وإظهار الأزرار، وتستخدمها طبقة البيانات أيضاً (دفاع ثانٍ) فلا يمكن تنفيذ
@@ -31,7 +31,6 @@ export type Permission =
   | 'payments.delete'
   | 'materials.view'
   | 'materials.manage'
-  | 'purchases.manage'
   | 'reports.view'
   | 'profits.view'
   | 'backup.manage'
@@ -55,7 +54,6 @@ export const ALL_PERMISSIONS: readonly Permission[] = [
   'payments.delete',
   'materials.view',
   'materials.manage',
-  'purchases.manage',
   'reports.view',
   'profits.view',
   'backup.manage',
@@ -111,7 +109,6 @@ export function routePermission(pathname: string): Permission {
   if (pathname === '/payments/new') return 'payments.create';
   if (pathname.startsWith('/payments')) return 'payments.view';
   if (pathname.startsWith('/materials')) return 'materials.view';
-  if (pathname.startsWith('/purchases')) return 'purchases.manage';
   if (pathname.startsWith('/reports')) return 'reports.view';
   if (pathname.startsWith('/backup')) return 'backup.manage';
   if (pathname.startsWith('/settings')) return 'settings.manage';

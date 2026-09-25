@@ -35,9 +35,6 @@ import type { OfficeSettings } from '@/types';
  * المبيعات لا يحمّل صفحات لا يملك صلاحيتها أصلاً. الملفات محلية داخل التطبيق
  * (ومخزّنة مسبقاً في نسخة الويب) فلا تحتاج إنترنت.
  */
-const Purchases = lazy(() => import('@/pages/Purchases').then((module) => ({ default: module.Purchases })));
-const PurchaseForm = lazy(() => import('@/pages/PurchaseForm').then((module) => ({ default: module.PurchaseForm })));
-const PurchaseView = lazy(() => import('@/pages/PurchaseView').then((module) => ({ default: module.PurchaseView })));
 const Reports = lazy(() => import('@/pages/Reports').then((module) => ({ default: module.Reports })));
 const Settings = lazy(() => import('@/pages/Settings').then((module) => ({ default: module.Settings })));
 const Backup = lazy(() => import('@/pages/Backup').then((module) => ({ default: module.Backup })));
@@ -119,7 +116,7 @@ function App() {
           setSetupSettings(settings || null);
           setNeedsSetup(true);
         } else if (!cancelled) {
-          // قفل الدخول غير مفعّل (مدير واحد برمز افتراضي): دخول تلقائي ضمن
+          // قفل الدخول غير مفعّل (حساب وحيد بلا رمز): دخول تلقائي ضمن
           // الإقلاع نفسه فتظهر الواجهة مباشرة بلا شاشة انتظار إضافية
           await tryAutoSignIn().catch((error) => console.warn('تعذّر الدخول التلقائي:', error));
         }
@@ -211,10 +208,6 @@ function App() {
                 <Route path="/invoices/new" element={<InvoiceForm />} />
                 <Route path="/invoices/:id" element={<InvoiceView />} />
                 <Route path="/invoices/:id/edit" element={<InvoiceForm />} />
-                <Route path="/purchases" element={<Purchases />} />
-                <Route path="/purchases/new" element={<PurchaseForm />} />
-                <Route path="/purchases/:id" element={<PurchaseView />} />
-                <Route path="/purchases/:id/edit" element={<PurchaseForm />} />
                 <Route path="/payments" element={<Payments />} />
                 <Route path="/payments/new" element={<Payments />} />
                 <Route path="/reports" element={<Reports />} />

@@ -1,10 +1,8 @@
 import { type DocumentDescriptor } from './print';
 import {
   planA4Pages,
-  planReceiptPage,
   sheetRenderWidthPx,
   A4_SHEET,
-  RECEIPT_SHEET,
   type BlankRowProbe,
   type InkBounds,
   type PdfFormat,
@@ -28,7 +26,7 @@ import { RASTER_SCALE, rasterizeDocument } from './documentRaster';
  *
  * وكيف يتطابق الملف مع المعاينة والطباعة؟ تُصوَّر **الورقة نفسها** بعرضها
  * الحقيقي (210مم = 794 بكسل) بلا تكبير ولا حشوة إضافية، ثم تُرسم بالملّيمتر
- * داخل ورقة A4 (أو 80مم للوصل) فالهوامش هي حشوة الورقة نفسها. وكانت العلّة
+ * داخل ورقة A4 فالهوامش هي حشوة الورقة نفسها. وكانت العلّة
  * السابقة أن حاوية بعرض 794 بكسل وحشوة 24 بكسل تُمدَّد على ورقة A4 كاملةً،
  * فيكبر المحتوى بنحو 11% وتضيق الأعمدة الرقمية وتختفي الهوامش، وتبدو
  * الفاتورة المطبوعة مختلفة عن الملف.
@@ -70,12 +68,6 @@ function createBlankRowProbe(canvas: HTMLCanvasElement): BlankRowProbe {
     }
   };
 }
-
-/**
- * أقل ارتفاع لإطار الوصل الحراري قبل التصوير: يكبر تلقائياً مع طول المحتوى،
- * وخطة الصفحة تقصّ الفراغ بعده (60–500 مم).
- */
-const RECEIPT_FRAME_MIN_HEIGHT_PX = 600;
 
 /**
  * ترميز صورة الصفحة: JPEG بجودة عالية.
@@ -167,23 +159,14 @@ function drawPage(doc: PdfWriter, source: HTMLCanvasElement, plan: PdfPagePlan, 
 
 /**
  * تصوير مستند إلى ملف PDF بنفس هندسة ورقته.
- * @param format مقاس الورقة: A4 للمستندات، 80مم للوصل الحراري.
  */
 async function renderHtmlToPdfBlob(bodyHtml: string, format: PdfFormat): Promise<Blob> {
   const renderWidthPx = sheetRenderWidthPx(format);
-  const minHeightPx =
-    format === 'a4' ? Math.round((A4_SHEET.heightMm as number) * (renderWidthPx / A4_SHEET.widthMm)) : RECEIPT_FRAME_MIN_HEIGHT_PX;
+  const minHeightPx = Math.round(A4_SHEET.heightMm * (renderWidthPx / A4_SHEET.widthMm));
   const { canvas } = await rasterizeDocument(bodyHtml, { widthPx: renderWidthPx, minHeightPx, scale: RASTER_SCALE });
   const jsPDF = await loadJsPdf();
   const ink = measureInkBounds(canvas);
 
-  if (format === 'receipt80') {
-    const plan = planReceiptPage(canvas.width, canvas.height)[0];
-    if (!plan) throw new Error('لا يوجد محتوى في الوصل');
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [RECEIPT_SHEET.widthMm, plan.heightMm] }) as unknown as PdfWriter;
-    drawPage(doc, canvas, plan, ink, RECEIPT_SHEET.widthMm / canvas.width);
-    return (doc as unknown as { output: (kind: string) => Blob }).output('blob');
-  }
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' }) as unknown as PdfWriter;
   const pages = planA4Pages(canvas.width, canvas.height, {

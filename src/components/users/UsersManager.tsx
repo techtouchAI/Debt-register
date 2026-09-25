@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { AlertTriangle, Copy, KeyRound, Loader2, Lock, LockOpen, Pencil, Shield, Trash2, User as UserIcon, UserPlus, X } from 'lucide-react';
+import { Copy, KeyRound, Loader2, Lock, LockOpen, Pencil, Shield, Trash2, User as UserIcon, UserPlus, X } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,6 @@ import { useModalCloser } from '@/hooks/useModalCloser';
 import { useSession } from '@/hooks/useSession';
 import { db } from '@/lib/db';
 import {
-  DEFAULT_ADMIN_PIN,
   formatRecoveryCode,
   generateRecoveryCode,
   hasRecoveryCode,
@@ -29,12 +28,8 @@ import type { Role } from '@/lib/permissions';
 /**
  * إدارة المستخدمين (بدون إنترنت) في صفحة الإعدادات.
  *
- * للمستخدمين أثر فعلي في التطبيق:
- *   - عند وجود أكثر من مستخدم (أو تغيير رمز المدير) يُطلب رمز الدخول عند فتح
- *     التطبيق، ويظهر زر "قفل" في الشريط العلوي لتبديل المستخدم.
- *   - موظف المبيعات يبيع فقط: لا يرى المشتريات والتقارير والنسخ والإعدادات،
- *     ولا يعدّل أو يحذف أي سجل.
- *   - كل عملية تُنسب في سجل النشاط إلى من نفّذها.
+ * رمز الدخول اختياري لكل حساب. عند وجود أكثر من مستخدم تظهر شاشة اختيار
+ * الهوية؛ والحسابات التي فعّلت PIN فقط تطلبه. كل عملية تُنسب لمن نفّذها.
  */
 export function UsersManager() {
   const session = useSession();
@@ -47,7 +42,6 @@ export function UsersManager() {
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
 
   const lockEnabled = users ? loginRequiredFor(users) : false;
-  const defaultPinAdmins = (users ?? []).filter((user) => user.role === 'admin' && user.hasDefaultPin);
 
   const openAdd = () => {
     setEditing(null);
@@ -138,30 +132,15 @@ export function UsersManager() {
           <span>
             {lockEnabled ? (
               <>
-                <strong>قفل الدخول مفعّل:</strong> يُطلب رمز الدخول عند فتح التطبيق، وزر القفل في الشريط العلوي يبدّل المستخدم.
+                <strong>بوابة الدخول مفعّلة:</strong> تظهر شاشة اختيار المستخدم عند فتح التطبيق، ويُطلب الرمز فقط للحسابات التي فعّلته.
               </>
             ) : (
               <>
-                <strong>قفل الدخول غير مفعّل:</strong> يدخل التطبيق مباشرة كمدير. أضف موظفاً أو غيّر رمز المدير لتفعيل الدخول برمز.
+                <strong>بوابة الدخول غير مفعّلة:</strong> يوجد حساب واحد بلا رمز، لذلك يدخل التطبيق مباشرة. يمكنك تفعيل رمز اختياري من «تعديل».
               </>
             )}
           </span>
         </div>
-
-        {lockEnabled && defaultPinAdmins.length > 0 && (
-          <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300">
-            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            <div className="flex-1">
-              رمز {defaultPinAdmins.map((user) => user.name).join('، ')} ما زال الرمز الافتراضي (<span dir="ltr">{DEFAULT_ADMIN_PIN}</span>) — أي شخص
-              يستطيع الدخول به. غيّره الآن.
-              <div className="mt-2">
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openEdit(defaultPinAdmins[0])}>
-                  تغيير الرمز
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
 
         <div className="space-y-2">
           {(users ?? []).map((user) => {
@@ -187,6 +166,7 @@ export function UsersManager() {
                     <p className="text-[11px] text-gray-500">
                       {user.lastLogin ? `آخر دخول: ${formatDate(user.lastLogin, true)}` : 'لم يدخل بعد'}
                       {record?.createdAt ? ` • أُضيف ${formatDate(record.createdAt)}` : ''}
+                      {` • ${user.hasPin ? 'رمز الدخول مفعّل' : 'بلا رمز دخول'}`}
                     </p>
                   </div>
                 </div>
@@ -259,7 +239,8 @@ function UserFormDialog({
     name: editing?.name ?? '',
     role: editing?.role ?? 'sales',
     pin: '',
-    confirmPin: ''
+    confirmPin: '',
+    disablePin: false
   });
   const [errors, setErrors] = useState<UserErrors>({});
   const [saving, setSaving] = useState(false);
@@ -356,13 +337,13 @@ function UserFormDialog({
               <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">
                 {form.role === 'sales'
                   ? 'يبيع ويطبع الفواتير، يستلم التسديدات، يضيف زبوناً جديداً، ويطّلع على المخزن والزبائن — دون تعديل أو حذف.'
-                  : 'كل الصلاحيات: المخزن والمشتريات والتقارير والنسخ الاحتياطي والإعدادات والمستخدمون.'}
+                  : 'كل الصلاحيات: المخزن والتقارير والنسخ الاحتياطي والإعدادات والمستخدمون.'}
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium mb-1 block" htmlFor={`${formId}-pin`}>
-                  رمز الدخول
+                  رمز الدخول (اختياري)
                 </label>
                 <Input
                   {...field('pin')}
@@ -370,6 +351,7 @@ function UserFormDialog({
                   inputMode="numeric"
                   autoComplete="new-password"
                   value={form.pin}
+                  disabled={Boolean(form.disablePin)}
                   onChange={(e) => patch({ pin: e.target.value })}
                   placeholder={editing ? 'بلا تغيير' : '4 إلى 8 أرقام'}
                 />
@@ -385,14 +367,25 @@ function UserFormDialog({
                   inputMode="numeric"
                   autoComplete="new-password"
                   value={form.confirmPin}
+                  disabled={Boolean(form.disablePin)}
                   onChange={(e) => patch({ confirmPin: e.target.value })}
                   placeholder="أعد كتابة الرمز"
                 />
                 {errorText('confirmPin')}
               </div>
             </div>
+            {editing && (
+              <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.disablePin)}
+                  onChange={(event) => patch({ disablePin: event.target.checked, ...(event.target.checked ? { pin: '', confirmPin: '' } : {}) })}
+                />
+                تعطيل رمز الدخول لهذا الحساب
+              </label>
+            )}
             <p className="text-[11px] text-gray-500 -mt-2">
-              {editing ? 'اترك الرمز فارغاً للإبقاء على الرمز الحالي. ' : ''}يُحفظ الرمز كبصمة مشفّرة داخل الجهاز ولا يظهر لأي شخص.
+              {editing ? 'اترك الرمز فارغاً للإبقاء على الرمز الحالي، أو فعّل خيار التعطيل لإزالته. ' : 'اترك الحقول فارغة لإنشاء الحساب بلا رمز. '}يُحفظ الرمز كبصمة آمنة داخل الجهاز ولا يظهر لأي شخص.
             </p>
             <div className="flex gap-2 pt-1">
               <Button type="submit" className="flex-1" disabled={saving}>

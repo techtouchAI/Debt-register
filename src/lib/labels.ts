@@ -58,7 +58,7 @@ export function paymentMethodLabel(method: unknown): string {
     : 'أخرى';
 }
 
-/** نوع الفاتورة/وصل الشراء بالعربية. */
+/** نوع فاتورة البيع بالعربية. */
 export function saleTypeLabel(type: unknown): string {
   return type === 'cash' ? 'نقدي' : 'آجل';
 }
@@ -99,26 +99,23 @@ function trimDecimal(value: number): string {
  * ------------------------------------------------------------------ */
 
 /**
- * بادئات أرقام المستندات الجديدة (عربية): فاتورة بيع، وصل قبض، وصل شراء.
+ * بادئات أرقام المستندات الجديدة (عربية): فاتورة بيع ووصل قبض.
  * تُستخدم في `sequence.ts` عند توليد الأرقام.
  */
 export const DOCUMENT_PREFIX = {
   invoice: 'ف',
-  receipt: 'ق',
-  purchase: 'ش'
+  receipt: 'ق'
 } as const;
 
 /** البادئات القديمة (إنجليزية) في البيانات المحفوظة قبل هذا الإصدار. */
 export const LEGACY_DOCUMENT_PREFIX = {
   invoice: 'INV',
-  receipt: 'REC',
-  purchase: 'PUR'
+  receipt: 'REC'
 } as const;
 
 const LEGACY_TO_ARABIC: ReadonlyArray<readonly [RegExp, string]> = [
   [/^INV(?=-)/i, DOCUMENT_PREFIX.invoice],
-  [/^REC(?=-)/i, DOCUMENT_PREFIX.receipt],
-  [/^PUR(?=-)/i, DOCUMENT_PREFIX.purchase]
+  [/^REC(?=-)/i, DOCUMENT_PREFIX.receipt]
 ];
 
 const LEGACY_WORDS: ReadonlyArray<readonly [RegExp, string]> = [

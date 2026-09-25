@@ -108,15 +108,3 @@ export function nextReceiptNumber(date: Date = new Date()): Promise<string> {
     5
   );
 }
-
-/** رقم وصل شراء بصيغة ش-YYYYMM-0001 حسب تاريخ الشراء. */
-export function nextPurchaseNumber(date: Date = new Date()): Promise<string> {
-  const stamp = yearMonth(date);
-  return allocate(
-    db.purchases as unknown as SequenceTable,
-    'purchaseNumber',
-    `${DOCUMENT_PREFIX.purchase}-${stamp}-`,
-    `${LEGACY_DOCUMENT_PREFIX.purchase}-${stamp}-`,
-    4
-  );
-}

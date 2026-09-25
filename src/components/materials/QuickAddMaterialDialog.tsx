@@ -54,7 +54,7 @@ function QuickAddMaterialForm({
   const [unit, setUnit] = useState('قطعة');
   const [quantity, setQuantity] = useState('1');
   const [salePrice, setSalePrice] = useState('');
-  const [purchasePrice, setPurchasePrice] = useState('');
+  const [unitCost, setUnitCost] = useState('');
   const [minQuantity, setMinQuantity] = useState('5');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -85,7 +85,7 @@ function QuickAddMaterialForm({
         unit,
         quantity: toFiniteNumber(quantity, 0),
         salePrice: toFiniteNumber(salePrice, NaN),
-        purchasePrice: purchasePrice.trim() ? toFiniteNumber(purchasePrice, NaN) : undefined,
+        unitCost: unitCost.trim() ? toFiniteNumber(unitCost, NaN) : undefined,
         minQuantity: toFiniteNumber(minQuantity, defaultMinQuantity)
       });
 
@@ -150,8 +150,8 @@ function QuickAddMaterialForm({
                 <NumericTextInput value={salePrice} onValueChange={setSalePrice} aria-required="true" placeholder="0" />
               </div>
               <div>
-                <label className="text-sm font-medium mb-1 block">سعر الشراء</label>
-                <NumericTextInput value={purchasePrice} onValueChange={setPurchasePrice} placeholder="اختياري" />
+                <label className="text-sm font-medium mb-1 block">تكلفة الوحدة</label>
+                <NumericTextInput value={unitCost} onValueChange={setUnitCost} placeholder="اختياري" />
               </div>
             </div>
 

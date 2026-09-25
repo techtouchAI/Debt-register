@@ -5,7 +5,6 @@ import {
   Package, 
   Users, 
   FileText, 
-  ClipboardList,
   CreditCard, 
   BarChart3, 
   Settings, 
@@ -50,7 +49,6 @@ const navigation = [
   { name: 'المخزن والمواد', href: '/materials', icon: Package },
   { name: 'العملاء', href: '/customers', icon: Users },
   { name: 'الفواتير والمبيعات', href: '/invoices', icon: FileText },
-  { name: 'وصول الشراء', href: '/purchases', icon: ClipboardList },
   { name: 'التسديدات', href: '/payments', icon: CreditCard },
   { name: 'التقارير', href: '/reports', icon: BarChart3 },
   { name: 'النسخ الاحتياطي', href: '/backup', icon: Database },
@@ -66,8 +64,7 @@ export function Layout({ children, initialSettings = null }: LayoutProps) {
   // التبديل يُحفظ في إعدادات المكتب أيضاً (ينتقل مع النسخة الاحتياطية)
   const toggleTheme = () => saveThemePreference(isDark ? 'light' : 'dark');
   const session = useSession();
-  // زر "قفل / تبديل المستخدم" يظهر فقط حين يكون الدخول برمز مفعّلاً
-  // (أكثر من مستخدم أو رمز غير افتراضي) — وإلا لكان القفل بلا معنى.
+  // زر القفل يظهر عند تعدد المستخدمين أو تفعيل PIN اختياري لأي حساب.
   const canLock = useLiveQuery(() => isLoginRequired(), []) ?? false;
   const visibleNavigation = navigation.filter((item) => roleCan(session?.role, routePermission(item.href)));
 

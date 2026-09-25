@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Package, Plus, Search, Edit, Trash2, AlertTriangle, Filter, TrendingDown, DollarSign } from 'lucide-react';
+import { Package, Plus, Search, Edit, Trash2, AlertTriangle, Filter, TrendingDown, DollarSign, ArrowDownUp } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,23 +8,24 @@ import { NumberInput } from '@/components/ui/number-input';
 import { Badge } from '@/components/ui/badge';
 import { db, getSettings } from '@/lib/db';
 import { createMaterial, deleteMaterial, updateMaterial } from '@/lib/materials';
+import { recordManualStockMovement } from '@/lib/inventory';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { dismissOverlayThroughHistory } from '@/lib/historyTrap';
 import { useModalCloser } from '@/hooks/useModalCloser';
-import { formatCurrency, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
+import { formatCurrency, formatLocalDateTimeInput, getStockStatus, getStockStatusColor, getStockStatusText, roundMoney, toFiniteNumber } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { reportError } from '@/lib/errors';
 import { confirmDialog } from '@/lib/confirm';
 import { usePermission } from '@/hooks/useSession';
 import { Material } from '@/types';
 
-/** نموذج مادة فارغ. سعر الشراء غير محدد (اختياري) بدل صفر يُحفظ دون قصد. */
+/** نموذج مادة فارغ؛ التكلفة الافتتاحية لا تُقبل بلا حركة كمية. */
 function emptyMaterialForm(lowStockThreshold?: number): Partial<Material> {
   return {
     name: '',
     quantity: 0,
     salePrice: 0,
-    purchasePrice: undefined,
+    averageCost: 0,
     minQuantity: toFiniteNumber(lowStockThreshold, 5),
     category: '',
     unit: 'قطعة',
@@ -42,12 +43,18 @@ export function Materials() {
   // `window.location.search` — وكان ذلك يجعل الزر لا يفتح النموذج أبداً.
   const can = usePermission();
   const canManage = can('materials.manage');
-  // أسعار الشراء والأرباح للمدير فقط (موظف المبيعات يرى الكمية وسعر البيع)
+  // تكاليف المخزون والأرباح للمدير فقط (موظف المبيعات يرى الكمية وسعر البيع)
   const canSeeCosts = can('profits.view');
   const quickAddRequested = canManage && searchParams.get('action') === 'new';
   const isFormOpen = showForm || quickAddRequested;
   const [editing, setEditing] = useState<Material | null>(null);
   const [formData, setFormData] = useState<Partial<Material>>(() => emptyMaterialForm());
+  const [stockMaterial, setStockMaterial] = useState<Material | null>(null);
+  const [movementQuantity, setMovementQuantity] = useState<number | undefined>(undefined);
+  const [movementCost, setMovementCost] = useState<number | undefined>(undefined);
+  const [movementNotes, setMovementNotes] = useState('');
+  const [movementDate, setMovementDate] = useState(() => formatLocalDateTimeInput());
+  const [savingMovement, setSavingMovement] = useState(false);
 
   const settings = useLiveQuery(() => getSettings(), []);
 
@@ -90,6 +97,7 @@ export function Materials() {
   const openForm = () => setShowForm(true);
 
   useModalCloser(isFormOpen, resetForm);
+  useModalCloser(Boolean(stockMaterial), () => setStockMaterial(null), { label: 'حركة مخزون' });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,7 +108,7 @@ export function Materials() {
       // حقل فارغ ⇒ NaN فيظهر خطأ التحقق بدل حفظ صفر لم يكتبه المستخدم
       quantity: toFiniteNumber(formData.quantity, NaN),
       salePrice: toFiniteNumber(formData.salePrice, NaN),
-      purchasePrice: formData.purchasePrice ?? undefined,
+      unitCost: editing ? undefined : formData.averageCost,
       minQuantity: toFiniteNumber(formData.minQuantity, toFiniteNumber(settings?.lowStockThreshold, 5)),
       category: formData.category ?? '',
       unit: formData.unit ?? 'قطعة',
@@ -138,6 +146,35 @@ export function Materials() {
     setShowForm(true);
   };
 
+  const openStockMovement = (material: Material) => {
+    setStockMaterial(material);
+    setMovementQuantity(undefined);
+    setMovementCost(material.lastCost ?? material.averageCost);
+    setMovementNotes('');
+    setMovementDate(formatLocalDateTimeInput());
+  };
+
+  const saveStockMovement = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!stockMaterial?.id || savingMovement) return;
+    setSavingMovement(true);
+    try {
+      const updated = await recordManualStockMovement({
+        materialId: stockMaterial.id,
+        quantity: toFiniteNumber(movementQuantity, NaN),
+        unitCost: movementQuantity && movementQuantity > 0 ? movementCost : undefined,
+        date: movementDate,
+        notes: movementNotes
+      });
+      toast.success('تم تسجيل حركة المخزون', `${updated.name}: الرصيد الحالي ${updated.quantity}`);
+      setStockMaterial(null);
+    } catch (error) {
+      toast.warning('تعذّر تسجيل الحركة', error instanceof Error ? error.message : 'تحقق من الكمية والتكلفة');
+    } finally {
+      setSavingMovement(false);
+    }
+  };
+
   const handleDelete = async (material: Material) => {
     if (!material.id) return;
     const confirmed = await confirmDialog({
@@ -160,11 +197,11 @@ export function Materials() {
     }
   };
 
-  const totalValue = roundMoney((materials ?? []).reduce((sum, material) => sum + roundMoney(toFiniteNumber(material.quantity) * toFiniteNumber(material.salePrice)), 0));
+  const totalValue = roundMoney((materials ?? []).reduce((sum, material) => sum + roundMoney(toFiniteNumber(material.quantity) * toFiniteNumber(material.averageCost)), 0));
   const totalProfitPotential = roundMoney(
     (materials ?? []).reduce(
       (sum, material) =>
-        sum + (material.purchasePrice ? roundMoney((toFiniteNumber(material.salePrice) - toFiniteNumber(material.purchasePrice)) * toFiniteNumber(material.quantity)) : 0),
+        sum + roundMoney((toFiniteNumber(material.salePrice) - toFiniteNumber(material.averageCost)) * toFiniteNumber(material.quantity)),
       0
     )
   );
@@ -207,7 +244,7 @@ export function Materials() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">قيمة المخزون</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">قيمة المخزون بالتكلفة</p>
                 <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(totalValue, settings?.currency)}</p>
               </div>
               <div className="w-10 h-10 rounded-xl bg-green-50 dark:bg-green-900/20 flex items-center justify-center">
@@ -281,7 +318,7 @@ export function Materials() {
                   <th className="p-3 text-right font-bold">المادة</th>
                   <th className="p-3 text-right font-bold whitespace-nowrap">الفئة</th>
                   <th className="p-3 text-center font-bold whitespace-nowrap">الكمية</th>
-                  {canSeeCosts && <th className="p-3 text-center font-bold whitespace-nowrap">سعر الشراء</th>}
+                  {canSeeCosts && <th className="p-3 text-center font-bold whitespace-nowrap">متوسط التكلفة</th>}
                   <th className="p-3 text-center font-bold whitespace-nowrap">سعر البيع</th>
                   {canSeeCosts && <th className="p-3 text-center font-bold whitespace-nowrap">الربح/وحدة</th>}
                   <th className="p-3 text-center font-bold whitespace-nowrap">الحالة</th>
@@ -309,7 +346,7 @@ export function Materials() {
                       <td className="p-3 text-center font-bold whitespace-nowrap">{material.quantity}</td>
                       {canSeeCosts && (
                         <td className="p-3 text-center whitespace-nowrap text-gray-600 dark:text-gray-300">
-                          {material.purchasePrice ? formatCurrency(material.purchasePrice, settings?.currency) : '—'}
+                          {formatCurrency(material.averageCost, settings?.currency)}
                         </td>
                       )}
                       <td className="p-3 text-center font-bold whitespace-nowrap text-green-600">
@@ -317,7 +354,7 @@ export function Materials() {
                       </td>
                       {canSeeCosts && (
                         <td className="p-3 text-center whitespace-nowrap text-purple-600">
-                          {material.purchasePrice ? formatCurrency(material.salePrice - material.purchasePrice, settings?.currency) : '—'}
+                          {formatCurrency(material.salePrice - material.averageCost, settings?.currency)}
                         </td>
                       )}
                       <td className="p-3 text-center">
@@ -328,6 +365,10 @@ export function Materials() {
                       {canManage && (
                         <td className="p-3">
                           <div className="flex items-center justify-center gap-1">
+                            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openStockMovement(material)} title="تسجيل حركة مخزون">
+                              <ArrowDownUp className="w-3.5 h-3.5 ml-1" />
+                              حركة
+                            </Button>
                             <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleEdit(material)}>
                               <Edit className="w-3.5 h-3.5 ml-1" />
                               تعديل
@@ -412,8 +453,12 @@ export function Materials() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-sm font-medium mb-1 block">الكمية الحالية *</label>
-                    <NumberInput value={formData.quantity} onValueChange={(value) => setFormData((prev) => ({ ...prev, quantity: value ?? undefined }))} aria-required="true" />
+                    <label className="text-sm font-medium mb-1 block">{editing ? 'الرصيد الحالي' : 'الكمية الافتتاحية *'}</label>
+                    {editing ? (
+                      <div className="h-10 rounded-lg border border-gray-200 dark:border-gray-700 px-3 flex items-center text-sm text-gray-600 dark:text-gray-300">{formData.quantity ?? 0} — سجّل أي تغيير عبر زر «حركة»</div>
+                    ) : (
+                      <NumberInput value={formData.quantity} onValueChange={(value) => setFormData((prev) => ({ ...prev, quantity: value ?? undefined }))} aria-required="true" />
+                    )}
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">الحد الأدنى للتنبيه</label>
@@ -424,8 +469,12 @@ export function Materials() {
                     <NumberInput value={formData.salePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, salePrice: value ?? undefined }))} aria-required="true" />
                   </div>
                   <div>
-                    <label className="text-sm font-medium mb-1 block">سعر الشراء (اختياري - لحساب الأرباح)</label>
-                    <NumberInput value={formData.purchasePrice} onValueChange={(value) => setFormData((prev) => ({ ...prev, purchasePrice: value ?? undefined }))} />
+                    <label className="text-sm font-medium mb-1 block">{editing ? 'متوسط التكلفة الحالي' : 'تكلفة الوحدة الافتتاحية *'}</label>
+                    {editing ? (
+                      <div className="h-10 rounded-lg border border-gray-200 dark:border-gray-700 px-3 flex items-center text-sm text-gray-600 dark:text-gray-300">{formatCurrency(formData.averageCost ?? 0, settings?.currency)} — تتغير فقط مع حركة إدخال</div>
+                    ) : (
+                      <NumberInput value={formData.averageCost} onValueChange={(value) => setFormData((prev) => ({ ...prev, averageCost: value ?? undefined }))} aria-required="true" />
+                    )}
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">رمز المادة (اختياري)</label>
@@ -445,6 +494,23 @@ export function Materials() {
                   <Button type="submit" className="flex-1 bg-primary-600 hover:bg-primary-700">{editing ? 'حفظ التعديلات' : 'إضافة المادة'}</Button>
                   <Button type="button" variant="outline" onClick={closeForm}>إلغاء</Button>
                 </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {stockMaterial && (
+        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="تسجيل حركة مخزون">
+          <Card className="w-full max-w-md">
+            <CardHeader><CardTitle className="flex items-center gap-2"><ArrowDownUp className="w-5 h-5 text-primary-600" />حركة مخزون: {stockMaterial.name}</CardTitle><p className="text-xs text-gray-500">الرصيد الحالي: {stockMaterial.quantity} {stockMaterial.unit || 'قطعة'}. الكمية الموجبة إدخال، والسالبة تسوية نقص.</p></CardHeader>
+            <CardContent>
+              <form onSubmit={saveStockMovement} noValidate className="space-y-4">
+                <div><label className="text-sm font-medium mb-1 block">الكمية *</label><NumberInput value={movementQuantity} onValueChange={(value) => setMovementQuantity(value ?? undefined)} aria-required="true" /></div>
+                <div><label className="text-sm font-medium mb-1 block">تكلفة الوحدة عند الإدخال</label><NumberInput value={movementCost} onValueChange={(value) => setMovementCost(value ?? undefined)} disabled={!(movementQuantity && movementQuantity > 0)} aria-required={Boolean(movementQuantity && movementQuantity > 0)} /><p className="text-[11px] text-gray-500 mt-1">مطلوبة للإدخال الموجب؛ تسوية النقص تحافظ على متوسط التكلفة الحالي.</p></div>
+                <div><label className="text-sm font-medium mb-1 block">تاريخ الحركة *</label><Input type="datetime-local" required value={movementDate} onChange={(event) => setMovementDate(event.target.value)} aria-required="true" /></div>
+                <div><label className="text-sm font-medium mb-1 block">ملاحظة</label><Input value={movementNotes} onChange={(event) => setMovementNotes(event.target.value)} placeholder="سبب الإدخال أو التسوية" /></div>
+                <div className="flex gap-2"><Button type="submit" className="flex-1" disabled={savingMovement}>{savingMovement ? 'جاري الحفظ…' : 'تسجيل الحركة'}</Button><Button type="button" variant="outline" onClick={() => setStockMaterial(null)} disabled={savingMovement}>إلغاء</Button></div>
               </form>
             </CardContent>
           </Card>

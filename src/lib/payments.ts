@@ -4,6 +4,7 @@ import { db, logActivity, createNotification, getSettingsOrDefault } from './db'
 import { nextReceiptNumber } from './sequence';
 import { reallocateCustomerInvoices } from './invoices';
 import { getCustomerBalance } from './debts';
+import { removePaymentLedger, syncPaymentLedger } from './ledger';
 import { formatCurrency, roundMoney, toFiniteNumber, toISOStringOrNull } from './utils';
 import type { Payment } from '@/types';
 
@@ -32,7 +33,7 @@ export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResul
   const dateISO = toISOStringOrNull(draft.dateISO);
   if (!dateISO) return { ok: false, error: 'تاريخ التسديد غير صالح' };
 
-  const saved = await db.transaction('rw', [db.payments, db.invoices, db.customers, db.meta], async () => {
+  const saved = await db.transaction('rw', [db.payments, db.invoices, db.customers, db.customerLedger, db.meta], async () => {
     const customer = await db.customers.get(draft.customerId);
     if (!customer) return { ok: false as const, error: 'الزبون غير موجود' };
 
@@ -54,7 +55,8 @@ export async function savePayment(draft: PaymentDraft): Promise<PaymentSaveResul
       source: 'manual'
     })) as number;
 
-    // تحديث حالة فواتير الزبون (أقدم فاتورة أولاً)
+    // تثبيت التسديد في دفتر الذمم قبل تحديث عرض حالات الفواتير.
+    await syncPaymentLedger((await db.payments.get(paymentId)) as Payment);
     await reallocateCustomerInvoices(draft.customerId);
 
     const payment = (await db.payments.get(paymentId)) as Payment;
@@ -86,7 +88,7 @@ export type PaymentDeleteResult = { ok: true } | { ok: false; error: string };
 
 export async function deletePayment(paymentId: number): Promise<PaymentDeleteResult> {
   assertPermission('payments.delete');
-  const deleted = await db.transaction('rw', [db.payments, db.invoices], async () => {
+  const deleted = await db.transaction('rw', [db.payments, db.invoices, db.customerLedger], async () => {
     const payment = await db.payments.get(paymentId);
     if (!payment) return { ok: false as const, error: 'وصل القبض غير موجود' };
     if (payment.source === 'downpayment') {
@@ -96,6 +98,7 @@ export async function deletePayment(paymentId: number): Promise<PaymentDeleteRes
       };
     }
 
+    await removePaymentLedger(payment.id);
     await db.payments.delete(paymentId);
     await reallocateCustomerInvoices(payment.customerId);
     return { ok: true as const, payment };

@@ -75,17 +75,17 @@ export function Backup() {
   const settings = (useLiveQuery(() => getSettings(), []) ?? null) as OfficeSettings | null;
 
   const stats = useLiveQuery(async () => {
-    const [materials, customers, invoices, payments, purchases, invoiceItems, purchaseItems] = await Promise.all([
+    const [materials, customers, invoices, payments, customerLedger, stockMovements, invoiceItems] = await Promise.all([
       db.materials.count(),
       db.customers.count(),
       db.invoices.count(),
       db.payments.count(),
-      db.purchases.count(),
-      db.invoiceItems.count(),
-      db.purchaseItems.count()
+      db.customerLedger.count(),
+      db.stockMovements.count(),
+      db.invoiceItems.count()
     ]);
     // تقدير الحجم من عدد السجلات بدل تصدير القاعدة كاملة في كل فتح للصفحة
-    const estimatedRows = materials + customers + invoices + payments + purchases + invoiceItems + purchaseItems;
+    const estimatedRows = materials + customers + invoices + payments + customerLedger + stockMovements + invoiceItems;
     let totalSize = estimatedRows * 220;
     try {
       const estimate = await navigator.storage?.estimate?.();
@@ -93,8 +93,8 @@ export function Backup() {
     } catch {
       /* التقدير غير مدعوم — نستخدم الحساب التقريبي */
     }
-    return { materials, customers, invoices, payments, purchases, totalSize };
-  }, []) ?? { materials: 0, customers: 0, invoices: 0, payments: 0, purchases: 0, totalSize: 0 };
+    return { materials, customers, invoices, payments, customerLedger, stockMovements, totalSize };
+  }, []) ?? { materials: 0, customers: 0, invoices: 0, payments: 0, customerLedger: 0, stockMovements: 0, totalSize: 0 };
 
   const handleExport = async () => {
     if (isExporting) return;
@@ -147,7 +147,7 @@ export function Backup() {
           `المكتب: ${preview.officeName || 'غير محدد'}`,
           `تاريخ النسخة: ${formatDate(preview.date, true)}`,
           `${counts.invoices ?? 0} فاتورة • ${counts.customers ?? 0} زبون • ${counts.materials ?? 0} مادة`,
-          `${counts.payments ?? 0} تسديد • ${counts.purchases ?? 0} وصل شراء • ${counts.users ?? 0} مستخدم`,
+          `${counts.payments ?? 0} تسديد • ${counts.customerLedger ?? 0} حركة ذمم • ${counts.stockMovements ?? 0} حركة مخزون`,
           ...preview.warnings.slice(0, 3)
         ],
         confirmText: 'استيراد واستبدال البيانات',
@@ -159,7 +159,7 @@ export function Backup() {
       if (scope.aborted) return;
       toast.success(
         'تم الاستيراد بنجاح',
-        `${result.counts.invoices} فاتورة • ${result.counts.purchases} وصل شراء • ${result.counts.customers} زبون • ${result.counts.payments} تسديد`
+        `${result.counts.invoices} فاتورة • ${result.counts.customers} زبون • ${result.counts.payments} تسديد • ${result.counts.stockMovements} حركة مخزون`
       );
       if (result.warnings.length) toast.warning('تنبيهات أثناء الاستيراد', result.warnings.slice(0, 3).join(' | '));
       scheduleReload(1200);
@@ -248,7 +248,7 @@ export function Backup() {
       details: [
         'الإعدادات والمستخدمون',
         'جميع المواد والعملاء',
-        'جميع الفواتير ووصول الشراء والتسديدات',
+        'جميع الفواتير والتسديدات ودفتر الذمم وحركات المخزون',
         'الإشعارات وسجل النشاط',
         'سجل النسخ والنسخ الداخلية'
       ],
@@ -269,8 +269,8 @@ export function Backup() {
           db.invoices,
           db.invoiceItems,
           db.payments,
-          db.purchases,
-          db.purchaseItems,
+          db.customerLedger,
+          db.stockMovements,
           db.notifications,
           db.activityLogs,
           db.backups,
@@ -285,8 +285,8 @@ export function Backup() {
           await db.invoices.clear();
           await db.invoiceItems.clear();
           await db.payments.clear();
-          await db.purchases.clear();
-          await db.purchaseItems.clear();
+          await db.customerLedger.clear();
+          await db.stockMovements.clear();
           await db.notifications.clear();
           await db.activityLogs.clear();
           await db.backups.clear();
@@ -326,7 +326,7 @@ export function Backup() {
                 <div className="bg-gray-100/70 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-xl p-4">
                   <h3 className="font-bold text-primary-800 dark:text-primary-300 flex items-center gap-2"><Download className="w-4 h-4" />تصدير نسخة احتياطية</h3>
                   <p className="text-xs text-primary-700 dark:text-primary-400 mt-2 leading-relaxed">
-                    ملف واحد يضم كل شيء: بيانات المكتب والشعار والإعدادات، المستخدمين، المواد، الزبائن، الفواتير، التسديدات، وصول الشراء، الإشعارات وسجل النشاط وتسلسل أرقام المستندات. اسم الملف:<br/>
+                    ملف واحد يضم كل شيء: بيانات المكتب والشعار والإعدادات، المستخدمين، المواد، الزبائن، الفواتير، التسديدات، دفتر ذمم العملاء، حركات المخزون، الإشعارات وسجل النشاط وتسلسل أرقام المستندات. اسم الملف:<br/>
                     <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded text-[11px] mt-1 inline-block break-all">اسم_المكتب_نسخة_احتياطية_التاريخ_الوقت</span>
                   </p>
                   <Button onClick={handleExport} disabled={isExporting} className="w-full mt-4 bg-primary-600 hover:bg-primary-700">
@@ -494,8 +494,8 @@ export function Backup() {
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">المواد</p><p className="font-bold text-lg">{stats.materials}</p></div>
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">العملاء</p><p className="font-bold text-lg">{stats.customers}</p></div>
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">الفواتير</p><p className="font-bold text-lg">{stats.invoices}</p></div>
-                <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">وصول الشراء</p><p className="font-bold text-lg">{stats.purchases}</p></div>
                 <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">التسديدات</p><p className="font-bold text-lg">{stats.payments}</p></div>
+                <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl"><p className="text-xs text-gray-500">حركات المخزون</p><p className="font-bold text-lg">{stats.stockMovements}</p></div>
               </div>
               <div className="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800/30 rounded-xl p-3">
                 <p className="text-xs text-primary-700 dark:text-primary-300">حجم البيانات التقديري</p>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   FileText, 
@@ -7,10 +7,8 @@ import {
   CreditCard, 
   TrendingUp, 
   AlertTriangle,
-  HelpCircle,
   Plus,
   Wallet,
-  ShoppingCart,
   ArrowUpRight,
   DollarSign
 } from 'lucide-react';
@@ -23,7 +21,6 @@ import { logBackgroundFailure } from '@/lib/lifecycle';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useOfficeSettings } from '@/hooks/useOfficeSettings';
 import { OverflowMarquee } from '@/components/ui/OverflowMarquee';
-import { SalesVsPurchaseHelpDialog } from '@/components/help/SalesVsPurchaseHelpDialog';
 import { usePermission } from '@/hooks/useSession';
 import { formatDocumentNumber } from '@/lib/labels';
 import type { Permission } from '@/lib/permissions';
@@ -33,7 +30,6 @@ export function Dashboard() {
   const can = usePermission();
   const officeName = settings?.officeName?.trim() || '';
   const today = formatLocalDateInput();
-  const [showHelp, setShowHelp] = useState(false);
 
   const recentInvoices = useLiveQuery(() => db.invoices.orderBy('createdAt').reverse().limit(5).toArray(), []);
 
@@ -109,13 +105,10 @@ export function Dashboard() {
     };
   }, [settings?.lowStockThreshold]);
 
-  // الإجراءات السريعة حسب صلاحية المستخدم (موظف المبيعات لا يرى وصل الشراء
-  // ولا إضافة مادة) — نفس المصفوفة التي تحرس المسارات وطبقة البيانات
-  // `tag` يوضّح اتجاه حركة المواد على البطاقة نفسها، فلا يبقى الفرق بين
-  // فاتورة البيع ووصل الشراء موكولاً إلى تجربة المستخدم وحدها
+  // الإجراءات السريعة حسب صلاحية المستخدم؛ تظهر عمليات الإدارة للمدير فقط.
   const allQuickActions: Array<{ title: string; desc: string; tag?: string; icon: typeof FileText; color: string; href: string; count: number | null; permission: Permission }> = [
     { title: 'فاتورة بيع جديدة', desc: 'بيع للزبون: تخرج المواد من المخزن وتُسجَّل مبيعاتك', tag: 'مبيعات — خروج من المخزن', icon: FileText, color: 'bg-gray-900 dark:bg-white', href: '/invoices/new', count: null, permission: 'sales.create' },
-    { title: 'وصل شراء جديد', desc: 'شراء من مورد: تدخل المواد للمخزن وتُسجَّل مشترياتك', tag: 'مشتريات — إدخال إلى المخزن', icon: ShoppingCart, color: 'bg-gray-900 dark:bg-white', href: '/purchases/new', count: null, permission: 'purchases.manage' },
+    { title: 'إدخال مخزون', desc: 'سجّل كمية وتكلفتها من صفحة المخزن', tag: 'مخزون — إدخال يدوي موثق', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials', count: null, permission: 'materials.manage' },
     { title: 'تسديد دين', desc: 'تسجيل دفعة من زبون', icon: CreditCard, color: 'bg-gray-900 dark:bg-white', href: '/payments/new', count: null, permission: 'payments.create' },
     { title: 'إضافة مادة', desc: 'إضافة مادة جديدة للمخزن', icon: Package, color: 'bg-gray-900 dark:bg-white', href: '/materials?action=new', count: stats.totalMaterials, permission: 'materials.manage' },
     { title: 'الزبائن والديون', desc: 'عرض كشف الزبائن', icon: Users, color: 'bg-gray-900 dark:bg-white', href: '/customers', count: stats.totalCustomers, permission: 'customers.view' },
@@ -167,10 +160,6 @@ export function Dashboard() {
       <div>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-bold text-gray-900 dark:text-white">إجراءات سريعة</h2>
-          <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowHelp(true)}>
-            <HelpCircle className="w-4 h-4 ml-1" />
-            ما الفرق بين فاتورة البيع ووصل الشراء؟
-          </Button>
         </div>
         <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${quickActions.length >= 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-3'}`}>
           {quickActions.map((action, idx) => (
@@ -200,7 +189,6 @@ export function Dashboard() {
         </div>
       </div>
 
-      <SalesVsPurchaseHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -257,7 +245,7 @@ export function Dashboard() {
                 </div>
               )) : (
                 <div className="text-center py-12">
-                  <ShoppingCart className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+                  <FileText className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
                   <p className="text-sm text-gray-500 dark:text-gray-400">لا توجد فواتير بعد</p>
                   <Link to="/invoices/new" className="inline-block mt-3">
                     <Button size="sm">إنشاء أول فاتورة</Button>

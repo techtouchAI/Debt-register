@@ -16,7 +16,7 @@
  */
 
 /** أنواع المستندات المدعومة في الحفظ/الطباعة. */
-export type PdfFormat = 'a4' | 'receipt80';
+export type PdfFormat = 'a4';
 
 export const MM_PER_INCH = 25.4;
 /** كثافة CSS القياسية: 1in = 96px (تستخدمها كل المتصفحات في تخطيط mm/cm). */
@@ -29,8 +29,8 @@ export function mmToPx(mm: number): number {
 export interface SheetGeometry {
   /** عرض الورقة (مم) = عرض منطقة الرسم في مسار PDF. */
   widthMm: number;
-  /** ارتفاع الورقة (مم) — غائب في الوصل الحراري (ارتفاع بحسب المحتوى). */
-  heightMm?: number;
+  /** ارتفاع الورقة (مم). */
+  heightMm: number;
   /** الهامش الداخلي للورقة (مم) — وهو هوامش الورقة المطبوعة أيضاً. */
   marginMm: number;
 }
@@ -38,11 +38,8 @@ export interface SheetGeometry {
 /** ورقة A4: 210×297 مم بهامش 10 مم (نفس `@page` في CSS). */
 export const A4_SHEET: SheetGeometry = { widthMm: 210, heightMm: 297, marginMm: 10 };
 
-/** ورق الوصل الحراري 80 مم بهامش 3 مم. */
-export const RECEIPT_SHEET: SheetGeometry = { widthMm: 80, marginMm: 3 };
-
-export function sheetFor(format: PdfFormat): SheetGeometry {
-  return format === 'a4' ? A4_SHEET : RECEIPT_SHEET;
+export function sheetFor(_format: PdfFormat = 'a4'): SheetGeometry {
+  return A4_SHEET;
 }
 
 /** عرض منطقة رسم الورقة بالبكسل (نحوّل إليه المستند قبل التصوير). */
@@ -61,10 +58,6 @@ export const A4_CONTENT_HEIGHT_PX = mmToPx((A4_SHEET.heightMm as number) - A4_SH
 
 /** هامش الورقة بالبكسل (نقلم به هوامش الورقة عند تقسيم الصفحات). */
 export const A4_MARGIN_PX = mmToPx(A4_SHEET.marginMm);
-
-/** أقصى ارتفاع لصورة الوصل الحراري (مم) حمايةً من مبلغ/ملاحظات طويلة جداً. */
-export const RECEIPT_MAX_HEIGHT_MM = 500;
-export const RECEIPT_MIN_HEIGHT_MM = 60;
 
 /** صفحة PDF: من أين تُقتطع الصورة (بكسل) وأين تُرسم على الورقة (مم). */
 export interface PdfPagePlan {
@@ -188,31 +181,4 @@ export function planA4Pages(
     offset += height;
   }
   return pages;
-}
-
-/**
- * صفحة الوصل الحراري: ورقة واحدة بارتفاع المحتوى نفسه.
- * ارتفاع الورقة = ارتفاع الصورة محوَّلاً إلى ملّيمتر، بحدّين أدنى وأقصى
- * حتى لا تخرج الوصلات القصيرة جداً ضيقة ولا الطويلة جداً تُقتطع.
- */
-export function planReceiptPage(canvasWidthPx: number, canvasHeightPx: number): PdfPagePlan[] {
-  if (canvasWidthPx <= 0 || canvasHeightPx <= 0) return [];
-  const mmPerPx = RECEIPT_SHEET.widthMm / canvasWidthPx;
-  const rawHeightMm = canvasHeightPx * mmPerPx;
-  const heightMm = Math.min(
-    RECEIPT_MAX_HEIGHT_MM,
-    Math.max(RECEIPT_MIN_HEIGHT_MM, rawHeightMm)
-  );
-  return [
-    {
-      sourceLeftPx: 0,
-      sourceTopPx: 0,
-      sourceWidthPx: canvasWidthPx,
-      sourceHeightPx: canvasHeightPx,
-      xMm: 0,
-      yMm: 0,
-      widthMm: RECEIPT_SHEET.widthMm,
-      heightMm
-    }
-  ];
 }

@@ -6,16 +6,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#151412" />
     <meta name="description" content="نظام إدارة المكتب - إدارة المخزن والعملاء والفواتير والديون - يعمل بدون انترنت" />
+    <!--
+      سياسة دفاعية للواجهة المشتركة. لا سكربتات مضمنة ولا مصادر شبكة خارجية؛
+      يسمح اتصال WebSocket فقط لخادم Vite أثناء التطوير، بينما ملفات الإنتاج
+      تعمل محلياً بالكامل داخل Electron.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; frame-src 'none'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; worker-src 'self' blob:"
+    />
     <title>إدارة المكتب</title>
-    <script>
-      // تهيئة السمة قبل أول رسم: يمنع وميض النهار/الليل والشاشة السوداء عند البدء
-      try {
-        var t = localStorage.getItem('theme');
-        var d = t === 'dark' || (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
-        document.documentElement.classList.toggle('dark', d);
-        document.documentElement.style.backgroundColor = d ? '#151412' : '#f8f7f5';
-      } catch (e) {}
-    </script>
+    <!-- تهيئة السمة قبل إقلاع React، بلا JavaScript مضمّن حتى تظل CSP صارمة. -->
+    <script type="module" src="/src/themeBootstrap.ts"></script>
     <!-- الخط مدمج داخل التطبيق (src/main.tsx) — لا طلبات إنترنت إطلاقاً -->
   </head>
   <body class="font-cairo bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
