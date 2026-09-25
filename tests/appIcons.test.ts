@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   ANDROID_DENSITIES,
   ANDROID_RES_DIR,
+  ICON_SOURCES,
   WINDOWS_ICO_SIZES,
   generateIcons,
   iconOutputs
@@ -56,6 +57,26 @@ describe('نواتج الأيقونة الملتزمة في المستودع', (
       expect(entries?.find((entry) => entry.size === 256)?.format, file).toBe('png');
     }
     expect(readIcoEntries(read('public/favicon.ico'))?.map((entry) => entry.size)).toEqual([16, 32, 48]);
+  });
+
+  it('النسخة المبسّطة للأحجام الصغيرة على شبكة البكسل (حادة عند 16 و32 بكسل)', () => {
+    // كل حافة مستقيمة في icon-small.svg على مضاعفات 64 وحدة من 1024 (= بكسل كامل عند
+    // 16×16): حافة على نصف بكسل تُرسم صفاً رمادياً باهتاً فتذوب أسطر الوصل في favicon
+    // وشريط مهام ويندوز. الدوائر (الختم) وعلامة الصح مستثناة لأنها منحنية أصلاً.
+    const svg = readText(ICON_SOURCES.small);
+    const rects = [...svg.matchAll(/<rect\b[^>]*>/g)].map(([tag]) => tag);
+    expect(rects.length).toBeGreaterThanOrEqual(4);
+    for (const tag of rects) {
+      for (const name of ['x', 'y', 'width', 'height']) {
+        const value = Number(tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1] ?? 0);
+        expect(value % 64, `${name} في ${tag}`).toBe(0);
+      }
+    }
+    // ورقة الوصل (المسار المغلق الوحيد): كل إحداثياتها على الشبكة، ومنها أسنان الحافة السفلية
+    const paper = svg.match(/<path\b[^>]*\bd="(M[^"]*Z)"/)?.[1] ?? '';
+    const numbers = paper.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+    expect(numbers.length).toBeGreaterThan(10);
+    expect(numbers.filter((n) => n % 64 !== 0)).toEqual([]);
   });
 
   it('أيقونة ماك (icns) تحوي كل المقاسات من 16 حتى 1024', () => {
