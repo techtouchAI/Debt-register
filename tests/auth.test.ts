@@ -137,6 +137,8 @@ describe('إدارة المستخدمين والاسترداد', () => {
     expect(routePermission('/legacy/removed-feature')).toBe('dashboard.view');
     expect(routePermission('/materials')).toBe('materials.view');
     expect(routePermission('/reports')).toBe('reports.view');
+    expect(routePermission('/developer')).toBe('dashboard.view');
+    expect(roleCan('sales', routePermission('/developer'))).toBe(true);
   });
 
   it('تزامن الجلسة يحذف الجلسة عند غياب الحساب', () => {

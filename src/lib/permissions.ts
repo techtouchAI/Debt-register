@@ -113,5 +113,7 @@ export function routePermission(pathname: string): Permission {
   if (pathname.startsWith('/backup')) return 'backup.manage';
   if (pathname.startsWith('/settings')) return 'settings.manage';
   if (pathname.startsWith('/notifications')) return 'notifications.view';
+  // معلومات المطور صفحة عامة متاحة للمدير وموظف المبيعات.
+  if (pathname.startsWith('/developer')) return 'dashboard.view';
   return 'dashboard.view';
 }

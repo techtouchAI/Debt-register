@@ -14,7 +14,8 @@ import {
   Sun,
   Moon,
   Database,
-  Lock
+  Lock,
+  Code2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -53,6 +54,7 @@ const navigation = [
   { name: 'التقارير', href: '/reports', icon: BarChart3 },
   { name: 'النسخ الاحتياطي', href: '/backup', icon: Database },
   { name: 'الإعدادات', href: '/settings', icon: Settings },
+  { name: 'معلومات المطور', href: '/developer', icon: Code2 },
 ];
 
 export function Layout({ children, initialSettings = null }: LayoutProps) {

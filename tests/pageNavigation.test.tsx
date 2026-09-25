@@ -119,7 +119,7 @@ describe('أدوات التنقّل', () => {
 describe('سلسلة الرجوع حتى الرئيسية ثم تأكيد الخروج', () => {
   it('كل صفحة رئيسية: رجوع واحد ⇒ الرئيسية ⇒ حوار الخروج', async () => {
     await bootApp('#/');
-    for (const page of ['#/materials', '#/customers', '#/invoices', '#/payments', '#/reports', '#/backup', '#/settings', '#/notifications']) {
+    for (const page of ['#/materials', '#/customers', '#/invoices', '#/payments', '#/reports', '#/backup', '#/settings', '#/developer', '#/notifications']) {
       await goTo(page);
       pressBack();
       await expectHash('#/');

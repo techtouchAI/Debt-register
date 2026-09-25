@@ -37,6 +37,7 @@ import type { OfficeSettings } from '@/types';
  */
 const Reports = lazy(() => import('@/pages/Reports').then((module) => ({ default: module.Reports })));
 const Settings = lazy(() => import('@/pages/Settings').then((module) => ({ default: module.Settings })));
+const DeveloperInfo = lazy(() => import('@/pages/DeveloperInfo').then((module) => ({ default: module.DeveloperInfo })));
 const Backup = lazy(() => import('@/pages/Backup').then((module) => ({ default: module.Backup })));
 
 function PageLoading() {
@@ -213,6 +214,7 @@ function App() {
                 <Route path="/reports" element={<Reports />} />
                 <Route path="/backup" element={<Backup />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/developer" element={<DeveloperInfo />} />
                 <Route path="/notifications" element={<Notifications />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

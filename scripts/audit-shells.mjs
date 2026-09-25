@@ -229,8 +229,8 @@ async function main() {
     capacitorImports.length > 0 && capacitorImports.every((name) => capSyncVisible.has(name))
   );
   check(
-    'إضافات الرجوع والملفات والإشعارات ليست في optionalDependencies (كانت تُسقط تسجيل الإضافات كلياً)',
-    ['@capacitor/app', '@capacitor/core', '@capacitor/android', '@capacitor/filesystem', '@capacitor/local-notifications', '@capacitor/share'].every(
+    'إضافات الرجوع والمتصفح والملفات والإشعارات ليست في optionalDependencies (كانت تُسقط تسجيل الإضافات كلياً)',
+    ['@capacitor/app', '@capacitor/browser', '@capacitor/core', '@capacitor/android', '@capacitor/filesystem', '@capacitor/local-notifications', '@capacitor/share'].every(
       (name) => !optionalDeps.has(name)
     )
   );
@@ -264,6 +264,10 @@ async function main() {
     check(
       'مشروع أندرويد المولَّد يسجّل AppPlugin (زر الرجوع) وليس قائمة فارغة',
       plugins.length > 0 && registered.has('com.capacitorjs.plugins.app.AppPlugin')
+    );
+    check(
+      'مشروع أندرويد المولَّد يسجّل BrowserPlugin لروابط المطور',
+      registered.has('com.capacitorjs.plugins.browser.BrowserPlugin')
     );
     const buildGradle = (await fileText(join(repoRoot, 'android/app/capacitor.build.gradle'))) ?? '';
     check(
@@ -424,6 +428,16 @@ async function main() {
   section('خط البناء المستمر');
   check('مهمة الجودة تشمل تدقيق الأغلفة', /audit:shells/.test(workflow));
   check('مهمة أندرويد تبنى APK', /assembleRelease/.test(workflow));
+  check(
+    'مهمة أندرويد تستخدم أسماء أسرار التوقيع المحددة',
+    [
+      'KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}',
+      'KEYSTORE_STORE_PASSWORD: ${{ secrets.KEYSTORE_STORE_PASSWORD }}',
+      'KEYSTORE_KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}',
+      'KEYSTORE_KEY_PASSWORD: ${{ secrets.KEYSTORE_KEY_PASSWORD }}'
+    ].every((secret) => workflow.includes(secret))
+  );
+  check('ملف PKCS12 يُستخدم بتحديد نوع المخزن صراحةً', /KEYSTORE_TYPE=PKCS12/.test(workflow) && workflow.includes('--ks-type "$KEYSTORE_TYPE"'));
   check('مهمة أندرويد تتحقق من الصلاحيات داخل APK', /dump permissions/.test(workflow));
   check('مهمة أندرويد تتحقق من موارد الأيقونة داخل APK', /dump resources/.test(workflow));
   check('مهمة أندرويد تتحقق من مزوّد مشاركة الملفات', /fileprovider/.test(workflow));

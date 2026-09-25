@@ -141,10 +141,10 @@ npm run icons -- --check   # يتحقق أن النواتج الملتزمة م�
 
 | Secret | الوصف |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w 0 release.jks` |
-| `ANDROID_KEYSTORE_PASSWORD` | كلمة مرور keystore |
-| `ANDROID_KEY_ALIAS` | اسم المفتاح |
-| `ANDROID_KEY_PASSWORD` | كلمة مرور المفتاح (اختياري) |
+| `KEYSTORE_BASE64` | ملف PKCS12 مشفّر بـ Base64 كسطر واحد |
+| `KEYSTORE_STORE_PASSWORD` | كلمة مرور مخزن التوقيع |
+| `KEYSTORE_KEY_ALIAS` | اسم المفتاح داخل المخزن |
+| `KEYSTORE_KEY_PASSWORD` | كلمة مرور المفتاح |
 
 **الإصدارات:** `git tag vX.Y.Z && git push origin vX.Y.Z` ← تُرفع كل القطع تلقائياً إلى GitHub Release.
 
