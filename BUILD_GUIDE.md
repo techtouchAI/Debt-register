@@ -55,7 +55,7 @@ npm run android:init && npm run android:build   # Android APK
 ## 4.1) التحقق من الأغلفة قبل البناء وبعده
 
 ```bash
-npm run audit:shells   # 82 فحصاً ثابتاً لأغلفة Electron/Capacitor/Tauri + ناتج الويب
+npm run audit:shells   # فحوص ثابتة لأغلفة Electron/Capacitor/Tauri + ناتج الويب
 npm run cap:prepare    # تجهيز مشروع أندرويد المُولَّد (صلاحيات + أيقونات + مسارات + أسماء)
 ```
 

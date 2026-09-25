@@ -92,6 +92,8 @@ async function main() {
   const tauri = await readJson('desktop/src-tauri/tauri.conf.json');
   const mainCjs = await readText('electron/main.cjs');
   const preloadCjs = await readText('electron/preload.cjs');
+  const indexHtml = await readText('index.html');
+  const themeBootstrap = await readText('src/themeBootstrap.ts');
   const prepareAndroid = await readText('scripts/prepare-android.mjs');
   const appTsx = await readText('src/App.tsx');
   const prepareAndroidTests = await readText('tests/prepareAndroid.test.ts');
@@ -125,6 +127,25 @@ async function main() {
   check('حماية من اجتياز المسار في أسماء الملفات', /function safeFileName/.test(mainCjs));
   check('جسر preload محدود بالدوال المعلنة', /contextBridge\.exposeInMainWorld/.test(preloadCjs));
   check('لا استخدام ipcRenderer مباشر في الواجهة', !/ipcRenderer/.test(preloadCjs.split('contextBridge')[0] ?? ''));
+  check(
+    'قنوات IPC تتحقق من أن الطلب من صفحة التطبيق الموثوقة',
+    /function isTrustedIpcSender/.test(mainCjs) &&
+      ['save-backup', 'save-file', 'print-document', 'show-notification', 'app-info'].every((channel) =>
+        new RegExp(`rejectUntrustedIpc\\(event, '${channel}'\\)`).test(mainCjs)
+      )
+  );
+  check(
+    'خادم التطوير المسموح محدد بالمنفذ المعروف (لا أي localhost)',
+    /url\.protocol === 'http:' && url\.hostname === 'localhost' && url\.port === '5173'/.test(mainCjs)
+  );
+  check(
+    'اسم الملف يرفض فواصل Windows وPOSIX قبل الكتابة',
+    mainCjs.includes('/[\\\\/]/.test(fileName)') && mainCjs.includes("fileName.includes('\\0')")
+  );
+  check(
+    'الحفظ الذري يستعمل ملفاً مؤقتاً فريداً وينظفه بعد الفشل',
+    /randomUUID\(\)/.test(mainCjs) && /function writeFileAtomically/.test(mainCjs) && /fsp\.rm\(tempPath, \{ force: true \}\)/.test(mainCjs)
+  );
 
   check('appId صحيح', builder.appId === 'com.agrioffice.debtregister');
   check('asar مفعّل', builder.asar === true);
@@ -138,6 +159,18 @@ async function main() {
   check('أيقونة ويندوز موجودة', existsSync(join(repoRoot, builder.win?.icon ?? '')));
   check('صفحة الخطأ العربية لتعذّر التحميل موجودة', /تعذّر تحميل واجهة التطبيق/.test(mainCjs));
   check('صفحة الخطأ لا تعرض الوصف الإنجليزي التقني من Chromium', !/\$\{errorDescription\}/.test(mainCjs));
+  check(
+    'واجهة الإنتاج لديها CSP تمنع السكربتات المضمّنة والمصادر الخارجية',
+    /http-equiv="Content-Security-Policy"/.test(indexHtml) &&
+      /script-src 'self'/.test(indexHtml) &&
+      !/script-src[^\"]*unsafe-inline/.test(indexHtml)
+  );
+  check(
+    'تهيئة السمة ملف مستقل لا سكربت مضمّن',
+    /src="\/src\/themeBootstrap\.ts"/.test(indexHtml) &&
+      /localStorage\.getItem\('theme'\)/.test(themeBootstrap) &&
+      !/<script>([\s\S]*?)localStorage\.getItem\('theme'\)/.test(indexHtml)
+  );
   check('لغة Chromium عربية (رسائل التحقق ومنتقي التاريخ) عبر --lang=ar', /appendSwitch\('lang', 'ar'\)/.test(mainCjs));
   check('لا قائمة Electron الإنجليزية الافتراضية (File/Edit/View)', /Menu\.setApplicationMenu\(null\)/.test(mainCjs));
   check(
@@ -333,7 +366,6 @@ async function main() {
 
   /* ------------------------ الواجهة المشتركة ------------------------ */
   section('الواجهة المشتركة (كل الأنظمة)');
-  const indexHtml = await readText('index.html');
   check('الخط مدمج داخل التطبيق — لا تحميل خطوط من الإنترنت', !/fonts\.googleapis\.com/.test(indexHtml) && /@fontsource-variable\/cairo/.test(mainTsx));
   check('منع إفلات الملفات من استبدال الواجهة (ويندوز/المتصفح)', /installDropGuard\(\)/.test(mainTsx));
   check('لا حوارات confirm/prompt الأصلية (أزرار إنجليزية وprompt غير مدعوم في ويندوز)', !(await sourceUsesNativeDialogs()));

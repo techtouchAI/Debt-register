@@ -4,6 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const { pathToFileURL } = require('url');
+const { randomUUID } = require('crypto');
 
 /**
  * نافذة سطح المكتب لنظام إدارة المكتب.
@@ -98,12 +99,31 @@ if (process.platform === 'win32') {
 function isInternalUrl(target) {
   try {
     const url = new URL(target);
-    if (isDev && url.hostname === 'localhost') return true;
+    // خادم التطوير ثابت ومعلوم؛ لا يكفي قبول أي خدمة تعمل محلياً.
+    if (isDev) return url.protocol === 'http:' && url.hostname === 'localhost' && url.port === '5173';
     if (url.protocol !== 'file:') return false;
     return decodeURIComponent(url.pathname) === decodeURIComponent(pathToFileURL(APP_INDEX).pathname);
   } catch {
     return false;
   }
+}
+
+/**
+ * تحقّق دفاعي لكل قناة IPC ذات صلاحية على نظام ويندوز.
+ *
+ * عزل السياق وجسر preload المحدود هما خط الدفاع الأول، لكن لا يجوز افتراض
+ * أن كل إطار renderer موثوق: لا يُقبل طلب حفظ/طباعة/إشعار إلا من صفحة
+ * التطبيق الفعلية (ملف الإنتاج أو خادم Vite المعروف في التطوير). يقي ذلك
+ * العملية الرئيسية ذات صلاحية القرص من أي تنقّل أو إطار غير متوقّع مستقبلاً.
+ */
+function isTrustedIpcSender(event) {
+  return isInternalUrl(event?.senderFrame?.url || '');
+}
+
+function rejectUntrustedIpc(event, channel) {
+  if (isTrustedIpcSender(event)) return false;
+  console.warn(`رفض طلب IPC غير موثوق: ${channel}`);
+  return true;
 }
 
 /* ------------------------------ حالة النافذة ------------------------------ */
@@ -436,13 +456,35 @@ process.on('unhandledRejection', (reason) => {
 
 /* ------------------------------- قنوات IPC ------------------------------- */
 
-/** منع اجتياز المسار: اسم الملف لا يجب أن يحتوي فواصل مسارات. */
+/**
+ * منع اجتياز المسار على جميع المنصات: اسم الملف وحده، لا مساراً نسبياً أو
+ * مطلقاً. لا نعتمد على `path.basename` فقط لأن فواصل Windows وPOSIX تختلف
+ * عندما يُبنى المشروع أو يُفحص خارج ويندوز.
+ */
 function safeFileName(fileName) {
-  const base = path.basename(String(fileName || ''));
-  return base && base !== '.' && base !== '..' ? base : null;
+  if (typeof fileName !== 'string' || !fileName || fileName !== fileName.trim()) return null;
+  if (fileName.includes('\0') || /[\\/]/.test(fileName)) return null;
+  const base = path.basename(fileName);
+  return base === fileName && base !== '.' && base !== '..' ? base : null;
 }
 
-ipcMain.handle('save-backup', async (_event, payload) => {
+/**
+ * كتابة ذرّية لكل ملف يختاره المستخدم: نكتب أولاً في ملف فريد بجانب الوجهة
+ * ثم نعيد تسميته. المعرف الفريد يمنع تصادم عمليتي حفظ متزامنتين لنفس الاسم؛
+ * والتنظيف في finally لا يترك ملفاً مؤقتاً بعد فشل أو إلغاء مفاجئ.
+ */
+async function writeFileAtomically(filePath, data, options) {
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fsp.writeFile(tempPath, data, options);
+    await fsp.rename(tempPath, filePath);
+  } finally {
+    await fsp.rm(tempPath, { force: true }).catch(() => {});
+  }
+}
+
+ipcMain.handle('save-backup', async (event, payload) => {
+  if (rejectUntrustedIpc(event, 'save-backup')) return { success: false, error: 'مصدر الطلب غير موثوق' };
   try {
     const fileName = safeFileName(payload?.fileName);
     if (!fileName) return { success: false, error: 'اسم الملف غير صالح' };
@@ -462,10 +504,7 @@ ipcMain.handle('save-backup', async (_event, payload) => {
     if (!filePath) return { success: false, cancelled: true };
 
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    // كتابة ذرّية: ملف مؤقت ثم إعادة تسمية، حتى لا تترك نسخة ناقصة عند الانقطاع
-    const tempPath = `${filePath}.tmp`;
-    await fsp.writeFile(tempPath, payload.data, 'utf8');
-    await fsp.rename(tempPath, filePath);
+    await writeFileAtomically(filePath, payload.data, 'utf8');
 
     return { success: true, path: filePath };
   } catch (error) {
@@ -473,7 +512,8 @@ ipcMain.handle('save-backup', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('save-file', async (_event, payload) => {
+ipcMain.handle('save-file', async (event, payload) => {
+  if (rejectUntrustedIpc(event, 'save-file')) return { success: false, error: 'مصدر الطلب غير موثوق' };
   try {
     const fileName = safeFileName(payload?.fileName);
     if (!fileName) return { success: false, error: 'اسم الملف غير صالح' };
@@ -503,10 +543,7 @@ ipcMain.handle('save-file', async (_event, payload) => {
     if (!filePath) return { success: false, cancelled: true };
 
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    // كتابة ذرّية: ملف مؤقت ثم إعادة تسمية
-    const tempPath = `${filePath}.tmp`;
-    await fsp.writeFile(tempPath, Buffer.from(payload.data, 'base64'));
-    await fsp.rename(tempPath, filePath);
+    await writeFileAtomically(filePath, Buffer.from(payload.data, 'base64'));
 
     return { success: true, path: filePath };
   } catch (error) {
@@ -525,7 +562,8 @@ ipcMain.handle('save-file', async (_event, payload) => {
  * `@page { size: A4; margin: 10mm }` داخل المستند نفسه، فيخرج الورق مطابقاً
  * للمعاينة وملف المستند.
  */
-ipcMain.handle('print-document', async (_event, payload) => {
+ipcMain.handle('print-document', async (event, payload) => {
+  if (rejectUntrustedIpc(event, 'print-document')) return { success: false, error: 'مصدر الطلب غير موثوق' };
   const html = typeof payload?.html === 'string' ? payload.html : '';
   if (!html) return { success: false, error: 'لا يوجد مستند للطباعة' };
 
@@ -563,7 +601,8 @@ ipcMain.handle('print-document', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('show-notification', async (_event, payload) => {
+ipcMain.handle('show-notification', async (event, payload) => {
+  if (rejectUntrustedIpc(event, 'show-notification')) return { success: false, error: 'مصدر الطلب غير موثوق' };
   try {
     const title = String(payload?.title || 'إدارة المكتب').slice(0, 200);
     const body = String(payload?.body || '').slice(0, 500);
@@ -589,8 +628,11 @@ ipcMain.handle('show-notification', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('app-info', async () => ({
-  version: app.getVersion(),
-  platform: process.platform,
-  isElectron: true
-}));
+ipcMain.handle('app-info', async (event) => {
+  if (rejectUntrustedIpc(event, 'app-info')) return { isElectron: false, error: 'مصدر الطلب غير موثوق' };
+  return {
+    version: app.getVersion(),
+    platform: process.platform,
+    isElectron: true
+  };
+});

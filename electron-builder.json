@@ -1,7 +1,7 @@
 {
   "appId": "com.agrioffice.debtregister",
   "productName": "إدارة المكتب",
-  "copyright": "Copyright © 2024 TechTouch AI",
+  "copyright": "Copyright © 2026 TechTouch AI",
   "asar": true,
   "directories": {
     "output": "release",

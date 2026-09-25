@@ -98,16 +98,16 @@
 
 ## 🚀 التقنيات المستخدمة (أفضل الممارسات الحديثة)
 
-- **Frontend**: React 18 + TypeScript + Vite 5
+- **Frontend**: React 19 + TypeScript + Vite 8
 - **UI**: TailwindCSS 3 + Lucide Icons + shadcn patterns
 - **Database**: Dexie.js (IndexedDB) - **100% Offline**
 - **PDF**: jsPDF
 - **PWA**: vite-plugin-pwa - يعمل بدون انترنت
 - **State**: Dexie React Hooks (live queries)
-- **Routing**: React Router DOM 6
+- **Routing**: React Router DOM 7
 - **Build**:
   - **Web**: Vite PWA
-  - **Android**: Capacitor 6 (WebView + Filesystem + Local Notifications + Share + App)
+  - **Android**: Capacitor 8 (WebView + Filesystem + Local Notifications + Share + App)
   - **Windows 10/11**: Electron (NSIS installer + Portable)
 
 ---
@@ -217,7 +217,7 @@ src/
 ├── App.tsx                  # Routing + فحص التخزين + تهيئة + صيانة
 └── index.css                # Tailwind + Cairo font + RTL
 
-tests/                       # 52 اختباراً (Vitest + fake-indexeddb)
+tests/                       # اختبارات وحدة وتكامل (Vitest + fake-indexeddb)
 electron/                    # غلاف ويندوز (main.cjs + preload.cjs)
 desktop/                     # غلاف Tauri (اختياري)
 capacitor.config.json        # إعدادات أندرويد
