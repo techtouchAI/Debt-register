@@ -157,10 +157,11 @@ async function main() {
       /hasDatabase\(to\)/.test(userDataCjs)
   );
   check(
-    'المثبّت يرفض ما قبل Windows 10 ونظام 32-bit دون رفض ARM64',
+    'المثبّت يرفض ما قبل Windows 10 ويفحص المعمارية المطابقة لكل إصدار',
     /include/.test(JSON.stringify(builder.nsis ?? {})) &&
       /AtLeastWin10/.test(installerNsh) &&
-      /ifndef APP_ARM64/.test(installerNsh) &&
+      /ifdef APP_X64/.test(installerNsh) &&
+      /ifdef APP_ARM64/.test(installerNsh) &&
       /RunningX64/.test(installerNsh)
   );
   check('اسم التنفيذ اللاتيني ثابت ولا يدخل في مجلد الحفظ العربي', builder.win?.executableName === 'OfficeManager' && !/'OfficeManager'\)/.test(mainCjs));
@@ -169,8 +170,11 @@ async function main() {
   check('asar مفعّل', builder.asar === true);
   check('مجلد النواتج release', builder.directories?.output === 'release');
   check('حزمة البناء تتضمن dist و electron و public', ['dist/**/*', 'electron/**/*', 'public/**/*'].every((pattern) => builder.files?.includes(pattern)));
-  check('هدف nsis موجود', JSON.stringify(builder.win?.target ?? '').includes('nsis'));
+  check('هدف nsis موجود', JSON.stringify(builder.win?.target ?? '').includes('"nsis"') || JSON.stringify(builder.win?.target ?? '').includes('nsis'));
   check('هدف portable موجود', JSON.stringify(builder.win?.target ?? '').includes('portable'));
+  const winTargets = JSON.stringify(builder.win?.target ?? []);
+  check('بناء ويندوز يستهدف المعماريات الثلاث (x64 + ia32 + arm64)', ['"x64"', '"ia32"', '"arm64"'].every((arch) => winTargets.includes(arch)));
+  check('توقيع ويندوز يستخدم SHA-256 (لا SHA-1)', Array.isArray(builder.win?.signingHashAlgorithms) && builder.win.signingHashAlgorithms.includes('sha256') && !builder.win.signingHashAlgorithms.includes('sha1'));
   check('اسم ملف المثبّت واضح', /Setup/.test(JSON.stringify(builder.nsis?.artifactName ?? '')));
   check('اسم ملف النسخة المحمولة واضح', /Portable/.test(JSON.stringify(builder.portable?.artifactName ?? '')));
   check('لا يُحذف مجلد بيانات المستخدم عند إلغاء التثبيت', builder.nsis?.deleteAppDataOnUninstall === false);
@@ -484,7 +488,9 @@ async function main() {
     'مهمة أندرويد تتحقق من وجود AppPlugin داخل الـ APK المبني',
     /capacitor\.plugins\.json/.test(workflow) && /AppPlugin/.test(workflow)
   );
-  check('مهمة ويندوز تبني x64 وARM64 وتدخّن x64 فقط', /--x64 --arm64/.test(workflow) && /OfficeManager-Portable-\*-x64\.exe/.test(workflow) && /--smoke-test/.test(workflow));
+  check('مهمة ويندوز تبني x64 و ia32 و ARM64 وتدخّن x64 فقط', /--x64 --ia32 --arm64/.test(workflow) && /OfficeManager-Portable-\*-x64\.exe/.test(workflow) && /--smoke-test/.test(workflow));
+  check('مهمة ويندوز تتحقق من وجود كل النواتج (مثبّت + محمول × 3 معماريات)', /OfficeManager-Setup-\*-ia32\.exe/.test(workflow) && /OfficeManager-Portable-\*-ia32\.exe/.test(workflow) && /Get-AuthenticodeSignature/.test(workflow));
+  check('متغيرات التوقيع WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD مستخدمة في المهمة', /WIN_CSC_LINK/.test(workflow) && /WIN_CSC_KEY_PASSWORD/.test(workflow));
   check('مهمة ويندوز تثبّت المثبّت صامتاً وتتحقق من التثبيت', /Uninstall\*\.exe|\/S'/.test(workflow));
   check('تدقيق أمني للاعتماديات', /npm audit --audit-level=high/.test(workflow));
 

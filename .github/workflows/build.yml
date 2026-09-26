@@ -317,42 +317,73 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build installer + portable EXE with electron-builder
+      - name: Build installer + portable EXE (x64 + ia32 + arm64) with signing
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK)) { Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue }
-          if ([string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)) { Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue }
-          if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) { $env:CSC_LINK = $env:WIN_CSC_LINK }
-          if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) { $env:CSC_KEY_PASSWORD = $env:WIN_CSC_KEY_PASSWORD }
-          npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json
-      - name: التحقق من المنتجات (مثبّت + محمول + asar يحتوي الواجهة)
+          # electron-builder يقرأ CSC_LINK و CSC_KEY_PASSWORD. نربطهما بالمتغيرات
+          # المحددة بأسرار WIN_CSC_* المتعارف عليها في المشروع (دون الكتابة فوق قيم
+          # فارغة حتى لا يحاول electron-builder التوقيع بلا شهادة).
+          foreach ($pair in @(@{Src='WIN_CSC_LINK';Dst='CSC_LINK'}, @{Src='WIN_CSC_KEY_PASSWORD';Dst='CSC_KEY_PASSWORD'})) {
+            $srcVal = [Environment]::GetEnvironmentVariable($pair.Src)
+            if ([string]::IsNullOrWhiteSpace($srcVal)) {
+              Remove-Item Env:$($pair.Dst) -ErrorAction SilentlyContinue
+            } else {
+              Set-Item -Path Env:$($pair.Dst) -Value $srcVal
+            }
+          }
+          # البناء لثلاث معماريات: x64 (ويندوز 10/11 64-بت)، ia32 (ويندوز 10 32-بت)، arm64 (Windows on ARM)
+          npx electron-builder --win nsis portable --x64 --ia32 --arm64 --publish=never --config electron-builder.json
+      - name: التحقق من المنتجات (مثبّت + محمول لكل المعماريات + asar + التوقيع)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
-          $setup = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*-x64.exe' -ErrorAction SilentlyContinue
-          $portable = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*-x64.exe' -ErrorAction SilentlyContinue
-          $setupArm = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*-arm64.exe' -ErrorAction SilentlyContinue
-          $portableArm = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*-arm64.exe' -ErrorAction SilentlyContinue
-          if (-not $setup) { Write-Error 'لم يُنتج electron-builder مثبّت nsis لـ x64' }
-          if (-not $portable) { Write-Error 'لم يُنتج electron-builder نسخة محمولة لـ x64' }
-          if (-not $setupArm) { Write-Error 'لم يُنتج electron-builder مثبّت arm64' }
-          if (-not $portableArm) { Write-Error 'لم يُنتج electron-builder نسخة محمولة arm64' }
+          $expected = @(
+            @{Pattern='OfficeManager-Setup-*-x64.exe';    Label='مثبّت nsis x64'},
+            @{Pattern='OfficeManager-Portable-*-x64.exe'; Label='نسخة محمولة x64'},
+            @{Pattern='OfficeManager-Setup-*-ia32.exe';   Label='مثبّت nsis ia32 (32-بت)'},
+            @{Pattern='OfficeManager-Portable-*-ia32.exe';Label='نسخة محمولة ia32 (32-بت)'},
+            @{Pattern='OfficeManager-Setup-*-arm64.exe';  Label='مثبّت nsis arm64'},
+            @{Pattern='OfficeManager-Portable-*-arm64.exe';Label='نسخة محمولة arm64'}
+          )
+          $found = @()
+          foreach ($e in $expected) {
+            $f = Get-ChildItem release -Recurse -Filter $e.Pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $f) { Write-Error "لم يُنتج electron-builder: $($e.Label) ($($e.Pattern))" }
+            Write-Host ("{0,-38} {1,12:N0} بايت  {2}" -f ("✔ " + $e.Label), $f.Length, $f.Name)
+            $found += $f
+          }
+          # التحقق من توقيع Authenticode على الملف التنفيذي الداخلي
+          $mainExe = Get-ChildItem release -Recurse -Filter 'win-unpacked/*.exe' -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
+          if ($mainExe) {
+            $sig = Get-AuthenticodeSignature $mainExe.FullName
+            Write-Host "توقيع $($mainExe.Name): $($sig.Status)"
+            if ($sig.SignerCertificate) {
+              Write-Host "  المُوقِّع: $($sig.SignerCertificate.Subject)"
+              Write-Host "  البصمة : $($sig.SignerCertificate.Thumbprint)"
+            } elseif (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
+              Write-Error 'تم تمرير WIN_CSC_LINK لكن الملف التنفيذي غير موقّع (تأكد من كلمة المرور وشهادة PKCS#12)'
+            } else {
+              Write-Host '  (لم تُمرَّر شهادة توقيع — تخطي التحقق)'
+            }
+          }
           $asar = 'release/win-unpacked/resources/app.asar'
-          if (-not (Test-Path $asar)) { Write-Error 'ملف app.asar غير موجود' }
+          if (-not (Test-Path $asar)) { Write-Error 'ملف app.asar غير موجود في win-unpacked' }
           npx --yes @electron/asar list $asar | Out-File asar-list.txt
           # asar list تطبع الفواصل بنمط النظام (\ على ويندوز) فنوحّدها قبل المقارنة
           $entries = Get-Content asar-list.txt | ForEach-Object { $_.Trim() -replace '\\', '/' }
-          $entries | Select-Object -First 12
           foreach ($required in @('/dist/index.html', '/electron/main.cjs', '/electron/preload.cjs', '/resources/icon/app.ico')) {
             if ($entries -notcontains $required) { Write-Error "محتوى asar ينقصه: $required" }
           }
-          Copy-Item $setup, $portable, $setupArm, $portableArm -Destination artifacts/windows
-          Get-ChildItem artifacts/windows
+          Copy-Item $found -Destination artifacts/windows
+          Write-Host ''
+          Write-Host 'النواتج النهائية في artifacts/windows:'
+          Get-ChildItem artifacts/windows | Format-Table Name, Length -AutoSize
 
       - name: تشغيل النسخة المحمولة فعلياً (اختبار دخان على ويندوز)
         shell: pwsh
