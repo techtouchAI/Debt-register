@@ -160,7 +160,7 @@ async function main() {
     'المثبّت يرفض ما قبل Windows 10 ويفحص المعمارية المطابقة لكل إصدار',
     /include/.test(JSON.stringify(builder.nsis ?? {})) &&
       /AtLeastWin10/.test(installerNsh) &&
-      /ifdef APP_X64/.test(installerNsh) &&
+      /ifdef APP_64/.test(installerNsh) &&
       /ifdef APP_ARM64/.test(installerNsh) &&
       /RunningX64/.test(installerNsh)
   );
@@ -174,7 +174,10 @@ async function main() {
   check('هدف portable موجود', JSON.stringify(builder.win?.target ?? '').includes('portable'));
   const winTargets = JSON.stringify(builder.win?.target ?? []);
   check('بناء ويندوز يستهدف المعماريات الثلاث (x64 + ia32 + arm64)', ['"x64"', '"ia32"', '"arm64"'].every((arch) => winTargets.includes(arch)));
-  check('توقيع ويندوز يستخدم SHA-256 (لا SHA-1)', Array.isArray(builder.win?.signingHashAlgorithms) && builder.win.signingHashAlgorithms.includes('sha256') && !builder.win.signingHashAlgorithms.includes('sha1'));
+  // في electron-builder 26 لا تُقبل signingHashAlgorithms/publisherName مباشرة
+  // تحت win — مكانها الصحيح داخل win.signtoolOptions (وإلا فشل التحقق من المخطط).
+  const sigHashes = builder.win?.signtoolOptions?.signingHashAlgorithms;
+  check('توقيع ويندوز يستخدم SHA-256 (لا SHA-1)', Array.isArray(sigHashes) && sigHashes.includes('sha256') && !sigHashes.includes('sha1'));
   check('اسم ملف المثبّت واضح', /Setup/.test(JSON.stringify(builder.nsis?.artifactName ?? '')));
   check('اسم ملف النسخة المحمولة واضح', /Portable/.test(JSON.stringify(builder.portable?.artifactName ?? '')));
   check('لا يُحذف مجلد بيانات المستخدم عند إلغاء التثبيت', builder.nsis?.deleteAppDataOnUninstall === false);

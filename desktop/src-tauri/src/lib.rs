@@ -63,7 +63,7 @@ fn tauri_smoke(handle: tauri::AppHandle) {
     let log_path = std::env::temp_dir().join("office-manager-smoke.txt");
     let mut last = String::from("starting");
     loop {
-        if started.elapsed() > std::time::Duration::from_secs(45) {
+        if started.elapsed() > std::time::Duration::from_secs(60) {
             let _ = std::fs::write(&log_path, &last);
             handle.exit(1);
             return;

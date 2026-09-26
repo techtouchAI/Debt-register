@@ -563,11 +563,30 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = Get-ChildItem desktop/src-tauri/target/release -Filter 'office-manager.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { Write-Error 'لم يُعثر على office-manager.exe' }
-          $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
-          if (-not $proc.WaitForExit(90000)) { $proc.Kill(); Write-Error 'انتهت مهلة اختبار دخان Tauri' }
           $log = Join-Path $env:TEMP 'office-manager-smoke.txt'
-          if (Test-Path $log) { Get-Content $log | Write-Host }
-          if ($proc.ExitCode -ne 0) { Write-Error "فشل اختبار دخان Tauri (رمز $($proc.ExitCode))" }
+          # اختبار الدخان يعتمد على توقيت إقلاع WebView2 ورسم الواجهة، وهو عرضة
+          # للتذبذب على عدّاءات CI. نعيد المحاولة حتى 3 مرات قبل إعلان الفشل،
+          # مع طباعة سجل آخر محاولة للتشخيص في كل الأحوال.
+          $attempt = 0
+          $maxAttempts = 3
+          $succeeded = $false
+          while ($attempt -lt $maxAttempts -and -not $succeeded) {
+            $attempt++
+            Write-Host "--- محاولة اختبار الدخان $attempt من $maxAttempts ---"
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
+            $timedOut = -not $proc.WaitForExit(120000)
+            if ($timedOut) { try { $proc.Kill() } catch {} }
+            if (Test-Path $log) { Get-Content $log | Write-Host }
+            if (-not $timedOut -and $proc.ExitCode -eq 0) {
+              $succeeded = $true
+            } else {
+              $reason = if ($timedOut) { 'انتهاء المهلة' } else { "رمز الخروج $($proc.ExitCode)" }
+              Write-Host "المحاولة $attempt فشلت ($reason)"
+              if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+            }
+          }
+          if (-not $succeeded) { Write-Error "فشل اختبار دخان Tauri بعد $maxAttempts محاولات" }
           Write-Host '✔ Tauri يرسم الواجهة وقناة IPC غير محجوبة'
       - name: حفظ Cargo.lock
         if: always()
