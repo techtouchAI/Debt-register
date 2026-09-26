@@ -609,7 +609,9 @@ jobs:
             Write-Host "--- محاولة اختبار الدخان $attempt من $maxAttempts ---"
             Remove-Item $log -ErrorAction SilentlyContinue
             # نظّف أي عملية عالقة من محاولة سابقة حتى لا يتدخل قفل النسخة الواحدة
+            # أو قفل مجلد بيانات WebView2 (عمليات الويب فيو أبناء مستقلون)
             Get-Process -Name 'office-manager' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep -Seconds 2
             $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
             $timedOut = -not $proc.WaitForExit(120000)
