@@ -353,6 +353,10 @@ jobs:
               Write-Host 'شهادة التوقيع صالحة — سيُوقَّع الملف التنفيذي.'
             } else {
               Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
+              # electron-builder 26 يقرأ WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD مباشرة
+              # (وليس CSC_LINK فقط) — أزلها من البيئة حتى لا يحاول التوقيع أصلاً
+              Remove-Item Env:WIN_CSC_LINK -ErrorAction SilentlyContinue
+              Remove-Item Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
               Write-Host '::warning::شهادة التوقيع (WIN_CSC_LINK) لا يمكن تحميلها بكلمة المرور المحددة (WIN_CSC_KEY_PASSWORD). سيُبنى التطبيق غير موقّع. حدّث السِرّين أو ولّد شهادة جديدة عبر `npm run certs:generate`.'
             }
           } else {
@@ -581,7 +585,17 @@ jobs:
       - run: npm ci
       - run: npm --prefix desktop ci
       - name: بناء حزم Tauri (msi + nsis)
-        run: npm --prefix desktop run build -- --bundles msi,nsis
+        shell: pwsh
+        run: |
+          $tbLog = Join-Path $env:RUNNER_TEMP 'tauri-build.log'
+          & npm --prefix desktop run build -- --bundles msi,nsis 2>&1 | Tee-Object -FilePath $tbLog
+          $tbExit = $LASTEXITCODE
+          if ($tbExit -ne 0) {
+            # أبرز أسطر الفشل (أخطاء الترجمة/الحزم) كتعليقات قابلة للقراءة عبر API
+            $errLines = Get-Content $tbLog | Select-String -Pattern 'error(\[|:)|cannot find|not found in|failed|panicked|failed to|invalid' | Select-Object -First 15
+            foreach ($line in $errLines) { Write-Host "::error::tauri-build: $($line.Line.Trim())" }
+            Write-Error "فشل بناء Tauri برمز الخروج $tbExit — راجع التعليقات أعلاه"
+          }
       - name: التحقق من وجود الحزم
         shell: pwsh
         run: |

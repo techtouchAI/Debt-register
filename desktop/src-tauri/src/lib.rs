@@ -99,7 +99,7 @@ fn tauri_smoke(handle: tauri::AppHandle) {
     loop {
         let reported = SMOKE_REPORT
             .lock()
-            .map(|guard| guard.clone())
+            .map(|guard| (*guard).clone())
             .unwrap_or_default();
         if started.elapsed() > std::time::Duration::from_secs(60) {
             let _ = std::fs::write(&log_path, format!("{last} | js={reported}"));
@@ -113,7 +113,7 @@ fn tauri_smoke(handle: tauri::AppHandle) {
             let title = window.title().unwrap_or_default();
             let reported = SMOKE_REPORT
                 .lock()
-                .map(|guard| guard.clone())
+                .map(|guard| (*guard).clone())
                 .unwrap_or_default();
             last = format!("{url} | {title}");
             let host_ok = url.contains("tauri.localhost")
