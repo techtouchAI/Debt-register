@@ -591,9 +591,10 @@ jobs:
           & npm --prefix desktop run build -- --bundles msi,nsis 2>&1 | Tee-Object -FilePath $tbLog
           $tbExit = $LASTEXITCODE
           if ($tbExit -ne 0) {
-            # أبرز أسطر الفشل (أخطاء الترجمة/الحزم) كتعليقات قابلة للقراءة عبر API
-            $errLines = Get-Content $tbLog | Select-String -Pattern 'error(\[|:)|cannot find|not found in|failed|panicked|failed to|invalid' | Select-Object -First 15
-            foreach ($line in $errLines) { Write-Host "::error::tauri-build: $($line.Line.Trim())" }
+            # ذيّل السجل كاملاً (آخر 60 سطراً) كتعليقات قابلة للقراءة عبر API —
+            # رسالة فشل سكربت البناء الحقيقي تأتي عادة بعد أسطر "failed to build"
+            $tail = Get-Content $tbLog | Select-Object -Last 60
+            foreach ($line in $tail) { Write-Host "::error::tauri-build: $($line.Trim())" }
             Write-Error "فشل بناء Tauri برمز الخروج $tbExit — راجع التعليقات أعلاه"
           }
       - name: التحقق من وجود الحزم
