@@ -25,20 +25,22 @@
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64", "ia32", "arm64"]
+        "arch": ["x64", "arm64"]
       },
       {
         "target": "portable",
-        "arch": ["x64", "ia32", "arm64"]
+        "arch": ["x64", "arm64"]
       }
     ],
     "icon": "resources/icon/app.ico",
     "executableName": "OfficeManager",
     "artifactName": "OfficeManager-${version}-${os}-${arch}.${ext}",
-    "signingHashAlgorithms": ["sha256"],
     "signAndEditExecutable": true,
     "verifyUpdateCodeSignature": false,
-    "publisherName": "TechTouch AI",
+    "signtoolOptions": {
+      "signingHashAlgorithms": ["sha256"],
+      "publisherName": "TechTouch AI"
+    },
     "legalTrademarks": "TechTouch AI"
   },
   "nsis": {
@@ -58,7 +60,7 @@
   },
   "portable": {
     "artifactName": "OfficeManager-Portable-${version}-${arch}.${ext}",
-    "requestExecutionLevel": "asInvoker",
+    "requestExecutionLevel": "user",
     "unicode": true
   }
 }

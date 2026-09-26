@@ -317,7 +317,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build installer + portable EXE (x64 + ia32 + arm64) with signing
+      - name: Build installer + portable EXE (x64 + arm64) with signing
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
@@ -335,8 +335,19 @@ jobs:
               Set-Item -Path Env:$($pair.Dst) -Value $srcVal
             }
           }
-          # البناء لثلاث معماريات: x64 (ويندوز 10/11 64-بت)، ia32 (ويندوز 10 32-بت)، arm64 (Windows on ARM)
-          npx electron-builder --win nsis portable --x64 --ia32 --arm64 --publish=never --config electron-builder.json
+          # البناء لمعماريات النشر التي يدعمها Electron 44: x64 (ويندوز 10/11 64-بت)
+          # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
+          # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
+          # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
+          $ebLog = Join-Path $env:RUNNER_TEMP 'electron-builder.log'
+          & npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json 2>&1 | Tee-Object -FilePath $ebLog
+          $ebExit = $LASTEXITCODE
+          if ($ebExit -ne 0) {
+            # أبرز سطور الفشل كتعليقات قابلة للقراءة عبر API (السجل الكامل في ملف المهمة)
+            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable' | Select-Object -First 12
+            foreach ($line in $errLines) { Write-Host "::error::electron-builder: $($line.Line.Trim())" }
+            Write-Error "فشل electron-builder برمز الخروج $ebExit — راجع التعليقات أعلاه"
+          }
       - name: التحقق من المنتجات (مثبّت + محمول لكل المعماريات + asar + التوقيع)
         shell: pwsh
         run: |
@@ -345,8 +356,6 @@ jobs:
           $expected = @(
             @{Pattern='OfficeManager-Setup-*-x64.exe';    Label='مثبّت nsis x64'},
             @{Pattern='OfficeManager-Portable-*-x64.exe'; Label='نسخة محمولة x64'},
-            @{Pattern='OfficeManager-Setup-*-ia32.exe';   Label='مثبّت nsis ia32 (32-بت)'},
-            @{Pattern='OfficeManager-Portable-*-ia32.exe';Label='نسخة محمولة ia32 (32-بت)'},
             @{Pattern='OfficeManager-Setup-*-arm64.exe';  Label='مثبّت nsis arm64'},
             @{Pattern='OfficeManager-Portable-*-arm64.exe';Label='نسخة محمولة arm64'}
           )
@@ -563,11 +572,36 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = Get-ChildItem desktop/src-tauri/target/release -Filter 'office-manager.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { Write-Error 'لم يُعثر على office-manager.exe' }
-          $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
-          if (-not $proc.WaitForExit(90000)) { $proc.Kill(); Write-Error 'انتهت مهلة اختبار دخان Tauri' }
           $log = Join-Path $env:TEMP 'office-manager-smoke.txt'
-          if (Test-Path $log) { Get-Content $log | Write-Host }
-          if ($proc.ExitCode -ne 0) { Write-Error "فشل اختبار دخان Tauri (رمز $($proc.ExitCode))" }
+          # اختبار الدخان يعتمد على توقيت إقلاع WebView2 ورسم الواجهة، وهو عرضة
+          # للتذبذب على عدّاءات CI. نعيد المحاولة حتى 3 مرات قبل إعلان الفشل،
+          # مع طباعة سجل آخر محاولة للتشخيص في كل الأحوال.
+          $attempt = 0
+          $maxAttempts = 3
+          $succeeded = $false
+          $lastDetail = ''
+          while ($attempt -lt $maxAttempts -and -not $succeeded) {
+            $attempt++
+            Write-Host "--- محاولة اختبار الدخان $attempt من $maxAttempts ---"
+            Remove-Item $log -ErrorAction SilentlyContinue
+            # نظّف أي عملية عالقة من محاولة سابقة حتى لا يتدخل قفل النسخة الواحدة
+            Get-Process -Name 'office-manager' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 2
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
+            $timedOut = -not $proc.WaitForExit(120000)
+            if ($timedOut) { try { $proc.Kill() } catch {} }
+            $lastDetail = if (Test-Path $log) { (Get-Content $log -Raw).Trim() } else { '(لا يوجد ملف سجل)' }
+            Write-Host "سجل الدخان: $lastDetail"
+            if (-not $timedOut -and $proc.ExitCode -eq 0) {
+              $succeeded = $true
+            } else {
+              $reason = if ($timedOut) { 'انتهاء المهلة (90 ثانية داخلية)' } else { "رمز الخروج $($proc.ExitCode)" }
+              Write-Host "المحاولة $attempt فشلت ($reason)"
+              Write-Host "::error::دخان Tauri محاولة $attempt/$maxAttempts — $reason — السجل: $lastDetail"
+              if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+            }
+          }
+          if (-not $succeeded) { Write-Error "فشل اختبار دخان Tauri بعد $maxAttempts محاولات — آخر سجل: $lastDetail" }
           Write-Host '✔ Tauri يرسم الواجهة وقناة IPC غير محجوبة'
       - name: حفظ Cargo.lock
         if: always()

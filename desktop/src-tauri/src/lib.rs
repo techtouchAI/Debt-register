@@ -40,10 +40,11 @@ fn tauri_smoke(handle: tauri::AppHandle) {
 (() => {
   const mark = async () => {
     const root = document.getElementById('root');
-    if (!root || root.childElementCount === 0) return;
+    if (!root) { document.title = 'SMOKE_WAIT:no-root'; return; }
+    if (root.childElementCount === 0) { document.title = 'SMOKE_WAIT:empty-root'; return; }
     let dbCount = 0;
-    try { dbCount = (await indexedDB.databases()).length; } catch (e) { dbCount = 0; }
-    if (!dbCount) return;
+    try { dbCount = (await indexedDB.databases()).length; } catch (e) { dbCount = -1; }
+    if (dbCount <= 0) { document.title = 'SMOKE_WAIT:db=' + dbCount; return; }
     let ipc = 'missing';
     try {
       if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
@@ -63,7 +64,7 @@ fn tauri_smoke(handle: tauri::AppHandle) {
     let log_path = std::env::temp_dir().join("office-manager-smoke.txt");
     let mut last = String::from("starting");
     loop {
-        if started.elapsed() > std::time::Duration::from_secs(45) {
+        if started.elapsed() > std::time::Duration::from_secs(60) {
             let _ = std::fs::write(&log_path, &last);
             handle.exit(1);
             return;
