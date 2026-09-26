@@ -88,11 +88,10 @@ export function DocumentPreviewDialog({
     setIsPrinting(true);
     try {
       const outcome = await printHtmlDocument(title, bodyHtml);
-      if (outcome !== 'printed') {
-        // لا حوار طباعة هنا: نوضّح البديل داخل النافذة بدل إظهار لا شيء
-        setLocalNotice(PRINT_FALLBACK_NOTICE[outcome]);
-      } else {
+      if (outcome === 'printed' || outcome === 'cancelled') {
         setLocalNotice(null);
+      } else {
+        setLocalNotice(PRINT_FALLBACK_NOTICE[outcome]);
       }
     } catch (error) {
       reportError('Preview.print', error, 'تعذّر الطباعة');

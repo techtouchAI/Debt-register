@@ -318,16 +318,30 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Build installer + portable EXE with electron-builder
-        run: npx electron-builder --win nsis portable --x64 --publish=never --config electron-builder.json
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK)) { Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue }
+          if ([string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)) { Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue }
+          if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) { $env:CSC_LINK = $env:WIN_CSC_LINK }
+          if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) { $env:CSC_KEY_PASSWORD = $env:WIN_CSC_KEY_PASSWORD }
+          npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json
       - name: التحقق من المنتجات (مثبّت + محمول + asar يحتوي الواجهة)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
-          $setup = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*.exe' -ErrorAction SilentlyContinue
-          $portable = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*.exe' -ErrorAction SilentlyContinue
-          if (-not $setup) { Write-Error 'لم يُنتج electron-builder مثبّت nsis' }
-          if (-not $portable) { Write-Error 'لم يُنتج electron-builder نسخة محمولة' }
+          $setup = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*-x64.exe' -ErrorAction SilentlyContinue
+          $portable = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*-x64.exe' -ErrorAction SilentlyContinue
+          $setupArm = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*-arm64.exe' -ErrorAction SilentlyContinue
+          $portableArm = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*-arm64.exe' -ErrorAction SilentlyContinue
+          if (-not $setup) { Write-Error 'لم يُنتج electron-builder مثبّت nsis لـ x64' }
+          if (-not $portable) { Write-Error 'لم يُنتج electron-builder نسخة محمولة لـ x64' }
+          if (-not $setupArm) { Write-Error 'لم يُنتج electron-builder مثبّت arm64' }
+          if (-not $portableArm) { Write-Error 'لم يُنتج electron-builder نسخة محمولة arm64' }
           $asar = 'release/win-unpacked/resources/app.asar'
           if (-not (Test-Path $asar)) { Write-Error 'ملف app.asar غير موجود' }
           npx --yes @electron/asar list $asar | Out-File asar-list.txt
@@ -337,15 +351,14 @@ jobs:
           foreach ($required in @('/dist/index.html', '/electron/main.cjs', '/electron/preload.cjs', '/resources/icon/app.ico')) {
             if ($entries -notcontains $required) { Write-Error "محتوى asar ينقصه: $required" }
           }
-          Copy-Item $setup -Destination artifacts/windows
-          Copy-Item $portable -Destination artifacts/windows
+          Copy-Item $setup, $portable, $setupArm, $portableArm -Destination artifacts/windows
           Get-ChildItem artifacts/windows
 
       - name: تشغيل النسخة المحمولة فعلياً (اختبار دخان على ويندوز)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $portable = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*.exe' | Select-Object -First 1
+          $portable = Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*-x64.exe' | Select-Object -First 1
           if (-not $portable) { Write-Error 'لا توجد نسخة محمولة لتشغيلها' }
           $proc = Start-Process -FilePath $portable.FullName -ArgumentList '--smoke-test','--no-sandbox' -PassThru
           if (-not $proc.WaitForExit(180000)) { $proc.Kill(); Write-Error 'انتهت مهلة اختبار دخان النسخة المحمولة' }
@@ -356,7 +369,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*.exe' | Select-Object -First 1
+          $setup = Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*-x64.exe' | Select-Object -First 1
           if (-not $setup) { Write-Error 'لا يوجد مثبّت NSIS' }
           $installProc = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -PassThru -Wait
           if ($installProc.ExitCode -ne 0) { Write-Error "فشل تثبيت NSIS (رمز $($installProc.ExitCode))" }
@@ -366,6 +379,7 @@ jobs:
           $appDir = Split-Path (Split-Path $asar.FullName -Parent) -Parent
           $exe = Get-ChildItem $appDir -Filter '*.exe' | Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
           if (-not $exe) { Write-Error 'لم يُعثر على ملف التطبيق التنفيذي بعد التثبيت' }
+          if ($exe.Name -ne 'OfficeManager.exe') { Write-Error "اسم التنفيذ غير متوقع: $($exe.Name)" }
           $run = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test','--no-sandbox' -PassThru
           if (-not $run.WaitForExit(180000)) { $run.Kill(); Write-Error 'انتهت مهلة اختبار دخان النسخة المثبّتة' }
           if ($run.ExitCode -ne 0) { Write-Error "فشل اختبار دخان النسخة المثبّتة (رمز $($run.ExitCode))" }
@@ -512,6 +526,26 @@ jobs:
           $bundles | Format-Table FullName, Length
           if (-not ($bundles | Where-Object { $_.Extension -eq '.msi' })) { Write-Error 'لم يُنتج Tauri حزمة msi' }
           if (-not ($bundles | Where-Object { $_.Extension -eq '.exe' })) { Write-Error 'لم يُنتج Tauri حزمة nsis' }
+      - name: تشغيل ثنائي Tauri (اختبار دخان بلا صندوق حفظ)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem desktop/src-tauri/target/release -Filter 'office-manager.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Write-Error 'لم يُعثر على office-manager.exe' }
+          $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
+          if (-not $proc.WaitForExit(90000)) { $proc.Kill(); Write-Error 'انتهت مهلة اختبار دخان Tauri' }
+          $log = Join-Path $env:TEMP 'office-manager-smoke.txt'
+          if (Test-Path $log) { Get-Content $log | Write-Host }
+          if ($proc.ExitCode -ne 0) { Write-Error "فشل اختبار دخان Tauri (رمز $($proc.ExitCode))" }
+          Write-Host '✔ Tauri يرسم الواجهة وقناة IPC غير محجوبة'
+      - name: حفظ Cargo.lock
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-lock
+          path: desktop/src-tauri/Cargo.lock
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         with:
           name: OfficeManager-Tauri-Windows

@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications, type PermissionStatus } from '@capacitor/local-notifications';
-import { getElectronAPI } from './platform';
+import { getElectronAPI, isTauri } from './platform';
+import { requestTauriNotificationPermission, sendTauriNotification, tauriNotificationAllowed } from './tauriShell';
 
 /**
  * خدمة الإشعارات الموحّدة.
@@ -77,6 +78,14 @@ export async function getNotificationPermissionState(): Promise<NotificationPerm
 
   if (getElectronAPI()) return 'granted'; // Electron يعرض مباشرة عبر العملية الرئيسية
 
+  if (isTauri()) {
+    try {
+      return (await tauriNotificationAllowed()) ? 'granted' : 'prompt';
+    } catch {
+      return 'unsupported';
+    }
+  }
+
   if (typeof window !== 'undefined' && 'Notification' in window) {
     const permission = window.Notification.permission;
     if (permission === 'granted') return 'granted';
@@ -106,6 +115,15 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 
   if (getElectronAPI()) return true;
+
+  if (isTauri()) {
+    try {
+      return await requestTauriNotificationPermission();
+    } catch (error) {
+      console.warn('تعذّر طلب إذن إشعارات سطح المكتب:', error);
+      return false;
+    }
+  }
 
   try {
     if (typeof window !== 'undefined' && 'Notification' in window && window.isSecureContext) {
@@ -188,6 +206,15 @@ export async function sendSystemNotification(title: string, message: string): Pr
     }
   } catch (error) {
     console.warn('تعذّر إرسال إشعار سطح المكتب:', error);
+  }
+
+  if (isTauri()) {
+    try {
+      return await sendTauriNotification(safeTitle, safeBody);
+    } catch (error) {
+      console.warn('تعذّر إرسال إشعار سطح المكتب:', error);
+      return false;
+    }
   }
 
   // 3) المتصفح

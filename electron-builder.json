@@ -22,14 +22,15 @@
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": ["x64", "arm64"]
       },
       {
         "target": "portable",
-        "arch": ["x64"]
+        "arch": ["x64", "arm64"]
       }
     ],
     "icon": "resources/icon/app.ico",
+    "executableName": "OfficeManager",
     "artifactName": "OfficeManager-${version}-${arch}.${ext}"
   },
   "nsis": {
@@ -40,9 +41,10 @@
     "createStartMenuShortcut": true,
     "shortcutName": "إدارة المكتب",
     "deleteAppDataOnUninstall": false,
-    "artifactName": "OfficeManager-Setup-${version}.${ext}"
+    "include": "electron/installer.nsh",
+    "artifactName": "OfficeManager-Setup-${version}-${arch}.${ext}"
   },
   "portable": {
-    "artifactName": "OfficeManager-Portable-${version}.exe"
+    "artifactName": "OfficeManager-Portable-${version}-${arch}.${ext}"
   }
 }

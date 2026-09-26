@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { isNativePlatform, getElectronAPI } from '@/lib/platform'
+import { isNativePlatform, getElectronAPI, isTauri } from '@/lib/platform'
 import { installNativeBackGuard } from '@/lib/nativeBridge'
 import { installDropGuard } from '@/lib/dropGuard'
 import { initTheme } from '@/hooks/useTheme'
@@ -14,13 +14,13 @@ import './index.css'
 /**
  * تسجيل عامل الخدمة (Service Worker) للسياسة PWA:
  * - يُسجَّل في المتصفح الحقيقي فقط (الوضع الإنتاجي).
- * - لا يُسجَّل داخل أغلفة Capacitor/Electron: التطبيق هناك محلي بالكامل
+ * - لا يُسجَّل داخل أغلفة Capacitor/Electron/Tauri: التطبيق هناك محلي بالكامل
  *   والتسجيل كان يفشل سابقاً ويُظهر تنبيه خطأ مزعجاً للمستخدم.
  * - أي فشل في التسجيل يُكتفى بتسجيله في الطرفية — التطبيق يعمل بدونه.
  */
 function registerServiceWorker(): void {
   if (!import.meta.env.PROD) return
-  if (isNativePlatform() || getElectronAPI()) return
+  if (isNativePlatform() || getElectronAPI() || isTauri()) return
   if (!('serviceWorker' in navigator)) return
 
   import('virtual:pwa-register')

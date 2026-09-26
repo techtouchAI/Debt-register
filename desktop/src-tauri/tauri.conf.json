@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
     },
     "withGlobalTauri": true
   },
@@ -46,9 +46,14 @@
         "language": "ar-SA",
         "upgradeCode": "2e154ae2-46e6-5fcf-a4d6-b711cbb07ec8"
       },
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
+        "installerHooks": "./windows/installer-hooks.nsh",
         "languages": [
           "Arabic"
         ]

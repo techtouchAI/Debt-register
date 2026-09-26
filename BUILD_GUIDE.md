@@ -6,7 +6,7 @@
 
 - Node.js 20 أو أحدث + npm 10+
 - للاندرويد (Capacitor): JDK 17 و Android SDK (Platform 34/35) — يثبتهما CI تلقائياً
-- للـ Tauri: Rust stable، ولمسارات Windows أيضاً WebView2 وأدوات VSBuild
+- للـ Tauri: Rust stable، ولمسارات Windows أيضاً WebView2 (المثبّت يضمّن أداة التثبيت الصامتة) وأدوات VSBuild. Electron هو غلاف ويندوز الرسمي ولا يحتاج WebView2.
 
 ## 1) التطبيق الرئيسي (الويب + PWA)
 

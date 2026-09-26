@@ -169,8 +169,8 @@ npx electron-builder --win --x64
 npm run electron:build
 
 # الناتج في مجلد release/:
-# - OfficeManager-Setup-1.0.0.exe (مثبت NSIS)
-# - OfficeManager-Portable-1.0.0.exe (نسخة محمولة)
+# - OfficeManager-Setup-1.0.0-x64.exe (مثبت NSIS)
+# - OfficeManager-Portable-1.0.0-x64.exe (نسخة محمولة)
 ```
 
 **مميزات Windows**:
@@ -180,7 +180,9 @@ npm run electron:build
 - الضغط على إشعار النظام يُظهر نافذة التطبيق
 - إشعارات نظام Windows 10/11
 - يعمل بدون انترنت، بيانات محلية في IndexedDB
-- متوافق تماماً مع Windows 10 و 11 (x64)
+- متوافق مع Windows 10 و 11 (x64 رسمياً، وARM64 للمثبّت). Windows 7/8 و32-bit غير مدعومة ويُرفض تثبيتها
+- الملف التنفيذي `OfficeManager.exe`، والاختصار ومجلد التنزيلات يبقيان «إدارة المكتب»
+- بيانات الفواتير تبقى في مجلد ثابت ولا تُحذف عند إلغاء التثبيت
 
 **ملفات Electron موجودة**:
 - `electron/main.cjs`: النافذة الرئيسية، حفظ النسخ، الإشعارات
