@@ -7,7 +7,6 @@
   ],
   "permissions": [
     "core:default",
-    "allow-smoke-report",
     "core:window:allow-close",
     "core:path:allow-join",
     "core:path:allow-resolve-directory",
