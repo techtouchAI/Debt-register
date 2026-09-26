@@ -339,7 +339,15 @@ jobs:
           # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
           # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
           # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
-          npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json
+          $ebLog = Join-Path $env:RUNNER_TEMP 'electron-builder.log'
+          & npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json 2>&1 | Tee-Object -FilePath $ebLog
+          $ebExit = $LASTEXITCODE
+          if ($ebExit -ne 0) {
+            # أبرز سطور الفشل كتعليقات قابلة للقراءة عبر API (السجل الكامل في ملف المهمة)
+            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable' | Select-Object -First 12
+            foreach ($line in $errLines) { Write-Host "::error::electron-builder: $($line.Line.Trim())" }
+            Write-Error "فشل electron-builder برمز الخروج $ebExit — راجع التعليقات أعلاه"
+          }
       - name: التحقق من المنتجات (مثبّت + محمول لكل المعماريات + asar + التوقيع)
         shell: pwsh
         run: |
