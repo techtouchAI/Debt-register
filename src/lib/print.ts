@@ -205,11 +205,12 @@ export function buildPrintDocument(title: string, bodyHtml: string, options: Pri
 
 /**
  * نتيجة محاولة الطباعة:
- *  - `printed`: فُتح حوار الطباعة (بدليل من الإطار).
+ *  - `printed`: فُتح حوار الطباعة (بدليل من الإطار أو من سطح المكتب).
+ *  - `cancelled`: أغلق المستخدم الحوار. ليس فشلاً ولا يُعرض تنبيه.
  *  - `unsupported`: هذه البيئة لا تنفّذ `window.print` (WebView أندرويد/iOS).
  *  - `blocked`: المتصفح منع الحوار (نافذة/إطار مُقيَّد بحاجب sandbox).
  */
-export type PrintOutcome = 'printed' | 'unsupported' | 'blocked';
+export type PrintOutcome = 'printed' | 'cancelled' | 'unsupported' | 'blocked';
 
 /**
  * هل يمكن فتح حوار طباعة في هذه البيئة؟
@@ -285,8 +286,8 @@ export async function printHtmlDocument(title: string, bodyHtml: string): Promis
   if (electronPrint) {
     try {
       const result = await electronPrint(buildPrintDocument(title, bodyHtml), title);
+      if (result?.cancelled) return 'cancelled';
       if (result?.success) return 'printed';
-      if (result?.cancelled) return 'blocked';
       console.warn('تعذّرت الطباعة من سطح المكتب:', result?.error);
       return 'blocked';
     } catch (error) {
@@ -372,7 +373,7 @@ export interface DocumentDescriptor {
 }
 
 /** رسالة توضيحية تُعرض داخل المعاينة عندما لا يمكن فتح حوار طباعة النظام. */
-export const PRINT_FALLBACK_NOTICE: Record<Exclude<PrintOutcome, 'printed'>, string> = {
+export const PRINT_FALLBACK_NOTICE: Record<Exclude<PrintOutcome, 'printed' | 'cancelled'>, string> = {
   unsupported:
     'لا يوجد حوار طباعة في هذا الجهاز (أندرويد/iPhone): التطبيق يعرض المستند هنا، واحفظه أو شاركه ثم اطبع الملف من أي تطبيق يعرض المستندات.',
   blocked:
@@ -386,7 +387,7 @@ export const PRINT_FALLBACK_NOTICE: Record<Exclude<PrintOutcome, 'printed'>, str
  */
 export async function printDocument(document: DocumentDescriptor): Promise<PrintOutcome> {
   const outcome = await printHtmlDocument(document.title, document.bodyHtml);
-  if (outcome !== 'printed') {
+  if (outcome !== 'printed' && outcome !== 'cancelled') {
     openDocumentPreview({ ...document, notice: PRINT_FALLBACK_NOTICE[outcome] });
   }
   return outcome;

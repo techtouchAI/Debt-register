@@ -92,6 +92,9 @@ async function main() {
   const builder = await readJson('electron-builder.json');
   const tauri = await readJson('desktop/src-tauri/tauri.conf.json');
   const mainCjs = await readText('electron/main.cjs');
+  const filesCjs = await readText('electron/files.cjs');
+  const userDataCjs = await readText('electron/userData.cjs');
+  const installerNsh = await readText('electron/installer.nsh');
   const preloadCjs = await readText('electron/preload.cjs');
   const indexHtml = await readText('index.html');
   const themeBootstrap = await readText('src/themeBootstrap.ts');
@@ -124,8 +127,8 @@ async function main() {
   check('نسخة وحيدة من التطبيق', /requestSingleInstanceLock/.test(mainCjs));
   check('مجلد بيانات ثابت في النسخة المحمولة', /PORTABLE_EXECUTABLE_DIR/.test(mainCjs) && /setPath\('userData'/.test(mainCjs));
   check('معرّف التطبيق على ويندوز (إشعارات)', /setAppUserModelId\('com\.agrioffice\.debtregister'\)/.test(mainCjs));
-  check('كتابة ذرّية للملفات (tmp ثم rename)', /\.tmp`/.test(mainCjs) && /fsp\.rename/.test(mainCjs));
-  check('حماية من اجتياز المسار في أسماء الملفات', /function safeFileName/.test(mainCjs));
+  check('كتابة ذرّية للملفات (tmp ثم rename)', /\.tmp`/.test(filesCjs) && /fsp\.rename/.test(filesCjs));
+  check('حماية من اجتياز المسار في أسماء الملفات', /function safeFileName/.test(filesCjs) && /safeFileName/.test(mainCjs));
   check('جسر preload محدود بالدوال المعلنة', /contextBridge\.exposeInMainWorld/.test(preloadCjs));
   check('لا استخدام ipcRenderer مباشر في الواجهة', !/ipcRenderer/.test(preloadCjs.split('contextBridge')[0] ?? ''));
   check(
@@ -140,13 +143,27 @@ async function main() {
     /url\.protocol === 'http:' && url\.hostname === 'localhost' && url\.port === '5173'/.test(mainCjs)
   );
   check(
-    'اسم الملف يرفض فواصل Windows وPOSIX قبل الكتابة',
-    mainCjs.includes('/[\\\\/]/.test(fileName)') && mainCjs.includes("fileName.includes('\\0')")
+    'اسم الملف يرفض فواصل Windows وPOSIX والأسماء المحجوزة قبل الكتابة',
+    /WINDOWS_RESERVED/.test(filesCjs) && /ILLEGAL_CHARS/.test(filesCjs) && /\[\\+\/\]/.test(filesCjs)
   );
   check(
     'الحفظ الذري يستعمل ملفاً مؤقتاً فريداً وينظفه بعد الفشل',
-    /randomUUID\(\)/.test(mainCjs) && /function writeFileAtomically/.test(mainCjs) && /fsp\.rm\(tempPath, \{ force: true \}\)/.test(mainCjs)
+    /randomUUID\(\)/.test(filesCjs) && /function writeFileAtomically/.test(filesCjs) && /fsp\.rm\(tempPath, \{ force: true \}\)/.test(filesCjs)
   );
+  check(
+    'مجلد البيانات ثابت ولا يُحذف الأصل عند النسخ',
+    /CANONICAL_DIR_NAME = 'debt-register-office'/.test(userDataCjs) &&
+      /PORTABLE_FOLDER_NAME = 'AgriOfficeData'/.test(userDataCjs) &&
+      /hasDatabase\(to\)/.test(userDataCjs)
+  );
+  check(
+    'المثبّت يرفض ما قبل Windows 10 ونظام 32-bit دون رفض ARM64',
+    /include/.test(JSON.stringify(builder.nsis ?? {})) &&
+      /AtLeastWin10/.test(installerNsh) &&
+      /ifndef APP_ARM64/.test(installerNsh) &&
+      /RunningX64/.test(installerNsh)
+  );
+  check('اسم التنفيذ اللاتيني ثابت ولا يدخل في مجلد الحفظ العربي', builder.win?.executableName === 'OfficeManager' && !/'OfficeManager'\)/.test(mainCjs));
 
   check('appId صحيح', builder.appId === 'com.agrioffice.debtregister');
   check('asar مفعّل', builder.asar === true);
@@ -386,11 +403,12 @@ async function main() {
     /tauri-plugin-dialog/.test(tauriCargo) && /tauri-plugin-fs/.test(tauriCargo) && /tauri_plugin_dialog::init\(\)/.test(tauriLib) && /tauri_plugin_fs::init\(\)/.test(tauriLib)
   );
   check('CSP لا يعتمد على خطوط من الإنترنت (الخط مدمج)', !/fonts\.googleapis|fonts\.gstatic/.test(tauri.app?.security?.csp ?? ''));
+  check('CSP يسمح بقناة IPC المحلية دون توسيع script-src', /ipc\.localhost/.test(tauri.app?.security?.csp ?? '') && !/script-src[^;]*unsafe-inline/.test(tauri.app?.security?.csp ?? ''));
   if (await fileExists(join(repoRoot, 'desktop/src-tauri/capabilities/default.json'))) {
     const tauriPermissions = JSON.stringify((await readJson('desktop/src-tauri/capabilities/default.json')).permissions ?? []);
     check(
       'صلاحيات Tauri: صندوق الحفظ + كتابة الملف المختار + إغلاق النافذة بعد تأكيد الخروج',
-      ['dialog:allow-save', 'fs:allow-write-file', 'core:window:allow-close'].every((permission) => tauriPermissions.includes(permission))
+      ['dialog:allow-save', 'fs:allow-write-file', 'core:window:allow-close', 'core:path:allow-join', 'core:path:allow-resolve-directory'].every((permission) => tauriPermissions.includes(permission))
     );
   }
   const tauriWindowsConfPath = 'desktop/src-tauri/tauri.windows.conf.json';
@@ -402,6 +420,13 @@ async function main() {
   }
   const tauriWindowsBundle = tauri.bundle?.windows ?? {};
   check('مثبّت Tauri على ويندوز بالعربية (NSIS + WiX)', (tauriWindowsBundle.nsis?.languages ?? []).includes('Arabic') && tauriWindowsBundle.wix?.language === 'ar-SA');
+  check(
+    'مثبّت Tauri يرفض ما قبل Windows 10 ويضمّن مثبّت WebView2',
+    tauriWindowsBundle.nsis?.installerHooks?.includes('installer-hooks.nsh') &&
+      tauriWindowsBundle.webviewInstallMode?.type === 'embedBootstrapper' &&
+      /NSIS_HOOK_PREINSTALL/.test(await readText('desktop/src-tauri/windows/installer-hooks.nsh')) &&
+      /AtLeastWin10/.test(await readText('desktop/src-tauri/windows/installer-hooks.nsh'))
+  );
   // رمز الترقية يُشتق افتراضياً من اسم المنتج؛ تثبيته يجعل تغيير الاسم (إلى العربية)
   // ترقيةً للنسخة المثبّتة لا تطبيقاً مكرراً في قائمة البرامج
   check(
@@ -459,7 +484,7 @@ async function main() {
     'مهمة أندرويد تتحقق من وجود AppPlugin داخل الـ APK المبني',
     /capacitor\.plugins\.json/.test(workflow) && /AppPlugin/.test(workflow)
   );
-  check('مهمة ويندوز تشغّل النسخة المحمولة فعلياً (اختبار دخان)', /OfficeManager-Portable-\*\.exe/.test(workflow) && /--smoke-test/.test(workflow));
+  check('مهمة ويندوز تبني x64 وARM64 وتدخّن x64 فقط', /--x64 --arm64/.test(workflow) && /OfficeManager-Portable-\*-x64\.exe/.test(workflow) && /--smoke-test/.test(workflow));
   check('مهمة ويندوز تثبّت المثبّت صامتاً وتتحقق من التثبيت', /Uninstall\*\.exe|\/S'/.test(workflow));
   check('تدقيق أمني للاعتماديات', /npm audit --audit-level=high/.test(workflow));
 

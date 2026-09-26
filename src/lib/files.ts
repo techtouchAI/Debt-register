@@ -3,6 +3,7 @@ import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { getElectronAPI, getTauri, isTauri } from './platform';
 import { sendSystemNotification } from './notify';
+import { loadTauriSaveApi, saveWithTauriApi, type TauriSaveApi } from './tauriShell';
 
 /**
  * خدمة حفظ الملفات الموحّدة (نسخ احتياطية، مستندات، تقارير).
@@ -105,28 +106,25 @@ function toBlob(input: SaveFileInput): Blob {
  * Tauri: صندوق حفظ أصلي (المسار المختار يُضاف تلقائياً لنطاق الكتابة المسموح)
  * ثم كتابة الملف. يُعيد null إن لم تكن الإضافات متاحة (فيسقط للمسار التالي).
  */
-async function saveWithTauri(input: SaveFileInput): Promise<SaveFileResult | null> {
-  const tauri = getTauri();
-  if (!tauri?.dialog?.save || !tauri.fs?.writeFile) return null;
-
-  let defaultPath = input.fileName;
-  try {
-    if (tauri.path) defaultPath = await tauri.path.join(await tauri.path.downloadDir(), input.fileName);
-  } catch {
-    /* مجلد التنزيلات غير متاح — يُقترح الاسم فقط */
+async function tauriSaveApi(): Promise<TauriSaveApi> {
+  const globalApi = getTauri();
+  if (globalApi?.dialog?.save && globalApi.fs?.writeFile) {
+    return {
+      save: (options) => globalApi.dialog!.save(options),
+      writeFile: (filePath, data) => globalApi.fs!.writeFile(filePath, data),
+      suggestedPath: globalApi.path
+        ? async (name) => globalApi.path!.join(await globalApi.path!.downloadDir(), name)
+        : undefined
+    };
   }
+  return loadTauriSaveApi();
+}
 
-  const extension = (input.fileName.split('.').pop() || '').toLowerCase();
-  const target = await tauri.dialog.save({
-    title: 'حفظ الملف',
-    defaultPath,
-    filters: extension ? [{ name: fileTypeLabel(input.fileName), extensions: [extension] }] : undefined
-  });
-  if (!target) return { ok: false, via: 'none', error: 'CANCELLED' };
-
+async function saveWithTauri(input: SaveFileInput): Promise<SaveFileResult | null> {
   const bytes = new Uint8Array(await toBlob(input).arrayBuffer());
-  await tauri.fs.writeFile(target, bytes);
-  return { ok: true, via: 'tauri', path: target };
+  const saved = await saveWithTauriApi(input.fileName, bytes, fileTypeLabel(input.fileName), await tauriSaveApi());
+  if (!saved.ok) return { ok: false, via: 'none', error: saved.error };
+  return { ok: true, via: 'tauri', path: saved.path };
 }
 
 /**
@@ -215,7 +213,8 @@ export async function saveFile(input: SaveFileInput): Promise<SaveFileResult> {
       const result = await saveWithTauri(input);
       if (result) return result;
     } catch (error) {
-      console.warn('تعذّر الحفظ عبر غلاف سطح المكتب، سأستخدم التنزيل العادي:', error);
+      console.warn('تعذّر الحفظ عبر غلاف سطح المكتب:', error);
+      return { ok: false, via: 'none', error: 'تعذّر حفظ الملف' };
     }
   }
 

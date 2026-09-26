@@ -17,7 +17,8 @@
  */
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
-import { getElectronAPI, getTauri } from '@/lib/platform';
+import { getElectronAPI, getTauri, isTauri } from '@/lib/platform';
+import { closeTauriWindow } from '@/lib/tauriShell';
 import { beginShutdown, endShutdown } from '@/lib/lifecycle';
 
 function isCapacitorNative(): boolean {
@@ -32,6 +33,7 @@ function isCapacitorNative(): boolean {
 export function canExitApp(): boolean {
   if (isCapacitorNative()) return true;
   if (getElectronAPI()) return true;
+  if (isTauri()) return true;
   return typeof getTauri()?.window?.getCurrentWindow === 'function';
 }
 
@@ -56,13 +58,21 @@ export async function exitApplication(): Promise<boolean> {
     return true;
   }
 
-  const tauriWindow = getTauri()?.window;
-  if (tauriWindow?.getCurrentWindow) {
+  if (isTauri()) {
     try {
-      await tauriWindow.getCurrentWindow().close();
+      await closeTauriWindow();
       return true;
     } catch (error) {
       console.warn('تعذّر إغلاق نافذة سطح المكتب:', error);
+      const tauriWindow = getTauri()?.window;
+      if (tauriWindow?.getCurrentWindow) {
+        try {
+          await tauriWindow.getCurrentWindow().close();
+          return true;
+        } catch (fallbackError) {
+          console.warn('تعذّر إغلاق النافذة عبر الواجهة العامة:', fallbackError);
+        }
+      }
     }
   }
 

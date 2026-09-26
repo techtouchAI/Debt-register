@@ -65,8 +65,8 @@ export interface ElectronAPI {
 }
 
 /**
- * واجهات Tauri العامة (`app.withGlobalTauri` في tauri.conf.json).
- * نعرّف ما نستخدمه فقط — لا حاجة لحزمة @tauri-apps/api داخل الواجهة المشتركة.
+ * واجهات Tauri العامة (`app.withGlobalTauri`). النواة فقط تظهر هنا؛
+ * صندوق الحفظ والملفات يُستوردان من إضافاتهما في `tauriShell.ts`.
  */
 export interface TauriDialogFilter {
   name: string;

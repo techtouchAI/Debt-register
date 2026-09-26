@@ -4,7 +4,10 @@ const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const { pathToFileURL } = require('url');
-const { randomUUID } = require('crypto');
+const { isSameFilePathname } = require('./ipcGuard.cjs');
+const { resolveUserDataDir } = require('./userData.cjs');
+const { safeFileName, writeFileAtomically, runFilesystemSmoke } = require('./files.cjs');
+const { classifyPrintCallback } = require('./printResult.cjs');
 
 /**
  * نافذة سطح المكتب لنظام إدارة المكتب.
@@ -59,34 +62,23 @@ const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
  *    الخروج، فتُفقد البيانات مع كل تشغيل — لذلك نوجّهها إلى مجلد ثابت بجانب
  *    الملف التنفيذي. يترك electron-builder هذا المتغيّر في النسخة المحمولة.
  *
- * 2) النسخة المثبّتة: اسم مجلد userData الافتراضي مشتق من اسم العرض
- *    (`productName`). وعند تغيير اسم التطبيق إلى اسم عام (إدارة المكتب)
- *    كان المسار الافتراضي سيتبدّل، فيجد المستخدم القائم قاعدة بيانات فارغة
- *    وكأن فواتيره وديونه اختفت. لذلك نُبقي المسار على المجلد القديم **إن
- *    وُجد** (ترحيل شفّاف بلا فقدان بيانات)، ونستخدم الاسم الجديد للتثبيتات
- *    الجديدة فقط.
+ * 2) النسخة المثبّتة: مجلد ثابت `debt-register-office` لا يتبع اسم العرض.
+ *    إن وُجدت قاعدة أقدم (اسم عربي أو مسار محمولة مسجّل) تُنسخ مرة واحدة
+ *    إلى المجلد الفارغ فقط، ولا يُحذف الأصل.
  */
-const LEGACY_USER_DATA_DIRS = ['إدارة المكتب الزراعي', 'debt-register-agri-office'];
-
 function configureUserDataDir() {
   try {
-    const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
-    if (portableDir) {
-      const dataDir = path.join(portableDir, 'AgriOfficeData');
-      fs.mkdirSync(dataDir, { recursive: true });
-      app.setPath('userData', dataDir);
-      app.setPath('sessionData', dataDir);
-      return;
-    }
-
-    // نسخة مثبّتة: أبقِ بيانات المستخدم القائم في مكانها
     const appDataDir = app.getPath('appData');
-    const legacy = LEGACY_USER_DATA_DIRS.map((name) => path.join(appDataDir, name)).find((dir) =>
-      fs.existsSync(path.join(dir, 'IndexedDB'))
-    );
-    if (!legacy) return; // تثبيت جديد: الاسم الجديد هو المسار الافتراضي
-    app.setPath('userData', legacy);
-    app.setPath('sessionData', legacy);
+    const dataDir = resolveUserDataDir({
+      appDataDir,
+      portableDir: process.env.PORTABLE_EXECUTABLE_DIR,
+      // المسار الافتراضي الحالي قبل تثبيت المجلد الثابت، حتى لا تُفقد قاعدة
+      // كانت في اسم العرض العربي أو أي اسم اشتقه Electron.
+      extraCandidates: [app.getPath('userData')],
+      warn: (error) => console.error('تعذّر نقل قاعدة البيانات:', error)
+    });
+    app.setPath('userData', dataDir);
+    app.setPath('sessionData', dataDir);
   } catch (error) {
     console.error('تعذّر تجهيز مجلد بيانات المستخدم:', error);
   }
@@ -111,7 +103,7 @@ function isInternalUrl(target) {
     // خادم التطوير ثابت ومعلوم؛ لا يكفي قبول أي خدمة تعمل محلياً.
     if (isDev) return url.protocol === 'http:' && url.hostname === 'localhost' && url.port === '5173';
     if (url.protocol !== 'file:') return false;
-    return decodeURIComponent(url.pathname) === decodeURIComponent(pathToFileURL(APP_INDEX).pathname);
+    return isSameFilePathname(url.pathname, pathToFileURL(APP_INDEX).pathname);
   } catch {
     return false;
   }
@@ -390,11 +382,21 @@ function createWindow() {
         );
         if (!result.hasRoot || result.rootChildren === 0) return fail('الواجهة لم تُرسم (root فارغ)');
         if (!result.hasBridge) return fail('جسر preload غير متاح (electronAPI)');
-        for (const method of ['appInfo', 'isElectron', 'saveFile', 'saveBackup', 'showNotification']) {
+        for (const method of ['appInfo', 'isElectron', 'saveFile', 'saveBackup', 'printDocument', 'showNotification']) {
           if (!result.bridgeMethods.includes(method)) return fail(`دالة الجسر مفقودة: ${method}`);
         }
         const info = await mainWindow.webContents.executeJavaScript('window.electronAPI.appInfo()');
         if (!info?.isElectron) return fail('appInfo لم تُرجع معلومات Electron');
+        const invalidSave = await mainWindow.webContents.executeJavaScript(
+          "window.electronAPI.saveFile('../evil.txt', btoa('x'), 'text/plain')"
+        );
+        if (invalidSave?.success) return fail('قُبل اسم ملف غير صالح');
+        if (!String(invalidSave?.error || '').includes('غير صالح')) {
+          return fail(`رفض الحفظ لسبب غير متوقع: ${invalidSave?.error || 'بلا رسالة'}`);
+        }
+        const emptyPrint = await mainWindow.webContents.executeJavaScript("window.electronAPI.printDocument('')");
+        if (emptyPrint?.success) return fail('قُبل مستند طباعة فارغ');
+        await runFilesystemSmoke(app.getPath('temp'));
         clearTimeout(timeout);
         console.log(
           `SMOKE_OK ${JSON.stringify({
@@ -464,33 +466,6 @@ process.on('unhandledRejection', (reason) => {
 });
 
 /* ------------------------------- قنوات IPC ------------------------------- */
-
-/**
- * منع اجتياز المسار على جميع المنصات: اسم الملف وحده، لا مساراً نسبياً أو
- * مطلقاً. لا نعتمد على `path.basename` فقط لأن فواصل Windows وPOSIX تختلف
- * عندما يُبنى المشروع أو يُفحص خارج ويندوز.
- */
-function safeFileName(fileName) {
-  if (typeof fileName !== 'string' || !fileName || fileName !== fileName.trim()) return null;
-  if (fileName.includes('\0') || /[\\/]/.test(fileName)) return null;
-  const base = path.basename(fileName);
-  return base === fileName && base !== '.' && base !== '..' ? base : null;
-}
-
-/**
- * كتابة ذرّية لكل ملف يختاره المستخدم: نكتب أولاً في ملف فريد بجانب الوجهة
- * ثم نعيد تسميته. المعرف الفريد يمنع تصادم عمليتي حفظ متزامنتين لنفس الاسم؛
- * والتنظيف في finally لا يترك ملفاً مؤقتاً بعد فشل أو إلغاء مفاجئ.
- */
-async function writeFileAtomically(filePath, data, options) {
-  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await fsp.writeFile(tempPath, data, options);
-    await fsp.rename(tempPath, filePath);
-  } finally {
-    await fsp.rm(tempPath, { force: true }).catch(() => {});
-  }
-}
 
 ipcMain.handle('save-backup', async (event, payload) => {
   if (rejectUntrustedIpc(event, 'save-backup')) return { success: false, error: 'مصدر الطلب غير موثوق' };
@@ -580,7 +555,7 @@ ipcMain.handle('print-document', async (event, payload) => {
   let printWindow = null;
   try {
     tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'office-print-'));
-    const filePath = path.join(tempDir, 'مستند.html');
+    const filePath = path.join(tempDir, 'document.html');
     await fsp.writeFile(filePath, html, 'utf8');
 
     printWindow = new BrowserWindow({
@@ -594,14 +569,10 @@ ipcMain.handle('print-document', async (event, payload) => {
 
     const result = await new Promise((resolve) => {
       printWindow.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
-        resolve({ success, failureReason });
+        resolve(classifyPrintCallback(success, failureReason));
       });
     });
-    if (!result.success && result.failureReason && !/cancel/i.test(result.failureReason)) {
-      return { success: false, error: result.failureReason };
-    }
-    // الإلغاء ليس فشلاً: نُبلغ الواجهة بتخطي العرض البديل
-    return { success: true, cancelled: !result.success };
+    return result;
   } catch (error) {
     return { success: false, error: error.message };
   } finally {
