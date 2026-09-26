@@ -18,33 +18,47 @@
   "extraMetadata": {
     "main": "electron/main.cjs"
   },
+  "compression": "maximum",
+  "removePackageKeywords": true,
+  "buildVersion": "1.0.0",
   "win": {
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64", "arm64"]
+        "arch": ["x64", "ia32", "arm64"]
       },
       {
         "target": "portable",
-        "arch": ["x64", "arm64"]
+        "arch": ["x64", "ia32", "arm64"]
       }
     ],
     "icon": "resources/icon/app.ico",
     "executableName": "OfficeManager",
-    "artifactName": "OfficeManager-${version}-${arch}.${ext}"
+    "artifactName": "OfficeManager-${version}-${os}-${arch}.${ext}",
+    "signingHashAlgorithms": ["sha256"],
+    "signAndEditExecutable": true,
+    "verifyUpdateCodeSignature": false,
+    "publisherName": "TechTouch AI",
+    "legalTrademarks": "TechTouch AI"
   },
   "nsis": {
     "oneClick": false,
     "perMachine": false,
+    "allowElevation": true,
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "إدارة المكتب",
     "deleteAppDataOnUninstall": false,
     "include": "electron/installer.nsh",
-    "artifactName": "OfficeManager-Setup-${version}-${arch}.${ext}"
+    "artifactName": "OfficeManager-Setup-${version}-${arch}.${ext}",
+    "warningsAsErrors": false,
+    "runAfterFinish": true,
+    "menuCategory": "TechTouch AI"
   },
   "portable": {
-    "artifactName": "OfficeManager-Portable-${version}-${arch}.${ext}"
+    "artifactName": "OfficeManager-Portable-${version}-${arch}.${ext}",
+    "requestExecutionLevel": "asInvoker",
+    "unicode": true
   }
 }

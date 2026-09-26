@@ -27,11 +27,17 @@ ios
 .env.test.local
 .env.production.local
 
-# Android release signing material — never commit keystores or signing credentials
+# Code signing material — never commit keystores, certificates, or key material
 android-signing.env
 *.p12
+*.pfx
 *.jks
 *.keystore
+*.key
+*.crt
+*.cer
+scripts/certs/*.b64
+!scripts/certs/openssl.cnf
 
 # Logs
 npm-debug.log*
