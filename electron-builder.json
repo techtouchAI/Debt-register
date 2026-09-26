@@ -25,11 +25,11 @@
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64", "ia32", "arm64"]
+        "arch": ["x64", "arm64"]
       },
       {
         "target": "portable",
-        "arch": ["x64", "ia32", "arm64"]
+        "arch": ["x64", "arm64"]
       }
     ],
     "icon": "resources/icon/app.ico",

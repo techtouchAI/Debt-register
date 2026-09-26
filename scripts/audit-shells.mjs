@@ -173,7 +173,9 @@ async function main() {
   check('هدف nsis موجود', JSON.stringify(builder.win?.target ?? '').includes('"nsis"') || JSON.stringify(builder.win?.target ?? '').includes('nsis'));
   check('هدف portable موجود', JSON.stringify(builder.win?.target ?? '').includes('portable'));
   const winTargets = JSON.stringify(builder.win?.target ?? []);
-  check('بناء ويندوز يستهدف المعماريات الثلاث (x64 + ia32 + arm64)', ['"x64"', '"ia32"', '"arm64"'].every((arch) => winTargets.includes(arch)));
+  // Electron 44 أسقط نشر ثنائيات ويندوز 32-بت (win32-ia32) — electron/electron#52326 —
+  // لذا المعماريات المدعومة فعلياً هي x64 وarm64 فقط.
+  check('بناء ويندوز يستهدف المعماريات المدعومة في Electron 44 (x64 + arm64)', ['"x64"', '"arm64"'].every((arch) => winTargets.includes(arch)) && !winTargets.includes('"ia32"'));
   // في electron-builder 26 لا تُقبل signingHashAlgorithms/publisherName مباشرة
   // تحت win — مكانها الصحيح داخل win.signtoolOptions (وإلا فشل التحقق من المخطط).
   const sigHashes = builder.win?.signtoolOptions?.signingHashAlgorithms;
@@ -491,8 +493,8 @@ async function main() {
     'مهمة أندرويد تتحقق من وجود AppPlugin داخل الـ APK المبني',
     /capacitor\.plugins\.json/.test(workflow) && /AppPlugin/.test(workflow)
   );
-  check('مهمة ويندوز تبني x64 و ia32 و ARM64 وتدخّن x64 فقط', /--x64 --ia32 --arm64/.test(workflow) && /OfficeManager-Portable-\*-x64\.exe/.test(workflow) && /--smoke-test/.test(workflow));
-  check('مهمة ويندوز تتحقق من وجود كل النواتج (مثبّت + محمول × 3 معماريات)', /OfficeManager-Setup-\*-ia32\.exe/.test(workflow) && /OfficeManager-Portable-\*-ia32\.exe/.test(workflow) && /Get-AuthenticodeSignature/.test(workflow));
+  check('مهمة ويندوز تبني x64 و ARM64 وتدخّن x64 فقط', /--x64 --arm64/.test(workflow) && !/--ia32/.test(workflow) && /OfficeManager-Portable-\*-x64\.exe/.test(workflow) && /--smoke-test/.test(workflow));
+  check('مهمة ويندوز تتحقق من وجود كل النواتج (مثبّت + محمول لكل معمارية مدعومة)', /OfficeManager-Setup-\*-arm64\.exe/.test(workflow) && /OfficeManager-Portable-\*-arm64\.exe/.test(workflow) && /Get-AuthenticodeSignature/.test(workflow));
   check('متغيرات التوقيع WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD مستخدمة في المهمة', /WIN_CSC_LINK/.test(workflow) && /WIN_CSC_KEY_PASSWORD/.test(workflow));
   check('مهمة ويندوز تثبّت المثبّت صامتاً وتتحقق من التثبيت', /Uninstall\*\.exe|\/S'/.test(workflow));
   check('تدقيق أمني للاعتماديات', /npm audit --audit-level=high/.test(workflow));

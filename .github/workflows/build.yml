@@ -317,7 +317,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build installer + portable EXE (x64 + ia32 + arm64) with signing
+      - name: Build installer + portable EXE (x64 + arm64) with signing
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
@@ -335,8 +335,11 @@ jobs:
               Set-Item -Path Env:$($pair.Dst) -Value $srcVal
             }
           }
-          # البناء لثلاث معماريات: x64 (ويندوز 10/11 64-بت)، ia32 (ويندوز 10 32-بت)، arm64 (Windows on ARM)
-          npx electron-builder --win nsis portable --x64 --ia32 --arm64 --publish=never --config electron-builder.json
+          # البناء لمعماريات النشر التي يدعمها Electron 44: x64 (ويندوز 10/11 64-بت)
+          # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
+          # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
+          # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
+          npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json
       - name: التحقق من المنتجات (مثبّت + محمول لكل المعماريات + asar + التوقيع)
         shell: pwsh
         run: |
@@ -345,8 +348,6 @@ jobs:
           $expected = @(
             @{Pattern='OfficeManager-Setup-*-x64.exe';    Label='مثبّت nsis x64'},
             @{Pattern='OfficeManager-Portable-*-x64.exe'; Label='نسخة محمولة x64'},
-            @{Pattern='OfficeManager-Setup-*-ia32.exe';   Label='مثبّت nsis ia32 (32-بت)'},
-            @{Pattern='OfficeManager-Portable-*-ia32.exe';Label='نسخة محمولة ia32 (32-بت)'},
             @{Pattern='OfficeManager-Setup-*-arm64.exe';  Label='مثبّت nsis arm64'},
             @{Pattern='OfficeManager-Portable-*-arm64.exe';Label='نسخة محمولة arm64'}
           )
@@ -570,23 +571,29 @@ jobs:
           $attempt = 0
           $maxAttempts = 3
           $succeeded = $false
+          $lastDetail = ''
           while ($attempt -lt $maxAttempts -and -not $succeeded) {
             $attempt++
             Write-Host "--- محاولة اختبار الدخان $attempt من $maxAttempts ---"
             Remove-Item $log -ErrorAction SilentlyContinue
+            # نظّف أي عملية عالقة من محاولة سابقة حتى لا يتدخل قفل النسخة الواحدة
+            Get-Process -Name 'office-manager' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 2
             $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
             $timedOut = -not $proc.WaitForExit(120000)
             if ($timedOut) { try { $proc.Kill() } catch {} }
-            if (Test-Path $log) { Get-Content $log | Write-Host }
+            $lastDetail = if (Test-Path $log) { (Get-Content $log -Raw).Trim() } else { '(لا يوجد ملف سجل)' }
+            Write-Host "سجل الدخان: $lastDetail"
             if (-not $timedOut -and $proc.ExitCode -eq 0) {
               $succeeded = $true
             } else {
-              $reason = if ($timedOut) { 'انتهاء المهلة' } else { "رمز الخروج $($proc.ExitCode)" }
+              $reason = if ($timedOut) { 'انتهاء المهلة (90 ثانية داخلية)' } else { "رمز الخروج $($proc.ExitCode)" }
               Write-Host "المحاولة $attempt فشلت ($reason)"
+              Write-Host "::error::دخان Tauri محاولة $attempt/$maxAttempts — $reason — السجل: $lastDetail"
               if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
             }
           }
-          if (-not $succeeded) { Write-Error "فشل اختبار دخان Tauri بعد $maxAttempts محاولات" }
+          if (-not $succeeded) { Write-Error "فشل اختبار دخان Tauri بعد $maxAttempts محاولات — آخر سجل: $lastDetail" }
           Write-Host '✔ Tauri يرسم الواجهة وقناة IPC غير محجوبة'
       - name: حفظ Cargo.lock
         if: always()
