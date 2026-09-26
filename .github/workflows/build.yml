@@ -324,16 +324,40 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # electron-builder يقرأ CSC_LINK و CSC_KEY_PASSWORD. نربطهما بالمتغيرات
-          # المحددة بأسرار WIN_CSC_* المتعارف عليها في المشروع (دون الكتابة فوق قيم
-          # فارغة حتى لا يحاول electron-builder التوقيع بلا شهادة).
-          foreach ($pair in @(@{Src='WIN_CSC_LINK';Dst='CSC_LINK'}, @{Src='WIN_CSC_KEY_PASSWORD';Dst='CSC_KEY_PASSWORD'})) {
-            $srcVal = [Environment]::GetEnvironmentVariable($pair.Src)
-            if ([string]::IsNullOrWhiteSpace($srcVal)) {
-              Remove-Item Env:$($pair.Dst) -ErrorAction SilentlyContinue
-            } else {
-              Set-Item -Path Env:$($pair.Dst) -Value $srcVal
+          # electron-builder يقرأ CSC_LINK و CSC_KEY_PASSWORD. قبل تمرير شهادة
+          # التوقيع نتحقق من أنها تُحمَّل فعلاً بكلمة المرور المحددة (فكّ
+          # الـ PKCS#12 عبر .NET). إن كانت الشهادة أو كلمة المرور تالفة/خاطئة
+          # نبني نسخة غير موقّعة مع تحذير واضح بدل أن ينهار البناء كله بخطأ
+          # غامض من signtool — فالتوقيع تحسين اختياري وليس شرطاً لصحة الحزمة.
+          Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
+          Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
+            $certLoaded = $false
+            try {
+              $certBytes = [Convert]::FromBase64String($env:WIN_CSC_LINK)
+              if ([System.Security.Cryptography.X509Certificates.X509CertificateLoader] -as [type]) {
+                $null = [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($certBytes, $env:WIN_CSC_KEY_PASSWORD, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+              } else {
+                $null = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certBytes, $env:WIN_CSC_KEY_PASSWORD)
+              }
+              $certLoaded = $true
+            } catch {
+              Write-Host "تعذّر تحميل شهادة التوقيع: $($_.Exception.Message)"
             }
+            if ($certLoaded) {
+              Set-Item -Path Env:CSC_LINK -Value $env:WIN_CSC_LINK
+              if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
+                Set-Item -Path Env:CSC_KEY_PASSWORD -Value $env:WIN_CSC_KEY_PASSWORD
+              }
+              Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=true'
+              Write-Host 'شهادة التوقيع صالحة — سيُوقَّع الملف التنفيذي.'
+            } else {
+              Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
+              Write-Host '::warning::شهادة التوقيع (WIN_CSC_LINK) لا يمكن تحميلها بكلمة المرور المحددة (WIN_CSC_KEY_PASSWORD). سيُبنى التطبيق غير موقّع. حدّث السِرّين أو ولّد شهادة جديدة عبر `npm run certs:generate`.'
+            }
+          } else {
+            Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
+            Write-Host 'لم تُمرَّر شهادة توقيع — سيُبنى التطبيق غير موقّع.'
           }
           # البناء لمعماريات النشر التي يدعمها Electron 44: x64 (ويندوز 10/11 64-بت)
           # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
@@ -375,10 +399,10 @@ jobs:
             if ($sig.SignerCertificate) {
               Write-Host "  المُوقِّع: $($sig.SignerCertificate.Subject)"
               Write-Host "  البصمة : $($sig.SignerCertificate.Thumbprint)"
-            } elseif (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
-              Write-Error 'تم تمرير WIN_CSC_LINK لكن الملف التنفيذي غير موقّع (تأكد من كلمة المرور وشهادة PKCS#12)'
+            } elseif ($env:SIGNING_ACTIVE -eq 'true') {
+              Write-Error 'التوقيع كان مفترضاً (شهادة صالحة) لكن الملف التنفيذي غير موقّع — راجع سجل electron-builder'
             } else {
-              Write-Host '  (لم تُمرَّر شهادة توقيع — تخطي التحقق)'
+              Write-Host '  (التوقيع غير مفعّل في هذا البناء — تخطي التحقق)'
             }
           }
           $asar = 'release/win-unpacked/resources/app.asar'
