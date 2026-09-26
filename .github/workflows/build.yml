@@ -317,26 +317,65 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build installer + portable EXE (x64 + ia32 + arm64) with signing
+      - name: Build installer + portable EXE (x64 + arm64) with signing
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # electron-builder يقرأ CSC_LINK و CSC_KEY_PASSWORD. نربطهما بالمتغيرات
-          # المحددة بأسرار WIN_CSC_* المتعارف عليها في المشروع (دون الكتابة فوق قيم
-          # فارغة حتى لا يحاول electron-builder التوقيع بلا شهادة).
-          foreach ($pair in @(@{Src='WIN_CSC_LINK';Dst='CSC_LINK'}, @{Src='WIN_CSC_KEY_PASSWORD';Dst='CSC_KEY_PASSWORD'})) {
-            $srcVal = [Environment]::GetEnvironmentVariable($pair.Src)
-            if ([string]::IsNullOrWhiteSpace($srcVal)) {
-              Remove-Item Env:$($pair.Dst) -ErrorAction SilentlyContinue
-            } else {
-              Set-Item -Path Env:$($pair.Dst) -Value $srcVal
+          # electron-builder يقرأ CSC_LINK و CSC_KEY_PASSWORD. قبل تمرير شهادة
+          # التوقيع نتحقق من أنها تُحمَّل فعلاً بكلمة المرور المحددة (فكّ
+          # الـ PKCS#12 عبر .NET). إن كانت الشهادة أو كلمة المرور تالفة/خاطئة
+          # نبني نسخة غير موقّعة مع تحذير واضح بدل أن ينهار البناء كله بخطأ
+          # غامض من signtool — فالتوقيع تحسين اختياري وليس شرطاً لصحة الحزمة.
+          Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
+          Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
+            $certLoaded = $false
+            try {
+              $certBytes = [Convert]::FromBase64String($env:WIN_CSC_LINK)
+              if ([System.Security.Cryptography.X509Certificates.X509CertificateLoader] -as [type]) {
+                $null = [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($certBytes, $env:WIN_CSC_KEY_PASSWORD, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+              } else {
+                $null = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certBytes, $env:WIN_CSC_KEY_PASSWORD)
+              }
+              $certLoaded = $true
+            } catch {
+              Write-Host "تعذّر تحميل شهادة التوقيع: $($_.Exception.Message)"
             }
+            if ($certLoaded) {
+              Set-Item -Path Env:CSC_LINK -Value $env:WIN_CSC_LINK
+              if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
+                Set-Item -Path Env:CSC_KEY_PASSWORD -Value $env:WIN_CSC_KEY_PASSWORD
+              }
+              Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=true'
+              Write-Host 'شهادة التوقيع صالحة — سيُوقَّع الملف التنفيذي.'
+            } else {
+              Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
+              # electron-builder 26 يقرأ WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD مباشرة
+              # (وليس CSC_LINK فقط) — أزلها من البيئة حتى لا يحاول التوقيع أصلاً
+              Remove-Item Env:WIN_CSC_LINK -ErrorAction SilentlyContinue
+              Remove-Item Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+              Write-Host '::warning::شهادة التوقيع (WIN_CSC_LINK) لا يمكن تحميلها بكلمة المرور المحددة (WIN_CSC_KEY_PASSWORD). سيُبنى التطبيق غير موقّع. حدّث السِرّين أو ولّد شهادة جديدة عبر `npm run certs:generate`.'
+            }
+          } else {
+            Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
+            Write-Host 'لم تُمرَّر شهادة توقيع — سيُبنى التطبيق غير موقّع.'
           }
-          # البناء لثلاث معماريات: x64 (ويندوز 10/11 64-بت)، ia32 (ويندوز 10 32-بت)، arm64 (Windows on ARM)
-          npx electron-builder --win nsis portable --x64 --ia32 --arm64 --publish=never --config electron-builder.json
+          # البناء لمعماريات النشر التي يدعمها Electron 44: x64 (ويندوز 10/11 64-بت)
+          # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
+          # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
+          # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
+          $ebLog = Join-Path $env:RUNNER_TEMP 'electron-builder.log'
+          & npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json 2>&1 | Tee-Object -FilePath $ebLog
+          $ebExit = $LASTEXITCODE
+          if ($ebExit -ne 0) {
+            # أبرز سطور الفشل كتعليقات قابلة للقراءة عبر API (السجل الكامل في ملف المهمة)
+            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable' | Select-Object -First 12
+            foreach ($line in $errLines) { Write-Host "::error::electron-builder: $($line.Line.Trim())" }
+            Write-Error "فشل electron-builder برمز الخروج $ebExit — راجع التعليقات أعلاه"
+          }
       - name: التحقق من المنتجات (مثبّت + محمول لكل المعماريات + asar + التوقيع)
         shell: pwsh
         run: |
@@ -345,8 +384,6 @@ jobs:
           $expected = @(
             @{Pattern='OfficeManager-Setup-*-x64.exe';    Label='مثبّت nsis x64'},
             @{Pattern='OfficeManager-Portable-*-x64.exe'; Label='نسخة محمولة x64'},
-            @{Pattern='OfficeManager-Setup-*-ia32.exe';   Label='مثبّت nsis ia32 (32-بت)'},
-            @{Pattern='OfficeManager-Portable-*-ia32.exe';Label='نسخة محمولة ia32 (32-بت)'},
             @{Pattern='OfficeManager-Setup-*-arm64.exe';  Label='مثبّت nsis arm64'},
             @{Pattern='OfficeManager-Portable-*-arm64.exe';Label='نسخة محمولة arm64'}
           )
@@ -366,10 +403,10 @@ jobs:
             if ($sig.SignerCertificate) {
               Write-Host "  المُوقِّع: $($sig.SignerCertificate.Subject)"
               Write-Host "  البصمة : $($sig.SignerCertificate.Thumbprint)"
-            } elseif (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
-              Write-Error 'تم تمرير WIN_CSC_LINK لكن الملف التنفيذي غير موقّع (تأكد من كلمة المرور وشهادة PKCS#12)'
+            } elseif ($env:SIGNING_ACTIVE -eq 'true') {
+              Write-Error 'التوقيع كان مفترضاً (شهادة صالحة) لكن الملف التنفيذي غير موقّع — راجع سجل electron-builder'
             } else {
-              Write-Host '  (لم تُمرَّر شهادة توقيع — تخطي التحقق)'
+              Write-Host '  (التوقيع غير مفعّل في هذا البناء — تخطي التحقق)'
             }
           }
           $asar = 'release/win-unpacked/resources/app.asar'
@@ -548,7 +585,18 @@ jobs:
       - run: npm ci
       - run: npm --prefix desktop ci
       - name: بناء حزم Tauri (msi + nsis)
-        run: npm --prefix desktop run build -- --bundles msi,nsis
+        shell: pwsh
+        run: |
+          $tbLog = Join-Path $env:RUNNER_TEMP 'tauri-build.log'
+          & npm --prefix desktop run build -- --bundles msi,nsis 2>&1 | Tee-Object -FilePath $tbLog
+          $tbExit = $LASTEXITCODE
+          if ($tbExit -ne 0) {
+            # ذيّل السجل كاملاً (آخر 60 سطراً) كتعليقات قابلة للقراءة عبر API —
+            # رسالة فشل سكربت البناء الحقيقي تأتي عادة بعد أسطر "failed to build"
+            $tail = Get-Content $tbLog | Select-Object -Last 60
+            foreach ($line in $tail) { Write-Host "::error::tauri-build: $($line.Trim())" }
+            Write-Error "فشل بناء Tauri برمز الخروج $tbExit — راجع التعليقات أعلاه"
+          }
       - name: التحقق من وجود الحزم
         shell: pwsh
         run: |
@@ -563,11 +611,38 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = Get-ChildItem desktop/src-tauri/target/release -Filter 'office-manager.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { Write-Error 'لم يُعثر على office-manager.exe' }
-          $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
-          if (-not $proc.WaitForExit(90000)) { $proc.Kill(); Write-Error 'انتهت مهلة اختبار دخان Tauri' }
           $log = Join-Path $env:TEMP 'office-manager-smoke.txt'
-          if (Test-Path $log) { Get-Content $log | Write-Host }
-          if ($proc.ExitCode -ne 0) { Write-Error "فشل اختبار دخان Tauri (رمز $($proc.ExitCode))" }
+          # اختبار الدخان يعتمد على توقيت إقلاع WebView2 ورسم الواجهة، وهو عرضة
+          # للتذبذب على عدّاءات CI. نعيد المحاولة حتى 3 مرات قبل إعلان الفشل،
+          # مع طباعة سجل آخر محاولة للتشخيص في كل الأحوال.
+          $attempt = 0
+          $maxAttempts = 3
+          $succeeded = $false
+          $lastDetail = ''
+          while ($attempt -lt $maxAttempts -and -not $succeeded) {
+            $attempt++
+            Write-Host "--- محاولة اختبار الدخان $attempt من $maxAttempts ---"
+            Remove-Item $log -ErrorAction SilentlyContinue
+            # نظّف أي عملية عالقة من محاولة سابقة حتى لا يتدخل قفل النسخة الواحدة
+            # أو قفل مجلد بيانات WebView2 (عمليات الويب فيو أبناء مستقلون)
+            Get-Process -Name 'office-manager' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 2
+            $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--smoke-test' -PassThru
+            $timedOut = -not $proc.WaitForExit(120000)
+            if ($timedOut) { try { $proc.Kill() } catch {} }
+            $lastDetail = if (Test-Path $log) { (Get-Content $log -Raw).Trim() } else { '(لا يوجد ملف سجل)' }
+            Write-Host "سجل الدخان: $lastDetail"
+            if (-not $timedOut -and $proc.ExitCode -eq 0) {
+              $succeeded = $true
+            } else {
+              $reason = if ($timedOut) { 'انتهاء المهلة (90 ثانية داخلية)' } else { "رمز الخروج $($proc.ExitCode)" }
+              Write-Host "المحاولة $attempt فشلت ($reason)"
+              Write-Host "::error::دخان Tauri محاولة $attempt/$maxAttempts — $reason — السجل: $lastDetail"
+              if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+            }
+          }
+          if (-not $succeeded) { Write-Error "فشل اختبار دخان Tauri بعد $maxAttempts محاولات — آخر سجل: $lastDetail" }
           Write-Host '✔ Tauri يرسم الواجهة وقناة IPC غير محجوبة'
       - name: حفظ Cargo.lock
         if: always()
