@@ -403,16 +403,14 @@ jobs:
             & certutil -user -f @pwdArg -importpfx $pfxPath | Write-Host
           }
 
-          # GITHUB_ENV: قيم قد تحتوي رموزاً خاصة → HEREDOC
-          @"
-SIGNING_ACTIVE=true
-SIGNING_THUMBPRINT=$thumb
-SIGNING_PFX=$pfxPath
-"@ | Add-Content -Path $env:GITHUB_ENV
-          # كلمة المرور عبر delimiter آمن (لا تُطبع)
-          $delim = "CSC_PWD_" + [guid]::NewGuid().ToString('N')
+          # GITHUB_ENV — لا تستخدم @"..."@ بلا مسافة بادئة (تكسر YAML)
+          Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=true'
+          Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_THUMBPRINT=$thumb"
+          Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_PFX=$pfxPath"
+          # كلمة المرور عبر delimiter متعدد الأسطر (GitHub Actions)
+          $delim = 'CSC_PWD_' + [guid]::NewGuid().ToString('N')
           Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_PFX_PASSWORD<<$delim"
-          Add-Content -Path $env:GITHUB_ENV -Value "$($env:WIN_CSC_KEY_PASSWORD)"
+          Add-Content -Path $env:GITHUB_ENV -Value ([string]$env:WIN_CSC_KEY_PASSWORD)
           Add-Content -Path $env:GITHUB_ENV -Value $delim
           Write-Host '✔ تجهيز الشهادة اكتمل'
 
