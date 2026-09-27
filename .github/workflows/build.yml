@@ -309,8 +309,8 @@ jobs:
     name: Windows 10/11 EXE (installer + portable)
     needs: web
     runs-on: windows-latest
-    # التوقيع + خادم الختم الزمني قد يعلّق؛ أوقف المهمة بدل انتظار ساعة
-    timeout-minutes: 35
+    # بلا ختم زمني: البناء الموقّع عادةً < 12 د. المهلة شبكة أمان فقط.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -320,10 +320,12 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Build installer + portable EXE (x64 + arm64) with signing
-        timeout-minutes: 25
+        timeout-minutes: 20
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # لا تفعّل إلا لإصدارات عامة تحتاج بقاء التوقيع بعد انتهاء الشهادة
+          FORCE_WIN_TIMESTAMP: 'false'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -423,44 +425,64 @@ jobs:
           }
           if ($signingActive) {
             Write-Host '→ التوقيع مفعّل: كل نواتج ويندوز (مثبّت + محمول، x64 + arm64) ستُوقَّع.'
-            # خوادم الختم الزمني RFC3161: إن علق DigiCert (شائع من عدّائي GitHub)
-            # نجرب Sectigo ثم نتابع بلا ختم بدل أن يعلّق البناء 45+ دقيقة.
-            $tsServers = @(
-              'http://timestamp.digicert.com',
-              'http://timestamp.sectigo.com',
-              'http://timestamp.apple.com/ts01'
-            )
+            # ── الختم الزمني RFC3161 ────────────────────────────────────────────
+            # TCP "مفتوح" لا يكفي: signtool يعلّق دقائق طويلة على DigiCert/Sectigo
+            # من عدّائي GitHub حتى مع اتصال ناجح (ظهر كـ timeout 25 دقيقة).
+            # الافتراضي في CI: توقيع بلا ختم. فعّل FORCE_WIN_TIMESTAMP=true فقط
+            # عند الحاجة (إصدارات عامة طويلة الأمد).
+            $ebCfgPath = 'electron-builder.json'
+            $raw = Get-Content $ebCfgPath -Raw -Encoding utf8
+            $wantTs = ($env:FORCE_WIN_TIMESTAMP -eq 'true')
             $reachableTs = $null
-            foreach ($ts in $tsServers) {
-              try {
-                $uri = [Uri]$ts
-                $tcp = New-Object System.Net.Sockets.TcpClient
-                $iar = $tcp.BeginConnect($uri.Host, $(if ($uri.Port -gt 0) { $uri.Port } else { 80 }), $null, $null)
-                $ok = $iar.AsyncWaitHandle.WaitOne(5000, $false)
-                if ($ok -and $tcp.Connected) { $reachableTs = $ts; $tcp.Close(); break }
-                $tcp.Close()
-              } catch { }
-              Write-Host "  ⚠ خادم الختم غير متاح بسرعة: $ts"
+            if ($wantTs) {
+              $tsServers = @(
+                'http://timestamp.digicert.com',
+                'http://timestamp.sectigo.com',
+                'http://timestamp.apple.com/ts01'
+              )
+              foreach ($ts in $tsServers) {
+                try {
+                  $null = Invoke-WebRequest -Uri $ts -Method Head -TimeoutSec 8 -UseBasicParsing -ErrorAction Stop
+                  $reachableTs = $ts
+                  break
+                } catch {
+                  try {
+                    $hc = [System.Net.Http.HttpClient]::new()
+                    $hc.Timeout = [TimeSpan]::FromSeconds(8)
+                    $null = $hc.GetAsync($ts).GetAwaiter().GetResult()
+                    $reachableTs = $ts
+                    $hc.Dispose()
+                    break
+                  } catch {
+                    Write-Host "  ⚠ خادم الختم لا يستجيب خلال 8 ث: $ts"
+                  }
+                }
+              }
             }
             if ($reachableTs) {
               Write-Host "  ✔ خادم الختم الزمني: $reachableTs"
               Set-Item -Path Env:CSC_TIMESTAMP_SERVER -Value $reachableTs
-              # استبدال نصّي آمن — ConvertTo-Json يفسد مصفوفات electron-builder
-              $ebCfgPath = 'electron-builder.json'
-              $raw = Get-Content $ebCfgPath -Raw
               $raw = [regex]::Replace($raw, '("rfc3161TimeStampServer"\s*:\s*")[^"]*(")', "`${1}$reachableTs`${2}")
-              Set-Content $ebCfgPath -Value $raw -Encoding utf8NoBOM
             } else {
-              Write-Host '::warning::تعذّر الوصول لأي خادم ختم زمني — سيُوقَّع بلا RFC3161 (التوقيع يبقى صالحاً حتى انتهاء الشهادة)'
-              $ebCfgPath = 'electron-builder.json'
-              $raw = Get-Content $ebCfgPath -Raw
-              # احذف حقول الختم حتى لا يعلّق signtool في انتظار خادم ميت
+              if ($wantTs) {
+                Write-Host '::warning::FORCE_WIN_TIMESTAMP=true لكن لا خادم متاح — توقيع بلا RFC3161'
+              } else {
+                Write-Host '→ توقيع بلا ختم زمني RFC3161 (افتراضي CI — تجنّب تعليق signtool). للختم: FORCE_WIN_TIMESTAMP=true'
+              }
               $raw = [regex]::Replace($raw, '\s*"rfc3161TimeStampServer"\s*:\s*"[^"]*"\s*,?', '')
               $raw = [regex]::Replace($raw, '\s*"timeStampServer"\s*:\s*"[^"]*"\s*,?', '')
-              # نظّف فاصلة زائدة قبل }
               $raw = [regex]::Replace($raw, ',(\s*})', '$1')
-              Set-Content $ebCfgPath -Value $raw -Encoding utf8NoBOM
+              Remove-Item Env:CSC_TIMESTAMP_SERVER -ErrorAction SilentlyContinue
             }
+            # ضغط normal أسرع من maximum على 4 حزم + توقيع
+            $raw = [regex]::Replace($raw, '("compression"\s*:\s*")maximum(")', '${1}normal${2}')
+            # لا تفرض publisherName إن خالف موضوع الشهادة الذاتية — يسبب إعادة محاولات
+            $raw = [regex]::Replace($raw, '\s*"publisherName"\s*:\s*"[^"]*"\s*,?', '')
+            $raw = [regex]::Replace($raw, ',(\s*})', '$1')
+            [IO.File]::WriteAllText((Join-Path (Get-Location) $ebCfgPath), $raw)
+            Write-Host '  إعداد electron-builder بعد التعديل:'
+            Get-Content $ebCfgPath | Select-String -Pattern 'compression|TimeStamp|signAnd|publisher' | ForEach-Object { Write-Host "    $_" }
+            Set-Item -Path Env:CSC_IDENTITY_AUTO_DISCOVERY -Value 'false'
           } else {
             Write-Host '::warning::لن يجري توقيع نواتج ويندوز. فعّل ذلك بضبط السرّين: WIN_CSC_LINK = base64 ملف PKCS#12 كامل، وWIN_CSC_KEY_PASSWORD = كلمة المرور نصاً (لا التجزئة).'
           }
@@ -472,7 +494,7 @@ jobs:
           # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
           Write-Host "→ بدء electron-builder $(Get-Date -Format o)"
           $ebLog = Join-Path $env:RUNNER_TEMP 'electron-builder.log'
-          # استخدم --publish never صراحةً؛ stdout غير مُخزَّن حتى تظهر التقدّم حياً
+          if ($env:SIGNING_DEBUG -eq 'true') { Set-Item -Path Env:DEBUG -Value 'electron-builder' }
           & npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json 2>&1 | Tee-Object -FilePath $ebLog
           $ebExit = $LASTEXITCODE
           Write-Host "→ انتهى electron-builder $(Get-Date -Format o) برمز $ebExit"
@@ -536,8 +558,8 @@ jobs:
             if ($env:SIGNING_THUMBPRINT -and $sig.SignerCertificate.Thumbprint -ne $env:SIGNING_THUMBPRINT) {
               Write-Error "توقيع غير متوقع على $($t.Name): $($sig.SignerCertificate.Thumbprint) ≠ $($env:SIGNING_THUMBPRINT)"
             }
-            if ($stamp -eq 'لا') {
-              Write-Host "::warning::$($t.Name): توقيع بلا ختم زمني (RFC3161) — لن يبقى صالحاً بعد انتهاء الشهادة"
+            if ($stamp -eq 'لا' -and $env:FORCE_WIN_TIMESTAMP -eq 'true') {
+              Write-Host "::warning::$($t.Name): توقيع بلا ختم زمني (RFC3161) رغم FORCE_WIN_TIMESTAMP — لن يبقى صالحاً بعد انتهاء الشهادة"
             }
           }
           $report | ForEach-Object { Write-Host $_ }

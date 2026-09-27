@@ -97,7 +97,9 @@ npm run build:windows:arm64
 
   عند غياب `WIN_CSC_LINK` تماماً يبقى البناء ناجحاً بلا توقيع مع `::warning::`
   ظاهر في السجل — حتى تعمل المستودعات المتفرّعة.
-- الختم الزمني RFC3161 مربوط صراحةً بـ `http://timestamp.digicert.com` داخل
-  `electron-builder.json`، وelectron-builder 26 يعيد المحاولة مرّتين تلقائياً
-  عند فشل خادم الختم. إن ظهر تحذير "توقيع بلا ختم زمني" فقد تعذّر الوصول
-  للخدمة في تلك اللحظة.
+- الختم الزمني RFC3161 **معطّل افتراضياً في CI** لأن `signtool` يعلّق طويلاً على
+  DigiCert/Sectigo من عدّائي GitHub (timeout 25 دقيقة). التوقيع Authenticode
+  يبقى صالحاً حتى انتهاء الشهادة. لتفعيل الختم عند إصدار عام: اضبط
+  `FORCE_WIN_TIMESTAMP=true` في خطوة البناء. محلياً يمكنك إضافة
+  `"rfc3161TimeStampServer": "http://timestamp.digicert.com"` تحت
+  `win.signtoolOptions` في `electron-builder.json`.
