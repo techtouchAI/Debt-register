@@ -40,6 +40,7 @@
     "signtoolOptions": {
       "signingHashAlgorithms": ["sha256"],
       "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+      "timeStampServer": "http://timestamp.sectigo.com",
       "publisherName": "TechTouch AI"
     },
     "legalTrademarks": "TechTouch AI"

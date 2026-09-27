@@ -309,6 +309,8 @@ jobs:
     name: Windows 10/11 EXE (installer + portable)
     needs: web
     runs-on: windows-latest
+    # التوقيع + خادم الختم الزمني قد يعلّق؛ أوقف المهمة بدل انتظار ساعة
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -318,6 +320,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Build installer + portable EXE (x64 + arm64) with signing
+        timeout-minutes: 25
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
@@ -420,6 +423,44 @@ jobs:
           }
           if ($signingActive) {
             Write-Host '→ التوقيع مفعّل: كل نواتج ويندوز (مثبّت + محمول، x64 + arm64) ستُوقَّع.'
+            # خوادم الختم الزمني RFC3161: إن علق DigiCert (شائع من عدّائي GitHub)
+            # نجرب Sectigo ثم نتابع بلا ختم بدل أن يعلّق البناء 45+ دقيقة.
+            $tsServers = @(
+              'http://timestamp.digicert.com',
+              'http://timestamp.sectigo.com',
+              'http://timestamp.apple.com/ts01'
+            )
+            $reachableTs = $null
+            foreach ($ts in $tsServers) {
+              try {
+                $uri = [Uri]$ts
+                $tcp = New-Object System.Net.Sockets.TcpClient
+                $iar = $tcp.BeginConnect($uri.Host, $(if ($uri.Port -gt 0) { $uri.Port } else { 80 }), $null, $null)
+                $ok = $iar.AsyncWaitHandle.WaitOne(5000, $false)
+                if ($ok -and $tcp.Connected) { $reachableTs = $ts; $tcp.Close(); break }
+                $tcp.Close()
+              } catch { }
+              Write-Host "  ⚠ خادم الختم غير متاح بسرعة: $ts"
+            }
+            if ($reachableTs) {
+              Write-Host "  ✔ خادم الختم الزمني: $reachableTs"
+              Set-Item -Path Env:CSC_TIMESTAMP_SERVER -Value $reachableTs
+              # استبدال نصّي آمن — ConvertTo-Json يفسد مصفوفات electron-builder
+              $ebCfgPath = 'electron-builder.json'
+              $raw = Get-Content $ebCfgPath -Raw
+              $raw = [regex]::Replace($raw, '("rfc3161TimeStampServer"\s*:\s*")[^"]*(")', "`${1}$reachableTs`${2}")
+              Set-Content $ebCfgPath -Value $raw -Encoding utf8NoBOM
+            } else {
+              Write-Host '::warning::تعذّر الوصول لأي خادم ختم زمني — سيُوقَّع بلا RFC3161 (التوقيع يبقى صالحاً حتى انتهاء الشهادة)'
+              $ebCfgPath = 'electron-builder.json'
+              $raw = Get-Content $ebCfgPath -Raw
+              # احذف حقول الختم حتى لا يعلّق signtool في انتظار خادم ميت
+              $raw = [regex]::Replace($raw, '\s*"rfc3161TimeStampServer"\s*:\s*"[^"]*"\s*,?', '')
+              $raw = [regex]::Replace($raw, '\s*"timeStampServer"\s*:\s*"[^"]*"\s*,?', '')
+              # نظّف فاصلة زائدة قبل }
+              $raw = [regex]::Replace($raw, ',(\s*})', '$1')
+              Set-Content $ebCfgPath -Value $raw -Encoding utf8NoBOM
+            }
           } else {
             Write-Host '::warning::لن يجري توقيع نواتج ويندوز. فعّل ذلك بضبط السرّين: WIN_CSC_LINK = base64 ملف PKCS#12 كامل، وWIN_CSC_KEY_PASSWORD = كلمة المرور نصاً (لا التجزئة).'
           }
@@ -429,12 +470,15 @@ jobs:
           # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
           # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
           # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
+          Write-Host "→ بدء electron-builder $(Get-Date -Format o)"
           $ebLog = Join-Path $env:RUNNER_TEMP 'electron-builder.log'
+          # استخدم --publish never صراحةً؛ stdout غير مُخزَّن حتى تظهر التقدّم حياً
           & npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json 2>&1 | Tee-Object -FilePath $ebLog
           $ebExit = $LASTEXITCODE
+          Write-Host "→ انتهى electron-builder $(Get-Date -Format o) برمز $ebExit"
           if ($ebExit -ne 0) {
             # أبرز سطور الفشل كتعليقات قابلة للقراءة عبر API (السجل الكامل في ملف المهمة)
-            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable' | Select-Object -First 12
+            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable|sign|timestamp' | Select-Object -First 20
             foreach ($line in $errLines) { Write-Host "::error::electron-builder: $($line.Line.Trim())" }
             Write-Error "فشل electron-builder برمز الخروج $ebExit — راجع التعليقات أعلاه"
           }
