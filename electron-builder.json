@@ -39,6 +39,7 @@
     "verifyUpdateCodeSignature": false,
     "signtoolOptions": {
       "signingHashAlgorithms": ["sha256"],
+      "rfc3161TimeStampServer": "http://timestamp.digicert.com",
       "publisherName": "TechTouch AI"
     },
     "legalTrademarks": "TechTouch AI"
