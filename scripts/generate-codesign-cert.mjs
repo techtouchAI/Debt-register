@@ -54,10 +54,11 @@ emailAddress = support@techtouch.ai
 
 [ v3_req ]
 basicConstraints     = critical, CA:FALSE
-keyUsage             = critical, digitalSignature, keyEncipherment
-extendedKeyUsage     = critical, codeSigning, 1.3.6.1.5.5.7.3.3
+keyUsage             = critical, digitalSignature
+extendedKeyUsage     = critical, codeSigning
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer
+# self-signed: لا تستخدم issuer في authorityKeyIdentifier (يفشل بدون -CA)
+authorityKeyIdentifier = keyid:always
 `;
 writeFileSync(cnfPath, opensslCnf);
 

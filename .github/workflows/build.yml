@@ -354,15 +354,27 @@ jobs:
               if (-not $cert.HasPrivateKey) { throw 'ملف PKCS#12 لا يحتوي مفتاحاً خاصاً' }
               if ($cert.NotAfter -lt (Get-Date)) { throw "الشهادة منتهية الصلاحية منذ $($cert.NotAfter.ToString('yyyy-MM-dd'))" }
               if ($cert.NotBefore -gt (Get-Date)) { throw "الشهادة لم تبدأ صلاحيتها بعد $($cert.NotBefore.ToString('yyyy-MM-dd'))" }
+              # ملاحظة: الخاصية الصحيحة في .NET هي EnhancedKeyUsages (بالجمع)،
+              # وليس EnhancedKeyUselist — الخطأ الإملائي كان يجعل الحلقة لا تعمل
+              # فيُرفض أي شهادة سليمة برسالة "لا تحمل EKU codeSigning" رغم وجوده.
+              $codeSigningOid = '1.3.6.1.5.5.7.3.3'
               $hasCodeSigning = $false
               foreach ($ext in $cert.Extensions) {
                 if ($ext -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]) {
-                  foreach ($u in $ext.EnhancedKeyUselist) {
-                    if ($u.Value -eq '1.3.6.1.5.5.7.3.3') { $hasCodeSigning = $true }
+                  foreach ($u in $ext.EnhancedKeyUsages) {
+                    if ($u.Value -eq $codeSigningOid) { $hasCodeSigning = $true; break }
                   }
                 }
+                # مسار احتياطي: بعض الشهادات تصل كـ X509Extension عام دون التحويل
+                if (-not $hasCodeSigning -and $ext.Oid -and $ext.Oid.Value -eq '2.5.29.37') {
+                  $formatted = $ext.Format($true)
+                  if ($formatted -match '1\.3\.6\.1\.5\.5\.7\.3\.3|Code Signing') { $hasCodeSigning = $true }
+                }
               }
-              if (-not $hasCodeSigning) { throw 'الشهادة لا تحمل امتداداً موسّعاً لتوقيع الشيفرة (EKU codeSigning)' }
+              if (-not $hasCodeSigning) {
+                $ekuDump = ($cert.Extensions | ForEach-Object { "$($_.Oid.Value)=$($_.Format($false))" }) -join '; '
+                throw "الشهادة لا تحمل امتداداً موسّعاً لتوقيع الشيفرة (EKU codeSigning). الامتدادات: $ekuDump"
+              }
 
               $signingActive = $true
               $certThumbprint = $cert.Thumbprint
