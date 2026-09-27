@@ -320,29 +320,29 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Build installer + portable EXE (x64 + arm64) with signing
-        timeout-minutes: 20
+        timeout-minutes: 18
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          # لا تفعّل إلا لإصدارات عامة تحتاج بقاء التوقيع بعد انتهاء الشهادة
           FORCE_WIN_TIMESTAMP: 'false'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # ── تجهيز شهادة التوقيع ────────────────────────────────────────────────
-          # electron-builder لا يقرأ إلا متغيّرات البيئة ويتوقّع ملف PKCS#12 سليماً.
-          # الفشل السابق كان من نوعين: (أ) WIN_CSC_LINK كانت base64 ناقصة حرفين
-          #     (6214 من 6216) فخرج الملف تالفاً، (ب) WIN_CSC_KEY_PASSWORD كانت
-          #     تجزئة sha256 بدل كلمة المرور نفسها. كلاهما ينتج خطأً غامضاً من
-          #     signtool أو تجاهلاً صامتاً للتوقيع. لذلك نتحقق خطوة بخطوة:
-          #     1) فكّ base64 إلى ملف .pfx حقيقي على القرص
-          #     2) فتحه بكلمة المرور عبر .NET (يكشف التلف/الخطأ فوراً وواضحاً)
-          #     3) فحص الصلاحية والمفتاح الخاص وEKU وتوقيع codeSigning
-          #     4) إدخال الشهادة الذاتية في مخزن الموثوقين ليصير التحقق Valid
-          #     5) تمرير *مسار الملف* للـ builder لا الـ base64 (فكّ ترميز مرتين)
+          # ── استراتيجية التوقيع ────────────────────────────────────────────────
+          # electron-builder + signtool يعلّقان 20–45 دقيقة على عدّائي GitHub
+          # (حتى بلا RFC3161). لذلك:
+          #   1) نجهّز ونتحقّق من الشهادة
+          #   2) نبني *بدون* أي توقيع داخل electron-builder (سريع ~5–8 د)
+          #   3) نوقّع النواتج بعدياً بـ Set-AuthenticodeSignature (.NET، بلا شبكة)
+          #      مع مهلة صريحة لكل ملف
           $signingActive = $false
           $certThumbprint = ''
+          $pfxPath = ''
+          $signingCert = $null
+          # لا تحذف WIN_CSC_LINK قبل قراءته — فقط امنع اكتشاف هوية تلقائي
           Remove-Item Env:CSC_LINK, Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          Set-Item -Path Env:CSC_IDENTITY_AUTO_DISCOVERY -Value 'false'
+
           if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
             $pfxPath = Join-Path $env:RUNNER_TEMP 'OfficeManager-CodeSign.pfx'
             try {
@@ -351,17 +351,20 @@ jobs:
               $pfxBytes = [Convert]::FromBase64String($b64)
               [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
 
+              $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor `
+                           [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
               if ([System.Security.Cryptography.X509Certificates.X509CertificateLoader] -as [type]) {
-                $cert = [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($pfxBytes, $env:WIN_CSC_KEY_PASSWORD, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+                $cert = [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12(
+                  $pfxBytes, $env:WIN_CSC_KEY_PASSWORD, $keyFlags)
               } else {
-                $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxBytes, $env:WIN_CSC_KEY_PASSWORD)
+                $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+                  $pfxBytes, $env:WIN_CSC_KEY_PASSWORD, $keyFlags)
               }
               if (-not $cert.HasPrivateKey) { throw 'ملف PKCS#12 لا يحتوي مفتاحاً خاصاً' }
               if ($cert.NotAfter -lt (Get-Date)) { throw "الشهادة منتهية الصلاحية منذ $($cert.NotAfter.ToString('yyyy-MM-dd'))" }
               if ($cert.NotBefore -gt (Get-Date)) { throw "الشهادة لم تبدأ صلاحيتها بعد $($cert.NotBefore.ToString('yyyy-MM-dd'))" }
-              # ملاحظة: الخاصية الصحيحة في .NET هي EnhancedKeyUsages (بالجمع)،
-              # وليس EnhancedKeyUselist — الخطأ الإملائي كان يجعل الحلقة لا تعمل
-              # فيُرفض أي شهادة سليمة برسالة "لا تحمل EKU codeSigning" رغم وجوده.
+
+              # الخاصية الصحيحة: EnhancedKeyUsages (كان الخطأ EnhancedKeyUselist)
               $codeSigningOid = '1.3.6.1.5.5.7.3.3'
               $hasCodeSigning = $false
               foreach ($ext in $cert.Extensions) {
@@ -370,10 +373,8 @@ jobs:
                     if ($u.Value -eq $codeSigningOid) { $hasCodeSigning = $true; break }
                   }
                 }
-                # مسار احتياطي: بعض الشهادات تصل كـ X509Extension عام دون التحويل
                 if (-not $hasCodeSigning -and $ext.Oid -and $ext.Oid.Value -eq '2.5.29.37') {
-                  $formatted = $ext.Format($true)
-                  if ($formatted -match '1\.3\.6\.1\.5\.5\.7\.3\.3|Code Signing') { $hasCodeSigning = $true }
+                  if ($ext.Format($true) -match '1\.3\.6\.1\.5\.5\.7\.3\.3|Code Signing') { $hasCodeSigning = $true }
                 }
               }
               if (-not $hasCodeSigning) {
@@ -383,15 +384,12 @@ jobs:
 
               $signingActive = $true
               $certThumbprint = $cert.Thumbprint
+              $signingCert = $cert
               Write-Host "✔ شهادة التوقيع: $($cert.Subject)"
               Write-Host "  البصمة  : $certThumbprint"
               Write-Host "  الصلاحية: $($cert.NotBefore.ToString('yyyy-MM-dd')) ⇐ $($cert.NotAfter.ToString('yyyy-MM-dd'))"
               Write-Host "  الحجم   : $($pfxBytes.Length) بايت"
 
-              # الشهادة ذاتية التوقيع: بدون إدخالها في مخزن الموثوقين ترجع
-              # Get-AuthenticodeSignature الحالة UnknownError بدل Valid، وهو لا
-              # يعكس سلامة التوقيع بل انعدام الثقة فقط. الإدخال على العدّاء
-              # لحظي (ephemeral) ولا يُلمس به شيء خارجه.
               try {
                 $pubBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
                 $pub = if ([System.Security.Cryptography.X509Certificates.X509CertificateLoader] -as [type]) {
@@ -399,7 +397,8 @@ jobs:
                 } else {
                   New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pubBytes)
                 }
-                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                  'Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
                 $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
                 $store.Add($pub)
                 $store.Close()
@@ -408,102 +407,107 @@ jobs:
                 Write-Host "::warning::تعذّر إدخال الشهادة في مخزن الموثوقين: $($_.Exception.Message)"
               }
 
-              # نمرّر مسار الملف في المتغيّرات الاثنتين (CSC_LINK و WIN_CSC_LINK)
-              # لأن electron-builder يقرأ أحدهما بحسب الإصدار/المنصّة. المسار
-              # يجعل signtool يستخدم /f مباشرة بلا فكّ ترميز ثانٍ.
-              Set-Item -Path Env:CSC_LINK -Value $pfxPath
-              Set-Item -Path Env:WIN_CSC_LINK -Value $pfxPath
-              if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
-                Set-Item -Path Env:CSC_KEY_PASSWORD -Value $env:WIN_CSC_KEY_PASSWORD
+              # أيضاً My/CurrentUser حتى تجدها Set-AuthenticodeSignature بسهولة
+              try {
+                $my = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                  'My', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+                $my.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                $my.Add($cert)
+                $my.Close()
+              } catch {
+                Write-Host "::warning::تعذّر إدخال الشهادة في My/CurrentUser: $($_.Exception.Message)"
               }
             } catch {
               Write-Host "::error::تعذّر تجهيز شهادة التوقيع: $($_.Exception.Message)"
               $signingActive = $false
-              # امنع electron-builder من محاولة التوقيع بشهادة تالفة/خاطئة
-              Remove-Item Env:WIN_CSC_LINK, Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+              $signingCert = $null
             }
           }
+
+          # امنع electron-builder من أي محاولة توقيع أثناء البناء
+          Remove-Item Env:CSC_LINK, Env:CSC_KEY_PASSWORD, Env:WIN_CSC_LINK, Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          Set-Item -Path Env:CSC_IDENTITY_AUTO_DISCOVERY -Value 'false'
+          $ebCfgPath = 'electron-builder.json'
+          $raw = Get-Content $ebCfgPath -Raw -Encoding utf8
+          $raw = [regex]::Replace($raw, '("signAndEditExecutable"\s*:\s*)true', '${1}false')
+          $raw = [regex]::Replace($raw, '("compression"\s*:\s*")maximum(")', '${1}normal${2}')
+          $raw = [regex]::Replace($raw, '\s*"rfc3161TimeStampServer"\s*:\s*"[^"]*"\s*,?', '')
+          $raw = [regex]::Replace($raw, '\s*"timeStampServer"\s*:\s*"[^"]*"\s*,?', '')
+          $raw = [regex]::Replace($raw, '\s*"publisherName"\s*:\s*"[^"]*"\s*,?', '')
+          $raw = [regex]::Replace($raw, ',(\s*})', '$1')
+          [IO.File]::WriteAllText((Join-Path (Get-Location) $ebCfgPath), $raw)
+          Write-Host '→ electron-builder: signAndEditExecutable=false (توقيع لاحق منفصل)'
+
           if ($signingActive) {
-            Write-Host '→ التوقيع مفعّل: كل نواتج ويندوز (مثبّت + محمول، x64 + arm64) ستُوقَّع.'
-            # ── الختم الزمني RFC3161 ────────────────────────────────────────────
-            # TCP "مفتوح" لا يكفي: signtool يعلّق دقائق طويلة على DigiCert/Sectigo
-            # من عدّائي GitHub حتى مع اتصال ناجح (ظهر كـ timeout 25 دقيقة).
-            # الافتراضي في CI: توقيع بلا ختم. فعّل FORCE_WIN_TIMESTAMP=true فقط
-            # عند الحاجة (إصدارات عامة طويلة الأمد).
-            $ebCfgPath = 'electron-builder.json'
-            $raw = Get-Content $ebCfgPath -Raw -Encoding utf8
-            $wantTs = ($env:FORCE_WIN_TIMESTAMP -eq 'true')
-            $reachableTs = $null
-            if ($wantTs) {
-              $tsServers = @(
-                'http://timestamp.digicert.com',
-                'http://timestamp.sectigo.com',
-                'http://timestamp.apple.com/ts01'
-              )
-              foreach ($ts in $tsServers) {
-                try {
-                  $null = Invoke-WebRequest -Uri $ts -Method Head -TimeoutSec 8 -UseBasicParsing -ErrorAction Stop
-                  $reachableTs = $ts
-                  break
-                } catch {
-                  try {
-                    $hc = [System.Net.Http.HttpClient]::new()
-                    $hc.Timeout = [TimeSpan]::FromSeconds(8)
-                    $null = $hc.GetAsync($ts).GetAwaiter().GetResult()
-                    $reachableTs = $ts
-                    $hc.Dispose()
-                    break
-                  } catch {
-                    Write-Host "  ⚠ خادم الختم لا يستجيب خلال 8 ث: $ts"
-                  }
-                }
-              }
-            }
-            if ($reachableTs) {
-              Write-Host "  ✔ خادم الختم الزمني: $reachableTs"
-              Set-Item -Path Env:CSC_TIMESTAMP_SERVER -Value $reachableTs
-              $raw = [regex]::Replace($raw, '("rfc3161TimeStampServer"\s*:\s*")[^"]*(")', "`${1}$reachableTs`${2}")
-            } else {
-              if ($wantTs) {
-                Write-Host '::warning::FORCE_WIN_TIMESTAMP=true لكن لا خادم متاح — توقيع بلا RFC3161'
-              } else {
-                Write-Host '→ توقيع بلا ختم زمني RFC3161 (افتراضي CI — تجنّب تعليق signtool). للختم: FORCE_WIN_TIMESTAMP=true'
-              }
-              $raw = [regex]::Replace($raw, '\s*"rfc3161TimeStampServer"\s*:\s*"[^"]*"\s*,?', '')
-              $raw = [regex]::Replace($raw, '\s*"timeStampServer"\s*:\s*"[^"]*"\s*,?', '')
-              $raw = [regex]::Replace($raw, ',(\s*})', '$1')
-              Remove-Item Env:CSC_TIMESTAMP_SERVER -ErrorAction SilentlyContinue
-            }
-            # ضغط normal أسرع من maximum على 4 حزم + توقيع
-            $raw = [regex]::Replace($raw, '("compression"\s*:\s*")maximum(")', '${1}normal${2}')
-            # لا تفرض publisherName إن خالف موضوع الشهادة الذاتية — يسبب إعادة محاولات
-            $raw = [regex]::Replace($raw, '\s*"publisherName"\s*:\s*"[^"]*"\s*,?', '')
-            $raw = [regex]::Replace($raw, ',(\s*})', '$1')
-            [IO.File]::WriteAllText((Join-Path (Get-Location) $ebCfgPath), $raw)
-            Write-Host '  إعداد electron-builder بعد التعديل:'
-            Get-Content $ebCfgPath | Select-String -Pattern 'compression|TimeStamp|signAnd|publisher' | ForEach-Object { Write-Host "    $_" }
-            Set-Item -Path Env:CSC_IDENTITY_AUTO_DISCOVERY -Value 'false'
+            Write-Host '→ بعد البناء: توقيع Authenticode عبر Set-AuthenticodeSignature (بلا شبكة/signtool)'
           } else {
             Write-Host '::warning::لن يجري توقيع نواتج ويندوز. فعّل ذلك بضبط السرّين: WIN_CSC_LINK = base64 ملف PKCS#12 كامل، وWIN_CSC_KEY_PASSWORD = كلمة المرور نصاً (لا التجزئة).'
           }
           Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_ACTIVE=$($signingActive.ToString().ToLowerInvariant())"
           Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_THUMBPRINT=$certThumbprint"
-          # البناء لمعماريات النشر التي يدعمها Electron 44: x64 (ويندوز 10/11 64-بت)
-          # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
-          # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
-          # مثبّت لأجهزة 32-بت بهذه السلسلة — تُغطّى عبر نسخة الويب (PWA).
-          Write-Host "→ بدء electron-builder $(Get-Date -Format o)"
+          if ($pfxPath) { Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_PFX=$pfxPath" }
+
+          Write-Host "→ بدء electron-builder (بلا توقيع) $(Get-Date -Format o)"
           $ebLog = Join-Path $env:RUNNER_TEMP 'electron-builder.log'
-          if ($env:SIGNING_DEBUG -eq 'true') { Set-Item -Path Env:DEBUG -Value 'electron-builder' }
           & npx electron-builder --win nsis portable --x64 --arm64 --publish=never --config electron-builder.json 2>&1 | Tee-Object -FilePath $ebLog
           $ebExit = $LASTEXITCODE
           Write-Host "→ انتهى electron-builder $(Get-Date -Format o) برمز $ebExit"
           if ($ebExit -ne 0) {
-            # أبرز سطور الفشل كتعليقات قابلة للقراءة عبر API (السجل الكامل في ملف المهمة)
-            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable|sign|timestamp' | Select-Object -First 20
+            $errLines = Get-Content $ebLog | Select-String -Pattern '⨯|error|Error|failed|Cannot|Unable' | Select-Object -First 20
             foreach ($line in $errLines) { Write-Host "::error::electron-builder: $($line.Line.Trim())" }
             Write-Error "فشل electron-builder برمز الخروج $ebExit — راجع التعليقات أعلاه"
           }
+
+          if (-not $signingActive -or -not $signingCert) {
+            Write-Host '→ تخطّي التوقيع اللاحق (لا شهادة صالحة)'
+            exit 0
+          }
+
+          # ── توقيع لاحق سريع ───────────────────────────────────────────────────
+          $targets = @()
+          $targets += Get-ChildItem release -Recurse -Filter 'OfficeManager-Setup-*.exe' -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem release -Recurse -Filter 'OfficeManager-Portable-*.exe' -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem release -Recurse -Filter 'OfficeManager.exe' -ErrorAction SilentlyContinue |
+                      Where-Object { $_.FullName -match 'win-unpacked|win-arm64-unpacked' }
+          # ملفات مساعدة داخل unpacked (Squirrel/elevate وغيرها) — توقيع الأساسي يكفي للتحقق
+          $targets = $targets | Sort-Object FullName -Unique
+          if ($targets.Count -eq 0) { Write-Error 'لا ملفات لتوقيعها بعد البناء' }
+
+          Write-Host "→ توقيع $($targets.Count) ملف بـ Set-AuthenticodeSignature …"
+          $failed = @()
+          foreach ($t in $targets) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            try {
+              # job بمهلة 60 ث لكل ملف — يمنع أي تعليق صامت
+              $job = Start-Job -ScriptBlock {
+                param($path, $thumb)
+                $c = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $thumb } | Select-Object -First 1
+                if (-not $c) { throw "الشهادة $thumb غير موجودة في Cert:\\CurrentUser\\My" }
+                $r = Set-AuthenticodeSignature -FilePath $path -Certificate $c -HashAlgorithm SHA256 -ErrorAction Stop
+                if ($r.Status -notin @('Valid', 'UnknownError')) {
+                  # UnknownError شائع قبل الثقة بالسلسلة؛ وجود SignerCertificate يكفي
+                  if (-not $r.SignerCertificate) { throw "Status=$($r.Status) StatusMessage=$($r.StatusMessage)" }
+                }
+                return [string]$r.Status
+              } -ArgumentList $t.FullName, $certThumbprint
+              $done = Wait-Job $job -Timeout 60
+              if (-not $done) {
+                Stop-Job $job -ErrorAction SilentlyContinue
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+                throw "انتهت مهلة 60 ث أثناء توقيع $($t.Name)"
+              }
+              $status = Receive-Job $job -ErrorAction Stop
+              Remove-Job $job -Force -ErrorAction SilentlyContinue
+              Write-Host ("  ✔ {0}  ({1:N1}ث, {2})" -f $t.Name, $sw.Elapsed.TotalSeconds, $status)
+            } catch {
+              Write-Host ("  ✖ {0}: {1}" -f $t.Name, $_.Exception.Message)
+              $failed += $t.Name
+            }
+          }
+          if ($failed.Count -gt 0) {
+            Write-Error "فشل توقيع $($failed.Count) ملف: $($failed -join ', ')"
+          }
+          Write-Host '✔ اكتمل التوقيع اللاحق'
       - name: التحقق من المنتجات (مثبّت + محمول لكل المعماريات + asar + التوقيع)
         shell: pwsh
         run: |
