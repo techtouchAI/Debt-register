@@ -324,45 +324,95 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # electron-builder يقرأ CSC_LINK و CSC_KEY_PASSWORD. قبل تمرير شهادة
-          # التوقيع نتحقق من أنها تُحمَّل فعلاً بكلمة المرور المحددة (فكّ
-          # الـ PKCS#12 عبر .NET). إن كانت الشهادة أو كلمة المرور تالفة/خاطئة
-          # نبني نسخة غير موقّعة مع تحذير واضح بدل أن ينهار البناء كله بخطأ
-          # غامض من signtool — فالتوقيع تحسين اختياري وليس شرطاً لصحة الحزمة.
-          Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
-          Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          # ── تجهيز شهادة التوقيع ────────────────────────────────────────────────
+          # electron-builder لا يقرأ إلا متغيّرات البيئة ويتوقّع ملف PKCS#12 سليماً.
+          # الفشل السابق كان من نوعين: (أ) WIN_CSC_LINK كانت base64 ناقصة حرفين
+          #     (6214 من 6216) فخرج الملف تالفاً، (ب) WIN_CSC_KEY_PASSWORD كانت
+          #     تجزئة sha256 بدل كلمة المرور نفسها. كلاهما ينتج خطأً غامضاً من
+          #     signtool أو تجاهلاً صامتاً للتوقيع. لذلك نتحقق خطوة بخطوة:
+          #     1) فكّ base64 إلى ملف .pfx حقيقي على القرص
+          #     2) فتحه بكلمة المرور عبر .NET (يكشف التلف/الخطأ فوراً وواضحاً)
+          #     3) فحص الصلاحية والمفتاح الخاص وEKU وتوقيع codeSigning
+          #     4) إدخال الشهادة الذاتية في مخزن الموثوقين ليصير التحقق Valid
+          #     5) تمرير *مسار الملف* للـ builder لا الـ base64 (فكّ ترميز مرتين)
+          $signingActive = $false
+          $certThumbprint = ''
+          Remove-Item Env:CSC_LINK, Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
           if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
-            $certLoaded = $false
+            $pfxPath = Join-Path $env:RUNNER_TEMP 'OfficeManager-CodeSign.pfx'
             try {
-              $certBytes = [Convert]::FromBase64String($env:WIN_CSC_LINK)
+              $b64 = $env:WIN_CSC_LINK.Trim()
+              if ($b64 -match '^data:[^;]*;base64,') { $b64 = $b64 -replace '^data:[^;]*;base64,', '' }
+              $pfxBytes = [Convert]::FromBase64String($b64)
+              [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+
               if ([System.Security.Cryptography.X509Certificates.X509CertificateLoader] -as [type]) {
-                $null = [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($certBytes, $env:WIN_CSC_KEY_PASSWORD, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+                $cert = [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($pfxBytes, $env:WIN_CSC_KEY_PASSWORD, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
               } else {
-                $null = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certBytes, $env:WIN_CSC_KEY_PASSWORD)
+                $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxBytes, $env:WIN_CSC_KEY_PASSWORD)
               }
-              $certLoaded = $true
-            } catch {
-              Write-Host "تعذّر تحميل شهادة التوقيع: $($_.Exception.Message)"
-            }
-            if ($certLoaded) {
-              Set-Item -Path Env:CSC_LINK -Value $env:WIN_CSC_LINK
+              if (-not $cert.HasPrivateKey) { throw 'ملف PKCS#12 لا يحتوي مفتاحاً خاصاً' }
+              if ($cert.NotAfter -lt (Get-Date)) { throw "الشهادة منتهية الصلاحية منذ $($cert.NotAfter.ToString('yyyy-MM-dd'))" }
+              if ($cert.NotBefore -gt (Get-Date)) { throw "الشهادة لم تبدأ صلاحيتها بعد $($cert.NotBefore.ToString('yyyy-MM-dd'))" }
+              $hasCodeSigning = $false
+              foreach ($ext in $cert.Extensions) {
+                if ($ext -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]) {
+                  foreach ($u in $ext.EnhancedKeyUselist) {
+                    if ($u.Value -eq '1.3.6.1.5.5.7.3.3') { $hasCodeSigning = $true }
+                  }
+                }
+              }
+              if (-not $hasCodeSigning) { throw 'الشهادة لا تحمل امتداداً موسّعاً لتوقيع الشيفرة (EKU codeSigning)' }
+
+              $signingActive = $true
+              $certThumbprint = $cert.Thumbprint
+              Write-Host "✔ شهادة التوقيع: $($cert.Subject)"
+              Write-Host "  البصمة  : $certThumbprint"
+              Write-Host "  الصلاحية: $($cert.NotBefore.ToString('yyyy-MM-dd')) ⇐ $($cert.NotAfter.ToString('yyyy-MM-dd'))"
+              Write-Host "  الحجم   : $($pfxBytes.Length) بايت"
+
+              # الشهادة ذاتية التوقيع: بدون إدخالها في مخزن الموثوقين ترجع
+              # Get-AuthenticodeSignature الحالة UnknownError بدل Valid، وهو لا
+              # يعكس سلامة التوقيع بل انعدام الثقة فقط. الإدخال على العدّاء
+              # لحظي (ephemeral) ولا يُلمس به شيء خارجه.
+              try {
+                $pubBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+                $pub = if ([System.Security.Cryptography.X509Certificates.X509CertificateLoader] -as [type]) {
+                  [System.Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadCertificate($pubBytes)
+                } else {
+                  New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pubBytes)
+                }
+                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+                $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                $store.Add($pub)
+                $store.Close()
+                Write-Host '✔ أُضيفت الشهادة إلى Root/CurrentUser — التحقق من التوقيع سيُرجع Valid'
+              } catch {
+                Write-Host "::warning::تعذّر إدخال الشهادة في مخزن الموثوقين: $($_.Exception.Message)"
+              }
+
+              # نمرّر مسار الملف في المتغيّرات الاثنتين (CSC_LINK و WIN_CSC_LINK)
+              # لأن electron-builder يقرأ أحدهما بحسب الإصدار/المنصّة. المسار
+              # يجعل signtool يستخدم /f مباشرة بلا فكّ ترميز ثانٍ.
+              Set-Item -Path Env:CSC_LINK -Value $pfxPath
+              Set-Item -Path Env:WIN_CSC_LINK -Value $pfxPath
               if (-not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
                 Set-Item -Path Env:CSC_KEY_PASSWORD -Value $env:WIN_CSC_KEY_PASSWORD
               }
-              Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=true'
-              Write-Host 'شهادة التوقيع صالحة — سيُوقَّع الملف التنفيذي.'
-            } else {
-              Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
-              # electron-builder 26 يقرأ WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD مباشرة
-              # (وليس CSC_LINK فقط) — أزلها من البيئة حتى لا يحاول التوقيع أصلاً
-              Remove-Item Env:WIN_CSC_LINK -ErrorAction SilentlyContinue
-              Remove-Item Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
-              Write-Host '::warning::شهادة التوقيع (WIN_CSC_LINK) لا يمكن تحميلها بكلمة المرور المحددة (WIN_CSC_KEY_PASSWORD). سيُبنى التطبيق غير موقّع. حدّث السِرّين أو ولّد شهادة جديدة عبر `npm run certs:generate`.'
+            } catch {
+              Write-Host "::error::تعذّر تجهيز شهادة التوقيع: $($_.Exception.Message)"
+              $signingActive = $false
+              # امنع electron-builder من محاولة التوقيع بشهادة تالفة/خاطئة
+              Remove-Item Env:WIN_CSC_LINK, Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
             }
-          } else {
-            Add-Content -Path $env:GITHUB_ENV -Value 'SIGNING_ACTIVE=false'
-            Write-Host 'لم تُمرَّر شهادة توقيع — سيُبنى التطبيق غير موقّع.'
           }
+          if ($signingActive) {
+            Write-Host '→ التوقيع مفعّل: كل نواتج ويندوز (مثبّت + محمول، x64 + arm64) ستُوقَّع.'
+          } else {
+            Write-Host '::warning::لن يجري توقيع نواتج ويندوز. فعّل ذلك بضبط السرّين: WIN_CSC_LINK = base64 ملف PKCS#12 كامل، وWIN_CSC_KEY_PASSWORD = كلمة المرور نصاً (لا التجزئة).'
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_ACTIVE=$($signingActive.ToString().ToLowerInvariant())"
+          Add-Content -Path $env:GITHUB_ENV -Value "SIGNING_THUMBPRINT=$certThumbprint"
           # البناء لمعماريات النشر التي يدعمها Electron 44: x64 (ويندوز 10/11 64-بت)
           # وarm64 (Windows on ARM). ملاحظة: Electron 44 أوقف نشر ثنائيات ويندوز
           # 32-بت (win32-ia32) نهائياً (electron/electron#52326)، فلم يعد ممكناً بناء
@@ -394,20 +444,60 @@ jobs:
             Write-Host ("{0,-38} {1,12:N0} بايت  {2}" -f ("✔ " + $e.Label), $f.Length, $f.Name)
             $found += $f
           }
-          # التحقق من توقيع Authenticode على الملف التنفيذي الداخلي
+          # ── التحقق من توقيع Authenticode ───────────────────────────────────────
+          # المقصود: electron-builder يوقّع (أ) الملف التنفيذي داخل win-unpacked،
+          # و(ب) مثبّت NSIS و(ج) النسخة المحمولة (NsisTarget ينفّذ packager.sign
+          # على الـ installerPath لكل منهما). لذلك نتحقق من الأربعة كلها.
+          # إن كانت الشهادة صالحة (SIGNING_ACTIVE=true) فأي نقص في التوقيع خطأ
+          # يُفشل البناء — لا نكتفي بتحذير ونُخرج حزمة غير موقّعة باسم المشروع.
+          $signingRequired = ($env:SIGNING_ACTIVE -eq 'true')
+          $unsigned = @()
+          $signerSubject = ''
+          $signerThumbprint = ''
+          $report = [System.Collections.Generic.List[string]]::new()
+          $report.Add(('-' * 78))
+          $report.Add(('  {0,-34} {1,-12} {2}' -f 'الملف', 'الحالة', 'الختم الزمني'))
+          $report.Add(('-' * 78))
+          $signTargets = @($found)
           $mainExe = Get-ChildItem release -Recurse -Filter 'win-unpacked/*.exe' -ErrorAction SilentlyContinue |
                      Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
-          if ($mainExe) {
-            $sig = Get-AuthenticodeSignature $mainExe.FullName
-            Write-Host "توقيع $($mainExe.Name): $($sig.Status)"
-            if ($sig.SignerCertificate) {
-              Write-Host "  المُوقِّع: $($sig.SignerCertificate.Subject)"
-              Write-Host "  البصمة : $($sig.SignerCertificate.Thumbprint)"
-            } elseif ($env:SIGNING_ACTIVE -eq 'true') {
-              Write-Error 'التوقيع كان مفترضاً (شهادة صالحة) لكن الملف التنفيذي غير موقّع — راجع سجل electron-builder'
-            } else {
-              Write-Host '  (التوقيع غير مفعّل في هذا البناء — تخطي التحقق)'
+          if ($mainExe) { $signTargets += $mainExe }
+          foreach ($t in $signTargets) {
+            $sig = Get-AuthenticodeSignature $t.FullName
+            $stamp = if ($sig.TimeStamperCertificate) { 'نعم' } else { 'لا' }
+            $report.Add(('  {0,-34} {1,-12} {2}' -f $t.Name, [string]$sig.Status, $stamp))
+            if (-not $sig.SignerCertificate) {
+              $unsigned += $t.Name
+              continue
             }
+            # الشهادة ذاتية التوقيع: بعد إدخالها في Root/CurrentUser يجب أن تعطي
+            # Status=Valid. هنا نتحقق أن المُوقِّع هو الشهادة المتوقعة تحديداً،
+            # فلا يمرّ توقيعٌ بشهادة أخرى أو ملف تالف بلا سلسلة صالحة.
+            if (-not $signerThumbprint) {
+              $signerSubject = $sig.SignerCertificate.Subject
+              $signerThumbprint = $sig.SignerCertificate.Thumbprint
+            }
+            if ($env:SIGNING_THUMBPRINT -and $sig.SignerCertificate.Thumbprint -ne $env:SIGNING_THUMBPRINT) {
+              Write-Error "توقيع غير متوقع على $($t.Name): $($sig.SignerCertificate.Thumbprint) ≠ $($env:SIGNING_THUMBPRINT)"
+            }
+            if ($stamp -eq 'لا') {
+              Write-Host "::warning::$($t.Name): توقيع بلا ختم زمني (RFC3161) — لن يبقى صالحاً بعد انتهاء الشهادة"
+            }
+          }
+          $report | ForEach-Object { Write-Host $_ }
+          if ($signerThumbprint) {
+            Write-Host "  المُوقِّع: $signerSubject"
+            Write-Host "  البصمة : $signerThumbprint"
+          }
+          if ($signingRequired) {
+            if ($unsigned.Count -gt 0) {
+              foreach ($u in $unsigned) { Write-Host "::error::غير موقّع رغم توفّر شهادة صالحة: $u" }
+              Write-Error "فشل التوقيع: $($unsigned.Count) من $($signTargets.Count) ملف بلا توقيع Authenticode"
+            } else {
+              Write-Host "✔ كل الملفات ($($signTargets.Count)) موقّعة بالبصمة $($env:SIGNING_THUMBPRINT)"
+            }
+          } elseif ($unsigned.Count -gt 0) {
+            Write-Host "::warning::التوقيع غير مفعّل في هذا البناء — $($unsigned.Count) من $($signTargets.Count) ملف بلا توقيع (وضع متوقّع عند غياب WIN_CSC_LINK)"
           }
           $asar = 'release/win-unpacked/resources/app.asar'
           if (-not (Test-Path $asar)) { Write-Error 'ملف app.asar غير موجود في win-unpacked' }
