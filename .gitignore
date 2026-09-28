@@ -38,6 +38,8 @@ android-signing.env
 *.cer
 scripts/certs/*.b64
 !scripts/certs/openssl.cnf
+# Local Base64 export of the code-signing PFX — never commit
+WIN_CSC_LINK_Base64.txt
 
 # Logs
 npm-debug.log*

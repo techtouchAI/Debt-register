@@ -20,7 +20,7 @@
 
 | السر | كيف تتأكد |
 |---|---|
-| `WIN_CSC_LINK` | طوله **6216** حرف بالضبط، ينتهي بـ `A`، ولا فيه سطر جديد. أي نقص ⇒ ملف PKCS#12 تالف. |
+| `WIN_CSC_LINK` | سطر Base64 واحد بلا مسافات/أسطر جديدة، طول تقريبي ~6k حرف (RSA-4096). الأهم: يفكّ إلى PKCS#12 يفتح بكلمة المرور ويحمل EKU=codeSigning. |
 | `WIN_CSC_KEY_PASSWORD` | كلمة المرور **نصاً**. لا تضع التجزئة (sha256) ولا `Bearer` ولا القيمة المولّدة من `gh secret` — وتأكد أن لصقاً لم يضِف مسافة قبل/بعد. |
 
 للتحقق محلياً قبل الرفع:
@@ -32,6 +32,9 @@ tr -d 'A-Za-z0-9+/=\n\r' < scripts/certs/OfficeManager-CodeSign.pfx.b64
 tr -d '\n\r' < scripts/certs/OfficeManager-CodeSign.pfx.b64 \
   | base64 -d > /tmp/t.pfx \
   && openssl pkcs12 -in /tmp/t.pfx -nokeys -passin pass:techtouch7 -info | head -20
+# 3) هل EKU = codeSigning؟
+openssl pkcs12 -in /tmp/t.pfx -nokeys -passin pass:techtouch7 2>/dev/null \
+  | openssl x509 -noout -ext extendedKeyUsage
 ```
 
 ## الإنتاج الفعلي بعد إضافة الأسرار
@@ -94,7 +97,9 @@ npm run build:windows:arm64
 
   عند غياب `WIN_CSC_LINK` تماماً يبقى البناء ناجحاً بلا توقيع مع `::warning::`
   ظاهر في السجل — حتى تعمل المستودعات المتفرّعة.
-- الختم الزمني RFC3161 مربوط صراحةً بـ `http://timestamp.digicert.com` داخل
-  `electron-builder.json`، وelectron-builder 26 يعيد المحاولة مرّتين تلقائياً
-  عند فشل خادم الختم. إن ظهر تحذير "توقيع بلا ختم زمني" فقد تعذّر الوصول
-  للخدمة في تلك اللحظة.
+- الختم الزمني RFC3161 **معطّل افتراضياً في CI** لأن `signtool` يعلّق طويلاً على
+  DigiCert/Sectigo من عدّائي GitHub (timeout 25 دقيقة). التوقيع Authenticode
+  يبقى صالحاً حتى انتهاء الشهادة. لتفعيل الختم عند إصدار عام: اضبط
+  `FORCE_WIN_TIMESTAMP=true` في خطوة البناء. محلياً يمكنك إضافة
+  `"rfc3161TimeStampServer": "http://timestamp.digicert.com"` تحت
+  `win.signtoolOptions` في `electron-builder.json`.

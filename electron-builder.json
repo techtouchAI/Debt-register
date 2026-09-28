@@ -18,7 +18,7 @@
   "extraMetadata": {
     "main": "electron/main.cjs"
   },
-  "compression": "maximum",
+  "compression": "normal",
   "removePackageKeywords": true,
   "buildVersion": "1.0.0",
   "win": {
@@ -38,9 +38,7 @@
     "signAndEditExecutable": true,
     "verifyUpdateCodeSignature": false,
     "signtoolOptions": {
-      "signingHashAlgorithms": ["sha256"],
-      "rfc3161TimeStampServer": "http://timestamp.digicert.com",
-      "publisherName": "TechTouch AI"
+      "signingHashAlgorithms": ["sha256"]
     },
     "legalTrademarks": "TechTouch AI"
   },
